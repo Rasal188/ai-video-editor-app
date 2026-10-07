@@ -1,0 +1,240 @@
+.cloud-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 9999;
+  animation: cloudModalFadeIn 0.15s ease-out;
+}
+
+.cloud-modal-container {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 580px;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  margin: auto;
+  padding: 24px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+  color: #f4f4f5;
+  font-family: inherit;
+  position: relative;
+}
+
+.cloud-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.cloud-modal-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cloud-modal-close {
+  background: transparent;
+  border: none;
+  color: #a1a1aa;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.cloud-modal-close:hover {
+  color: #fafafa;
+  background-color: #27272a;
+}
+
+.cloud-modal-description {
+  color: #a1a1aa;
+  font-size: 0.875rem;
+  margin: 0 0 16px 0;
+  flex-shrink: 0;
+}
+
+.cloud-modal-body {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.cloud-projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cloud-project-item {
+  background: #202024;
+  border: 1px solid #2e2e33;
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.cloud-project-item:hover {
+  border-color: #3f3f46;
+  background: #242429;
+}
+
+.cloud-project-item.is-current {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.cloud-project-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cloud-project-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cloud-project-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #f4f4f5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cloud-project-badge {
+  font-size: 0.725rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #27272a;
+  color: #a1a1aa;
+  font-weight: 500;
+}
+
+.cloud-project-badge.is-active {
+  background: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.cloud-project-meta {
+  font-size: 0.8rem;
+  color: #71717a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cloud-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cloud-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.825rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.cloud-btn-primary {
+  background: #6366f1;
+  color: #ffffff;
+}
+
+.cloud-btn-primary:hover:not(:disabled) {
+  background: #4f46e5;
+}
+
+.cloud-btn-ghost {
+  background: transparent;
+  color: #a1a1aa;
+  border-color: #27272a;
+}
+
+.cloud-btn-ghost:hover:not(:disabled) {
+  background: #27272a;
+  color: #f4f4f5;
+}
+
+.cloud-btn-danger {
+  background: transparent;
+  color: #f87171;
+  border-color: transparent;
+}
+
+.cloud-btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+.cloud-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cloud-empty-state {
+  text-align: center;
+  padding: 36px 16px;
+  color: #71717a;
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.cloud-loading-spinner {
+  animation: cloudSpin 1s linear infinite;
+}
+
+@keyframes cloudSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes cloudModalFadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}

@@ -1,0 +1,179 @@
+.render-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 9999;
+  animation: renderModalFadeIn 0.15s ease-out;
+}
+
+.render-modal-container {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  box-sizing: border-box;
+  margin: auto;
+  padding: 24px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+  color: #f4f4f5;
+  font-family: inherit;
+  position: relative;
+}
+
+.render-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.render-modal-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.render-modal-close {
+  background: transparent;
+  border: none;
+  color: #a1a1aa;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.render-modal-close:hover {
+  color: #fafafa;
+  background-color: #27272a;
+}
+
+.render-status-card {
+  background: #202024;
+  border: 1px solid #2e2e33;
+  border-radius: 8px;
+  padding: 18px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.render-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.render-status-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.render-status-badge.status-pending {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.render-status-badge.status-processing {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.render-status-badge.status-completed {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.render-status-badge.status-failed,
+.render-status-badge.status-cancelled {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.render-progress-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #a1a1aa;
+  font-size: 0.9rem;
+}
+
+.render-verification-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 16px;
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 0.825rem;
+}
+
+.render-verification-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.render-verification-label {
+  color: #71717a;
+  font-size: 0.75rem;
+}
+
+.render-verification-value {
+  color: #f4f4f5;
+  font-weight: 500;
+}
+
+.render-error-box {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: #f87171;
+  font-size: 0.85rem;
+  word-break: break-word;
+}
+
+.render-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+@keyframes renderModalFadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
