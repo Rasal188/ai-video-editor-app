@@ -58,6 +58,7 @@ import { formatTime, getSegmentStartTime } from "../lib/timeline.js";
 import { decodeWaveform } from "../lib/media.js";
 import { AudioClipExportControl } from "./AudioClipExportControl.jsx";
 import { SilenceRemovalPanel } from "./SilenceRemovalPanel.jsx";
+import { RoughCutPanel } from "./RoughCutPanel.jsx";
 import { cancelOpenVoiceTasks, convertVoiceBlob, extractVoiceEmbedding } from "../lib/openVoiceRuntime.js";
 import { LIVE_PORTRAIT_WEB_MODEL } from "../config/livePortrait.js";
 import { probeLivePortraitWebEnvironment } from "../lib/livePortraitWeb.js";
@@ -1459,6 +1460,7 @@ export function VoicePanel({
   aiMusic,
   autoEdit,
   silenceRemoval,
+  roughCut,
   uiLanguage,
   captionStyle,
   setCaptionStyle,
@@ -1542,6 +1544,7 @@ export function VoicePanel({
   const isSmartFrameContext = isSmartContext && smartMode === "smart-frame";
   const isAiMusicContext = isSmartContext && smartMode === "ai-music";
   const isSilenceRemovalContext = isSmartContext && smartMode === "remove-pauses";
+  const isRoughCutContext = isSmartContext && smartMode === "rough-cut";
   const isFaceSwapContext = isEffectsContext && effectsPanelMode === "face-swap";
   const isOpticalFlowContext = isEffectsContext && effectsPanelMode === "vector-tracking";
   const isCinematicDepthContext = isEffectsContext && ["cinematic-depth", "depth-map", "relight"].includes(effectsPanelMode);
@@ -1594,8 +1597,8 @@ export function VoicePanel({
     background: t("effectBackground"),
     edge: t("effectEdgeCleanup"),
   }[mobileInspectorSection];
-  const title = focusedSectionTitle || (isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartAutoContext ? t("smartAutoEdit") : isSmartFrameContext ? t("smartFrame") : isAvatarContext ? t("avatarTitle") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
-  const panelStatusText = isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
+  const title = focusedSectionTitle || (isRoughCutContext ? t("roughCutTitle") : isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartAutoContext ? t("smartAutoEdit") : isSmartFrameContext ? t("smartFrame") : isAvatarContext ? t("avatarTitle") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
+  const panelStatusText = isRoughCutContext ? t("roughCutHint") : isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
     ? faceSwap?.job?.running ? `${faceSwap.job.progress}%` : hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")
     : isOpticalFlowContext ? t("effectFlowExperimental")
     : isCinematicDepthContext ? cinematicDepth?.job?.running
@@ -1753,6 +1756,7 @@ export function VoicePanel({
         {isSmartFrameContext ? <SmartFramePanel t={t} smartFrame={smartFrame} /> : null}
         {isAiMusicContext ? <AiMusicGenerator language={uiLanguage} music={aiMusic} embedded /> : null}
         {isSilenceRemovalContext ? <SilenceRemovalPanel t={t} tool={silenceRemoval} /> : null}
+        {isRoughCutContext ? <RoughCutPanel t={t} tool={roughCut} /> : null}
         {isStickerContext ? <StickerContextPanel t={t} segment={selectedStickerSegment} updateStickerSegment={updateStickerSegment} deleteStickerSegment={deleteStickerSegment} /> : null}
         {isOverlayContext ? <div className="visual-overlay-inspector">
           {!mobileInspectorSection ? <div className={`sticker-properties-preview ${isVectorOverlay ? "is-vector" : ""}`}>{selectedVisualOverlay.type === "video" ? <video src={selectedVisualOverlay.src} muted playsInline /> : <img src={selectedVisualOverlay.src} alt="" style={isVectorOverlay ? { filter: vectorOverlayAppearance.filter, opacity: vectorOverlayAppearance.opacity, mixBlendMode: vectorOverlayAppearance.cssBlendMode } : undefined} />}</div> : null}

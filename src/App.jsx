@@ -15,6 +15,7 @@ import { SmartDenoiseDialog } from "./components/SmartDenoiseDialog.jsx";
 import { WebMcpReview, WebMcpAiStatus } from "./components/WebMcpReview.jsx";
 import ProjectImportOverlay from "./components/ProjectImportOverlay.jsx";
 import { CloudRenderModal } from "./components/CloudRenderModal.jsx";
+import { TranscriptReviewModal } from "./components/TranscriptReviewModal.jsx";
 import {
   canShowFirstVisualGuide,
   FIRST_VISUAL_GUIDE_MOBILE_QUERY,
@@ -38,6 +39,7 @@ import { useVoiceProfiles } from "./hooks/useVoiceProfiles.js";
 import { useAutoCaptions } from "./hooks/useAutoCaptions.js";
 import { useAutoEdit } from "./hooks/useAutoEdit.js";
 import { useSilenceRemoval } from "./hooks/useSilenceRemoval.js";
+import { useRoughCut } from "./hooks/useRoughCut.js";
 import { useWebMcpEditor } from "./hooks/useWebMcpEditor.js";
 import { sampleEditorMedia } from "./lib/webMcpMediaSample.js";
 import { browserProjectFingerprint, restoreBrowserProjectMedia } from "./lib/browserEditPlan.js";
@@ -1177,11 +1179,60 @@ export function App({ currentUser = null, onLogout } = {}) {
     replaceAudio, setVisualOverlaySegments, setVisualSegments, sourceAudioBlob, sourceAudioDuration, t,
   });
 
+  const [transcriptReview, setTranscriptReview] = useState(null);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const handleTestOpen = (e) => {
+      if (e.detail) {
+        setTranscriptReview({
+          isOpen: true,
+          ...e.detail,
+        });
+      }
+    };
+    window.addEventListener("test:open-transcript-review", handleTestOpen);
+    return () => window.removeEventListener("test:open-transcript-review", handleTestOpen);
+  }, []);
+
+  const handleApplyTranscriptReview = useCallback(({ segments: reviewedSegments, text: reviewedText }) => {
+    if (!reviewedSegments || !reviewedSegments.length) {
+      setTranscriptReview(null);
+      return;
+    }
+    const append = transcriptReview?.append;
+    const timelineOffset = transcriptReview?.timelineOffset || 0;
+
+    checkpointHistory();
+
+    setCaptionSegments((prev) => {
+      const combined = (append ? [...prev, ...reviewedSegments] : reviewedSegments)
+        .sort((a, b) => (a.start || 0) - (b.start || 0));
+      let inheritedFontId = captionStyle?.fontId || "default";
+      return combined.map((segment) => {
+        inheritedFontId = segment.fontId || inheritedFontId;
+        return segment.fontId ? segment : { ...segment, fontId: inheritedFontId };
+      });
+    });
+
+    setScript((prev) => (append && prev ? `${prev}\n${reviewedText}` : reviewedText));
+    setSelectedSegmentId(reviewedSegments[0]?.id ?? "");
+    setSelectedTrack("caption");
+    setActiveTool("caption");
+    setCaptionsEnabled(true);
+    setTrackVisibility((v) => ({ ...v, caption: true }));
+    const complete = t("autoCaptionsComplete").replace("{count}", reviewedSegments.length);
+    notify(complete);
+    seekTo(reviewedSegments[0]?.start ?? timelineOffset);
+    setTranscriptReview(null);
+  }, [transcriptReview, captionStyle, checkpointHistory, notify, seekTo, setActiveTool, setCaptionSegments, setCaptionsEnabled, setScript, setSelectedSegmentId, setSelectedTrack, setTrackVisibility, t]);
+
   const generateCaptionsFromSourceAudio = useAutoCaptions({
     notify, script, seekTo, setActiveTool, setCaptionSegments, captionStyle,
     setCaptionsEnabled, setProgress, setScript, setSelectedSegmentId,
     setSelectedTrack, setStatus, setStatusText, setTrackVisibility, sourceAudioBlob,
     sourceAudioStart, status, t, trackLocks, uiLanguage,
+    setTranscriptReview,
   });
 
   const handleFiles = useFileUpload({
@@ -1490,6 +1541,13 @@ export function App({ currentUser = null, onLogout } = {}) {
     getSnapshot: getProjectSnapshot, getRuntime: getBrowserRuntimeProject,
     applyReview: applyBrowserReview, rippleEditing, setRippleEditing, seekTo, t,
   });
+  const roughCut = useRoughCut({
+    language: activeLanguage, selectedSegment: selectedVisualSegment, visualSegments, projectVersion: historySignature,
+    locked: Boolean(trackLocks.image || sourceAudioBlob && sourceAudioLinked !== false && trackLocks.source),
+    getSnapshot: getProjectSnapshot, getRuntime: getBrowserRuntimeProject,
+    applyReview: applyBrowserReview, rippleEditing, setRippleEditing, seekTo, t,
+    captionSegments,
+  });
   const webMcp = useWebMcpEditor({
     language: activeLanguage, visualSegments, visualOverlaySegments, audioSegments, musicSegments,
     sourceAudioBlob, musicBlob, audioBlob, rippleEditing, getProjectSnapshot,
@@ -1617,6 +1675,16 @@ export function App({ currentUser = null, onLogout } = {}) {
         initialJob={cloudRenderJob}
         project={currentCloudProject}
         notify={notify}
+      />
+      <TranscriptReviewModal
+        isOpen={Boolean(transcriptReview?.isOpen)}
+        reviewData={transcriptReview}
+        onApply={handleApplyTranscriptReview}
+        onCancel={() => {
+          setTranscriptReview(null);
+          notify(t("reviewCaptionsCancelled", "Caption review cancelled. Timeline unchanged."));
+        }}
+        t={t}
       />
       <section className={`editor-grid ${compactRail ? "is-compact-rail" : ""}`}>
         <EditorSidebar model={{
@@ -1834,6 +1902,7 @@ export function App({ currentUser = null, onLogout } = {}) {
           aiMusic={aiMusic}
           autoEdit={autoEdit}
           silenceRemoval={silenceRemoval}
+          roughCut={roughCut}
           uiLanguage={activeLanguage}
           captionStyle={captionStyle}
           setCaptionStyle={setCaptionStyle}
