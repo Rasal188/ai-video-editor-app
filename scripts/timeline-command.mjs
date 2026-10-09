@@ -110,11 +110,16 @@ async function renderProject(renderPath) {
     const mediaProbes = new Map();
     await Promise.all(
       [...extractedFiles.entries()].map(async ([archivePath, extractedPath]) => {
-        if (archivePath.match(/\.(mp4|webm|mov|mkv|avi)$/i)) {
+        if (archivePath.match(/\.(mp4|webm|mov|mkv|avi|png|jpe?g|webp|gif)$/i)) {
           try {
-            const { stdout } = await executeFile("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type", "-of", "json", extractedPath]);
+            const { stdout } = await executeFile("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,width,height", "-of", "json", extractedPath]);
             const streams = JSON.parse(stdout).streams || [];
-            mediaProbes.set(extractedPath, { hasAudio: streams.some((s) => s.codec_type === "audio") });
+            const videoStream = streams.find((s) => s.codec_type === "video");
+            mediaProbes.set(extractedPath, {
+              hasAudio: streams.some((s) => s.codec_type === "audio"),
+              width: videoStream?.width,
+              height: videoStream?.height,
+            });
           } catch {
             mediaProbes.set(extractedPath, { hasAudio: true });
           }

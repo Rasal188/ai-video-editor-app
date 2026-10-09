@@ -36,7 +36,7 @@ export default defineConfig({
   server: {
     headers: isolationHeaders,
     watch: {
-      ignored: ["**/storage/**", "**/test-artifacts/**"],
+      ignored: ["**/storage/**", "**/test-artifacts/**", "**/scratch/**"],
     },
     proxy: {
       "/api": {
