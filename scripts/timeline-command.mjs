@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { applyCommandPlan, inspectClip, inspectMarkers, inspectProject, inspectTrack, inspectTranscript } from "../src/lib/projectCommandEngine.js";
 import { buildFfmpegRenderPlan } from "../src/lib/projectRenderPlan.js";
+import { transcribeMediaCli } from "../src/lib/headlessTranscription.js";
 
 const PROJECT_FILE = "project.json";
 const executeFile = promisify(execFile);
@@ -156,10 +157,14 @@ async function renderProject(renderPath) {
 
 async function main() {
   const [rawCommand, argument, selector] = process.argv.slice(2);
-  const command = rawCommand === "inspect" ? "project.inspect" : rawCommand === "run" ? "project.run" : rawCommand;
-  const supported = ["project.inspect", "track.inspect", "clip.inspect", "transcript.inspect", "marker.inspect", "project.diff", "project.run", "project.render"];
+  const command = rawCommand === "inspect" ? "project.inspect" : rawCommand === "run" ? "project.run" : rawCommand === "transcribe" ? "media.transcribe" : rawCommand;
+  const supported = ["project.inspect", "track.inspect", "clip.inspect", "transcript.inspect", "marker.inspect", "project.diff", "project.run", "project.render", "media.transcribe"];
   if (!command || !argument || !supported.includes(command)) {
-    throw Object.assign(new Error("Usage: npm run agent -- project.inspect <project.timeline> | track.inspect <project.timeline> <track> | clip.inspect <project.timeline> <clipId> | transcript.inspect <project.timeline> [audioClipId] | marker.inspect <project.timeline> [markerId] | project.diff <plan.json> | project.run <plan.json> | project.render <render.json>"), { exitCode: 2, code: "INVALID_COMMAND" });
+    throw Object.assign(new Error("Usage: npm run agent -- project.inspect <project.timeline> | track.inspect <project.timeline> <track> | clip.inspect <project.timeline> <clipId> | transcript.inspect <project.timeline> [audioClipId] | marker.inspect <project.timeline> [markerId] | project.diff <plan.json> | project.run <plan.json> | project.render <render.json> | media.transcribe <media-file> [--out <output.json>] [--force] [--language <lang>] [--model <modelId>] [--timeline-offset <sec>] [--grouping <smart|word>] [--summary] [--quiet] [--verbose]"), { exitCode: 2, code: "INVALID_COMMAND" });
+  }
+  if (command === "media.transcribe") {
+    await transcribeMediaCli(process.argv.slice(3));
+    return;
   }
   if (command === "project.render") { print(await renderProject(argument)); return; }
   if (["project.inspect", "track.inspect", "clip.inspect", "transcript.inspect", "marker.inspect"].includes(command)) {

@@ -496,6 +496,7 @@ async function runTranscription(
     duration,
     language: result.language,
     languageDetected: result.languageDetected,
+    rawChunks: result.output?.chunks,
   };
 }
 
