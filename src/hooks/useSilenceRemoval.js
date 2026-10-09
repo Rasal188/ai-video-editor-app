@@ -4,7 +4,7 @@ import { buildSilenceRemovalReview, canRemovePauses, findPauseCandidates } from 
 import { analyzeVideoPauses } from "../lib/sileroVad.js";
 
 export function useSilenceRemoval(options) {
-  const [settings, setSettings] = useState({ minimum: 0.8, keep: 0.5 });
+  const [settings, setSettings] = useState({ threshold: 0.5, minimum: 0.8, keep: 0.5 });
   const [draft, setDraft] = useState(null);
   const [job, setJob] = useState({ running: false, progress: 0, phase: "" });
   const [error, setError] = useState("");
@@ -20,6 +20,10 @@ export function useSilenceRemoval(options) {
   const cancel = () => {
     abortRef.current?.abort(); abortRef.current = null;
     setJob({ running: false, progress: 0, phase: "" });
+  };
+  const dismiss = () => {
+    setDraft(null);
+    setError("");
   };
   const run = async () => {
     if (abortRef.current || !supported || locked) return;
@@ -55,7 +59,11 @@ export function useSilenceRemoval(options) {
   };
   const toggle = (id) => {
     setError("");
-    setDraft((current) => ({ ...current, candidates: current.candidates.map((cut) => cut.id === id ? { ...cut, enabled: !cut.enabled } : cut) }));
+    setDraft((current) => (current ? { ...current, candidates: current.candidates.map((cut) => cut.id === id ? { ...cut, enabled: !cut.enabled } : cut) } : null));
+  };
+  const toggleAll = (enabled) => {
+    setError("");
+    setDraft((current) => (current ? { ...current, candidates: current.candidates.map((cut) => ({ ...cut, enabled })) } : null));
   };
   const apply = () => {
     if (!draft || job.running) return;
@@ -66,12 +74,13 @@ export function useSilenceRemoval(options) {
       setError("pauseStale"); return;
     }
     try {
-      const review = buildSilenceRemovalReview(now, live, draft.clip.id, draft.candidates, current.rippleEditing);
+      const selectedCuts = draft.candidates.filter((cut) => cut.enabled);
+      const review = buildSilenceRemovalReview(now, live, draft.clip.id, selectedCuts, current.rippleEditing);
       current.applyReview(review, current.t("pauseApplied"));
       setDraft(null); setError("");
     } catch (failure) { setError(failure.code?.startsWith("pause") ? failure.code : "pauseStale"); }
   };
-  return { segment, supported, locked, settings, updateSettings, draft, stale, job, error, run, cancel, toggle, apply,
+  return { segment, supported, locked, settings, updateSettings, draft, stale, job, error, run, cancel, dismiss, toggle, toggleAll, apply,
     rippleEditing, setRippleEditing: options.setRippleEditing,
     preview: (cut) => { if (!stale) options.seekTo(draft.start + Math.max(0, cut.start - 0.25)); },
   };

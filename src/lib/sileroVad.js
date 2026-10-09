@@ -38,8 +38,17 @@ export async function analyzeVideoPauses(clip, { language, signal, onProgress })
     signal.throwIfAborted();
     onProgress(0, "pauseDownloading");
     await call({ type: "init", language }, (_value, phase) => onProgress(0, phase));
+    let mediaBlob = clip.blob instanceof Blob ? clip.blob : null;
+    if (!mediaBlob && typeof clip.src === "string") {
+      try {
+        const res = await fetch(clip.src);
+        if (res.ok) mediaBlob = await res.blob();
+      } catch {
+        // Continue with UrlSource if fetch fails
+      }
+    }
     const { Input, BlobSource, UrlSource, ALL_FORMATS, AudioBufferSink } = await import("mediabunny");
-    input = new Input({ source: clip.blob instanceof Blob ? new BlobSource(clip.blob) : new UrlSource(clip.src), formats: ALL_FORMATS });
+    input = new Input({ source: mediaBlob ? new BlobSource(mediaBlob) : new UrlSource(clip.src), formats: ALL_FORMATS });
     const track = await input.getPrimaryAudioTrack();
     if (!track) throw Object.assign(new Error(), { code: "pauseNoAudio" });
     if (!(await track.canDecode())) throw Object.assign(new Error(), { code: "pauseDecodeFailed" });

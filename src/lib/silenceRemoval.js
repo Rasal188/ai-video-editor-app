@@ -14,16 +14,22 @@ export function canRemovePauses(clip, previous) {
 
 // VAD probabilities describe the original source clock. Convert to the clip's
 // constant-speed timeline only once; curves are explicitly excluded by the gate.
-export function findPauseCandidates(probabilities, clip, { minimum = 0.8, keep = 0.5 } = {}) {
-  const step = 512 / 16000 / (Number(clip.playbackRate) || 1);
-  const duration = Number(clip.duration);
+export function findPauseCandidates(probabilities, clip, { threshold = 0.5, minimum = 0.8, keep = 0.5 } = {}) {
+  const safeThreshold = Math.max(0.05, Math.min(0.95, Number(threshold) || 0.5));
+  const safeMinimum = Math.max(0.1, Math.min(30, Number(minimum) || 0.8));
+  const safeKeep = Math.max(0, Math.min(5, Number(keep) || 0.5));
+  const step = 512 / 16000 / (Number(clip?.playbackRate) || 1);
+  const duration = Number(clip?.duration);
+  if (!Number.isFinite(duration) || duration <= 0 || !probabilities?.length) return [];
   const speech = [];
   let start = null;
   let quietStart = null;
+  const speechThreshold = safeThreshold;
+  const quietThreshold = safeThreshold * 0.7;
   for (let i = 0; i < probabilities.length; i++) {
     const time = Math.min(duration, i * step);
-    if (probabilities[i] >= 0.5) { start ??= time; quietStart = null; }
-    else if (start !== null && probabilities[i] < 0.35) {
+    if (probabilities[i] >= speechThreshold) { start ??= time; quietStart = null; }
+    else if (start !== null && probabilities[i] < quietThreshold) {
       quietStart ??= time;
       if (time - quietStart >= 0.16) {
         speech.push({ start, end: quietStart }); start = null; quietStart = null;
@@ -36,9 +42,9 @@ export function findPauseCandidates(probabilities, clip, { minimum = 0.8, keep =
   const gaps = [];
   let end = 0;
   for (const range of [...speech, { start: duration, end: duration }]) {
-    if (range.start - end >= minimum) {
-      const from = end + (end > 0 ? keep / 2 : 0);
-      const to = range.start - (range.start < duration ? keep / 2 : 0);
+    if (range.start - end >= safeMinimum) {
+      const from = end + (end > 0 ? safeKeep / 2 : 0);
+      const to = range.start - (range.start < duration ? safeKeep / 2 : 0);
       if (to - from >= MIN_VISUAL_SEGMENT_SECONDS) gaps.push({ start: from, end: to });
     }
     end = range.end;

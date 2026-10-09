@@ -20,6 +20,8 @@
 .pause-range label { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; cursor: pointer; }
 .pause-range small { display: block; color: #94a5b2; margin-top: 3px; }
 .pause-range button { width: 36px; flex-shrink: 0; background: #ffffff08; color: #35ead9; border: 1px solid #ffffff12; border-radius: 7px; }
+.pause-actions { display: flex; gap: 8px; }
+.pause-actions button { flex: 1; }
 .pause-spinner { animation: pause-spin 1s linear infinite; }
 @keyframes pause-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .pause-spinner { animation: none; } }
