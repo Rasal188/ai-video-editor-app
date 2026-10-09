@@ -1461,6 +1461,8 @@ export function VoicePanel({
   autoEdit,
   silenceRemoval,
   roughCut,
+  _smartPipeline,
+  openSmartPipeline,
   uiLanguage,
   captionStyle,
   setCaptionStyle,
@@ -1545,6 +1547,7 @@ export function VoicePanel({
   const isAiMusicContext = isSmartContext && smartMode === "ai-music";
   const isSilenceRemovalContext = isSmartContext && smartMode === "remove-pauses";
   const isRoughCutContext = isSmartContext && smartMode === "rough-cut";
+  const isSmartPipelineContext = isSmartContext && smartMode === "smart-pipeline";
   const isFaceSwapContext = isEffectsContext && effectsPanelMode === "face-swap";
   const isOpticalFlowContext = isEffectsContext && effectsPanelMode === "vector-tracking";
   const isCinematicDepthContext = isEffectsContext && ["cinematic-depth", "depth-map", "relight"].includes(effectsPanelMode);
@@ -1597,8 +1600,8 @@ export function VoicePanel({
     background: t("effectBackground"),
     edge: t("effectEdgeCleanup"),
   }[mobileInspectorSection];
-  const title = focusedSectionTitle || (isRoughCutContext ? t("roughCutTitle") : isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartAutoContext ? t("smartAutoEdit") : isSmartFrameContext ? t("smartFrame") : isAvatarContext ? t("avatarTitle") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
-  const panelStatusText = isRoughCutContext ? t("roughCutHint") : isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
+  const title = focusedSectionTitle || (isSmartPipelineContext ? t("smartPipelineTitle") : isRoughCutContext ? t("roughCutTitle") : isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartAutoContext ? t("smartAutoEdit") : isSmartFrameContext ? t("smartFrame") : isAvatarContext ? t("avatarTitle") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
+  const panelStatusText = isSmartPipelineContext ? t("smartPipelineHint") : isRoughCutContext ? t("roughCutHint") : isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
     ? faceSwap?.job?.running ? `${faceSwap.job.progress}%` : hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")
     : isOpticalFlowContext ? t("effectFlowExperimental")
     : isCinematicDepthContext ? cinematicDepth?.job?.running
@@ -1757,6 +1760,31 @@ export function VoicePanel({
         {isAiMusicContext ? <AiMusicGenerator language={uiLanguage} music={aiMusic} embedded /> : null}
         {isSilenceRemovalContext ? <SilenceRemovalPanel t={t} tool={silenceRemoval} /> : null}
         {isRoughCutContext ? <RoughCutPanel t={t} tool={roughCut} /> : null}
+        {isSmartPipelineContext ? (
+          <div className="rough-cut-panel" data-testid="smart-pipeline-panel">
+            <div className="rough-cut-header">
+              <Sparkle size={24} weight="fill" className="rough-cut-icon" />
+              <p className="rough-cut-intro">{t("smartPipelineHint")}</p>
+            </div>
+            <div className="rough-cut-clip">
+              {hasVisual ? (
+                <span>{selectedVisualSegment?.name || t("smartPipelineTitle")}</span>
+              ) : (
+                <span className="rough-cut-select-prompt">{t("smartPipelineSelectClip")}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 16px" }}
+              onClick={() => openSmartPipeline?.()}
+              data-testid="smart-pipeline-open-btn"
+            >
+              <Sparkle size={18} weight="fill" />
+              <span>{t("smartPipelineStart")}</span>
+            </button>
+          </div>
+        ) : null}
         {isStickerContext ? <StickerContextPanel t={t} segment={selectedStickerSegment} updateStickerSegment={updateStickerSegment} deleteStickerSegment={deleteStickerSegment} /> : null}
         {isOverlayContext ? <div className="visual-overlay-inspector">
           {!mobileInspectorSection ? <div className={`sticker-properties-preview ${isVectorOverlay ? "is-vector" : ""}`}>{selectedVisualOverlay.type === "video" ? <video src={selectedVisualOverlay.src} muted playsInline /> : <img src={selectedVisualOverlay.src} alt="" style={isVectorOverlay ? { filter: vectorOverlayAppearance.filter, opacity: vectorOverlayAppearance.opacity, mixBlendMode: vectorOverlayAppearance.cssBlendMode } : undefined} />}</div> : null}

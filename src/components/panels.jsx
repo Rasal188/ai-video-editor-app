@@ -24,6 +24,7 @@ import {
   PersonSimpleRun,
   Scan,
   Scissors,
+  Sparkle,
   Trash,
   Waveform,
   X,
@@ -1103,6 +1104,7 @@ export function ToolPanel(props) {
     analyzeCurrentVisual,
     analyzeEffectVisual,
     openAvatarPanel,
+    openSmartPipeline,
     smartMode,
     setSmartMode,
     openMobileInspector,
@@ -1413,6 +1415,7 @@ export function ToolPanel(props) {
       <div className="tool-panel smart-hub-panel">
         <div className="smart-hub-grid" role="tablist" aria-label={t("smartTools")}>
           {[
+            ["smart-pipeline", Sparkle, t("smartPipelineTitle"), t("smartPipelineHint")],
             ["rough-cut", MagicWand, t("roughCutTitle"), t("roughCutHint")],
             ["remove-pauses", Waveform, t("pauseTitle"), t("pauseHint")],
             ["auto-edit", Scissors, t("smartAutoEdit"), t("smartAutoEditHint")],
@@ -1429,9 +1432,10 @@ export function ToolPanel(props) {
               key={id}
               onClick={() => {
                 setSmartMode(id);
+                if (id === "smart-pipeline") openSmartPipeline?.();
                 if (id === "avatar") openAvatarPanel();
                 if (id === "ai-music" && window.matchMedia?.("(max-width: 760px)").matches) openMobileInspector?.();
-                if ((id === "remove-pauses" || id === "rough-cut") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
+                if ((id === "remove-pauses" || id === "rough-cut" || id === "smart-pipeline") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
               }}
             >
               <Icon size={24} weight="duotone" /><strong>{title}</strong><span>{hint}</span>

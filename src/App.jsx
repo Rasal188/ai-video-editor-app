@@ -16,6 +16,7 @@ import { WebMcpReview, WebMcpAiStatus } from "./components/WebMcpReview.jsx";
 import ProjectImportOverlay from "./components/ProjectImportOverlay.jsx";
 import { CloudRenderModal } from "./components/CloudRenderModal.jsx";
 import { TranscriptReviewModal } from "./components/TranscriptReviewModal.jsx";
+import { SmartPipelineModal } from "./components/SmartPipelineModal.jsx";
 import {
   canShowFirstVisualGuide,
   FIRST_VISUAL_GUIDE_MOBILE_QUERY,
@@ -40,6 +41,7 @@ import { useAutoCaptions } from "./hooks/useAutoCaptions.js";
 import { useAutoEdit } from "./hooks/useAutoEdit.js";
 import { useSilenceRemoval } from "./hooks/useSilenceRemoval.js";
 import { useRoughCut } from "./hooks/useRoughCut.js";
+import { useSmartPipeline } from "./hooks/useSmartPipeline.js";
 import { useWebMcpEditor } from "./hooks/useWebMcpEditor.js";
 import { sampleEditorMedia } from "./lib/webMcpMediaSample.js";
 import { browserProjectFingerprint, restoreBrowserProjectMedia } from "./lib/browserEditPlan.js";
@@ -1192,7 +1194,9 @@ export function App({ currentUser = null, onLogout } = {}) {
       }
     };
     window.addEventListener("test:open-transcript-review", handleTestOpen);
-    return () => window.removeEventListener("test:open-transcript-review", handleTestOpen);
+    return () => {
+      window.removeEventListener("test:open-transcript-review", handleTestOpen);
+    };
   }, []);
 
   const handleApplyTranscriptReview = useCallback(({ segments: reviewedSegments, text: reviewedText }) => {
@@ -1548,6 +1552,31 @@ export function App({ currentUser = null, onLogout } = {}) {
     applyReview: applyBrowserReview, rippleEditing, setRippleEditing, seekTo, t,
     captionSegments,
   });
+  const smartPipeline = useSmartPipeline({
+    language: activeLanguage,
+    selectedSegment: selectedVisualSegment,
+    visualSegments,
+    projectVersion: historySignature,
+    locked: Boolean(trackLocks.image || (sourceAudioBlob && sourceAudioLinked !== false && trackLocks.source)),
+    getSnapshot: getProjectSnapshot,
+    getRuntime: getBrowserRuntimeProject,
+    applyReview: applyBrowserReview,
+    rippleEditing,
+    setRippleEditing,
+    seekTo,
+    t,
+    notify,
+  });
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const handleTestOpenPipeline = (e) => {
+      smartPipeline.open(e?.detail?.clipId, e?.detail?.plan || e?.detail?.prefill);
+    };
+    window.addEventListener("test:open-smart-pipeline", handleTestOpenPipeline);
+    return () => {
+      window.removeEventListener("test:open-smart-pipeline", handleTestOpenPipeline);
+    };
+  }, [smartPipeline]);
   const webMcp = useWebMcpEditor({
     language: activeLanguage, visualSegments, visualOverlaySegments, audioSegments, musicSegments,
     sourceAudioBlob, musicBlob, audioBlob, rippleEditing, getProjectSnapshot,
@@ -1686,6 +1715,12 @@ export function App({ currentUser = null, onLogout } = {}) {
         }}
         t={t}
       />
+      <SmartPipelineModal
+        isOpen={Boolean(smartPipeline.isOpen)}
+        pipeline={smartPipeline}
+        visualSegments={visualSegments}
+        t={t}
+      />
       <section className={`editor-grid ${compactRail ? "is-compact-rail" : ""}`}>
         <EditorSidebar model={{
           activeLanguage, activeTool, analyzeCurrentVisual, analyzeEffectVisual, audioBlob, audioDuration,
@@ -1699,7 +1734,7 @@ export function App({ currentUser = null, onLogout } = {}) {
           imageSrc, isDragging, mediaTab, musicBlob, musicDuration, musicName, musicVolume,
           libraryType, libraryQuery, setLibraryQuery, selectLibraryType, libraryStatus, libraryError, libraryProvider,
           assetDownloadStates, prefetchLibraryAsset,
-          notify, openAvatarPanel, previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
+          notify, openAvatarPanel, openSmartPipeline: () => smartPipeline.open(), previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
           previewVisionOptions, previewVisualSrc, previewVisualType, progress, script,
           seekTo, segments, selectTool, selectedCaptionSegment, selectedFilterId,
           selectedLibraryAssetId, selectedSegmentId, selectedStickerId, selectedTransitionId,
@@ -1903,6 +1938,8 @@ export function App({ currentUser = null, onLogout } = {}) {
           autoEdit={autoEdit}
           silenceRemoval={silenceRemoval}
           roughCut={roughCut}
+          smartPipeline={smartPipeline}
+          openSmartPipeline={() => smartPipeline.open()}
           uiLanguage={activeLanguage}
           captionStyle={captionStyle}
           setCaptionStyle={setCaptionStyle}

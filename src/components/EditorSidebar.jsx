@@ -196,6 +196,7 @@ export function EditorSidebar({ model: d }) {
             analyzeCurrentVisual={d.analyzeCurrentVisual}
             analyzeEffectVisual={d.analyzeEffectVisual}
             openAvatarPanel={d.openAvatarPanel}
+            openSmartPipeline={d.openSmartPipeline}
             smartMode={d.smartMode}
             setSmartMode={d.setSmartMode}
             openMobileInspector={() => d.setMobilePanel?.("inspector")}

@@ -25,6 +25,7 @@
     "test:e2e:transcript-modal": "node scripts/e2e-transcript-modal-test.mjs",
     "test:e2e:silence-removal": "node scripts/e2e-silence-removal-test.mjs",
     "test:e2e:rough-cut": "node scripts/e2e-rough-cut-test.mjs",
+    "test:e2e:smart-pipeline": "node scripts/e2e-smart-pipeline-test.mjs",
     "test:e2e:audit-workflow": "node scripts/e2e-complete-workflow-audit.mjs",
     "agent": "node scripts/timeline-command.mjs",
     "mcp": "node skills/edit-timeline-studio/mcp/server.mjs",
