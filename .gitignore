@@ -19,6 +19,7 @@ AGENTS.md
 .vite/
 .vite-temp/
 .artifacts/
+artifacts/
 /storage/
 test-artifacts/
 scratch/

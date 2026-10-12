@@ -320,6 +320,9 @@ describe("Phase 4 Smart Editing Pipeline Deep Integration Audit", () => {
       const planFile = path.join(auditWorkDir, "import-plan.json");
       const renderReqFile = path.join(auditWorkDir, "render-req.json");
 
+      await fs.promises.rm(initialTimeline, { force: true });
+      await fs.promises.rm(renderedMp4, { force: true });
+
       // 1. Create a disposable timeline archive with real video fixture
       const initPlan = {
         schemaVersion: 1,

@@ -8,11 +8,25 @@ function startsAtOrAfter(segment, boundary) {
 
 function shiftRange(segment, delta) {
   const start = Math.max(0, (Number(segment?.start) || 0) + delta);
-  if (!Number.isFinite(Number(segment?.end))) return { ...segment, start };
+  const shiftedWords = Array.isArray(segment?.words)
+    ? segment.words.map((w) => {
+        const wStart = Math.max(0, (Number(w.start) || 0) + delta);
+        const wEnd = Math.max(wStart, (Number(w.end) || 0) + delta);
+        return { ...w, start: wStart, end: wEnd };
+      })
+    : undefined;
+  if (!Number.isFinite(Number(segment?.end))) {
+    return {
+      ...segment,
+      start,
+      ...(shiftedWords ? { words: shiftedWords } : {}),
+    };
+  }
   return {
     ...segment,
     start,
     end: Math.max(start, Number(segment.end) + delta),
+    ...(shiftedWords ? { words: shiftedWords } : {}),
   };
 }
 
@@ -74,7 +88,7 @@ export function applyTimelineRipple(d, boundary, delta) {
       moved += 1;
       return shiftRange(segment, safeDelta);
     });
-    setter(next);
+    if (typeof setter === "function") setter(next);
     return next;
   };
 

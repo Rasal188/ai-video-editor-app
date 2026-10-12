@@ -241,6 +241,8 @@ async function renderCompositionAt(context, canvas, prepared, options, time) {
     captionSize: resolveCaptionSizeForSegment(options.captionSize, activeCaptionSegment),
     captionStyle: resolveCaptionStyleForSegment(options.captionStyle, activeCaptionSegment),
     captionReferenceSize: options.captionReferenceSize,
+    captionSegment: activeCaptionSegment,
+    currentTime: time,
     stickers, stickerImages: stickers.map((sticker) => prepared.stickerImages.get(sticker.src)),
     transitionId: next ? junction.id : "none",
     transitionNext: next ? {

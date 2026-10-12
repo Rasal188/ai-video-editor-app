@@ -99,7 +99,13 @@ export function createSmartPipelinePlan({
       start: Number(seg.start) || 0,
       end: Number(seg.end) || 0,
       text: String(seg.text || "").trim(),
-      words: Array.isArray(seg.words) ? seg.words : [],
+      ...(Array.isArray(seg.words) && seg.words.length > 0 ? {
+        words: seg.words.map((w) => ({
+          text: String(w.text || "").trim(),
+          start: Number(w.start),
+          end: Number(w.end),
+        })),
+      } : {}),
     }));
   } else if (rawChunks.length > 0) {
     captionSegments = regroupReviewSegments(rawChunks, duration, { grouping: "phrases" });
@@ -181,12 +187,26 @@ export function buildSmartPipelineReview({
         fail("pipelineCaptionsInvalid");
       }
 
+      // Check if captions are already timeline-positioned relative to clipStartOffset
+      const alreadyTimelineOffset =
+        clipStartOffset > 0.001 &&
+        approvedCaptions.length > 0 &&
+        approvedCaptions.every((cap) => Number(cap.start) >= clipStartOffset - 0.05);
+      const offsetToAdd = alreadyTimelineOffset ? 0 : clipStartOffset;
+
       // Convert captions to timeline coordinates relative to clipStartOffset
       const positionedCaptions = approvedCaptions.map((cap, i) => ({
         ...cap,
         id: cap.id || `cap-${i}-${Date.now()}`,
-        start: clipStartOffset + cap.start,
-        end: clipStartOffset + cap.end,
+        start: offsetToAdd + Number(cap.start),
+        end: offsetToAdd + Number(cap.end),
+        ...(Array.isArray(cap.words) ? {
+          words: cap.words.map((w) => ({
+            ...w,
+            start: offsetToAdd + Number(w.start),
+            end: offsetToAdd + Number(w.end),
+          })),
+        } : {}),
       }));
 
       // If replacing or appending captions, put them in project.captionSegments
@@ -206,6 +226,7 @@ export function buildSmartPipelineReview({
 
       return {
         ...cutReview,
+        rippleEditing,
         fingerprint: browserProjectFingerprint(snapshot, rippleEditing, runtime.visualSegments, runtime),
         isSmartPipeline: true,
         appliedCutsCount: enabledCuts.length,
@@ -227,11 +248,24 @@ export function buildSmartPipelineReview({
 
   // If only captions are to be applied (no cuts):
   const nextProject = structuredClone(snapshot);
+  const alreadyTimelineOffset =
+    clipStartOffset > 0.001 &&
+    approvedCaptions.length > 0 &&
+    approvedCaptions.every((cap) => Number(cap.start) >= clipStartOffset - 0.05);
+  const offsetToAdd = alreadyTimelineOffset ? 0 : clipStartOffset;
+
   const positionedCaptions = approvedCaptions.map((cap, i) => ({
     ...cap,
     id: cap.id || `cap-${i}-${Date.now()}`,
-    start: clipStartOffset + cap.start,
-    end: clipStartOffset + cap.end,
+    start: offsetToAdd + Number(cap.start),
+    end: offsetToAdd + Number(cap.end),
+    ...(Array.isArray(cap.words) ? {
+      words: cap.words.map((w) => ({
+        ...w,
+        start: offsetToAdd + Number(w.start),
+        end: offsetToAdd + Number(w.end),
+      })),
+    } : {}),
   }));
 
   nextProject.captionSegments = positionedCaptions;
@@ -241,6 +275,7 @@ export function buildSmartPipelineReview({
     project: nextProject,
     mediaOrigins: Object.create(null),
     hasChanges: true,
+    rippleEditing,
     fingerprint: browserProjectFingerprint(snapshot, rippleEditing, runtime.visualSegments, runtime),
     duration: nextProject.visualSegments.reduce((sum, clip) => sum + clip.duration, 0),
     focusTime: positionedCaptions[0]?.start ?? clipStartOffset,

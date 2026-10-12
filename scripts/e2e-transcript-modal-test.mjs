@@ -82,6 +82,13 @@ async function runTranscriptModalE2ETest() {
 
   const page = await context.newPage();
 
+  if (!authCookie) {
+    await page.route("**/api/auth/me", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ success: true, user: { id: "test-user-e2e", email: "e2e.alice@example.com" } }),
+    }));
+  }
+
   try {
     console.log(`Navigating to ${DEV_SERVER_URL}...`);
     await page.goto(DEV_SERVER_URL, { waitUntil: "domcontentloaded", timeout: 30000 });

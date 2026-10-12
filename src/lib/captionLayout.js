@@ -4,6 +4,14 @@ import {
   resolveCaptionFontFamily,
   resolveCaptionFontWeight,
 } from "./captionFonts.js";
+import {
+  DEFAULT_ACTIVE_WORD_COLOR,
+  DEFAULT_KEYWORD_COLOR,
+  isKeywordHighlightEnabled,
+  resolveKeywordColor,
+  resolveKeywords,
+  splitLineIntoWordChunks,
+} from "./karaoke.js";
 
 const CAPTION_FONT_WEIGHT = 700;
 const CAPTION_LINE_HEIGHT = 1.35;
@@ -189,6 +197,7 @@ export function getCaptionTextLayout({
   text = "",
   captionSize = 14,
   captionStyle = {},
+  words = null,
   referenceFrame,
   renderFrame,
 } = {}) {
@@ -228,6 +237,7 @@ export function getCaptionTextLayout({
     contentWidth,
     lines,
     style: captionStyle,
+    words: Array.isArray(words) ? words : null,
   };
 }
 
@@ -252,11 +262,51 @@ export function resolveCaptionSegmentPlacement(segment, fallbackPlacement = "bot
 
 export function positionCaptionLayout(layout, placement) {
   const point = normalizePlacement(placement);
+  const frameWidth = Number(layout?.frame?.width) || 0;
+  const frameHeight = Number(layout?.frame?.height) || 0;
+  const layoutWidth = Number(layout?.width) || 0;
+  const layoutHeight = Number(layout?.height) || 0;
+
+  const rawX = (frameWidth * point.x) / 100 - layoutWidth / 2;
+  const rawY = (frameHeight * point.y) / 100 - layoutHeight / 2;
+
+  // Portrait 9:16 video layouts require safe-area margins to avoid clipping
+  // caption text against display edges or top/bottom mobile UI zones.
+  const isPortrait = frameHeight > frameWidth;
+  const safeMarginTop = isPortrait
+    ? Math.max(16, Math.round(frameHeight * 0.05))
+    : Math.max(8, Math.round(frameHeight * 0.03));
+  const safeMarginBottom = isPortrait
+    ? Math.max(20, Math.round(frameHeight * 0.06))
+    : Math.max(8, Math.round(frameHeight * 0.04));
+  const safeMarginX = Math.max(8, Math.round(frameWidth * 0.02));
+
+  let x = rawX;
+  let y = rawY;
+
+  if (frameWidth > 0 && layoutWidth > 0) {
+    const minX = safeMarginX;
+    const maxX = frameWidth - layoutWidth - safeMarginX;
+    if (maxX >= minX) {
+      x = Math.max(minX, Math.min(x, maxX));
+    }
+  }
+
+  if (frameHeight > 0 && layoutHeight > 0) {
+    const minY = safeMarginTop;
+    const maxY = frameHeight - layoutHeight - safeMarginBottom;
+    if (maxY >= minY) {
+      y = Math.max(minY, Math.min(y, maxY));
+    } else {
+      y = safeMarginTop;
+    }
+  }
+
   return {
-    x: (layout.frame.width * point.x) / 100 - layout.width / 2,
-    y: (layout.frame.height * point.y) / 100 - layout.height / 2,
-    centerX: (layout.frame.width * point.x) / 100,
-    centerY: (layout.frame.height * point.y) / 100,
+    x,
+    y,
+    centerX: x + layoutWidth / 2,
+    centerY: y + layoutHeight / 2,
   };
 }
 
@@ -279,9 +329,14 @@ function roundedRectPath(context, x, y, width, height, radius) {
   context.closePath();
 }
 
-export function drawCaptionLayout(context, layout, position = { x: 0, y: 0 }) {
+export function drawCaptionLayout(context, layout, position = { x: 0, y: 0 }, options = {}) {
   const { metrics } = layout;
   const style = layout.style ?? {};
+  const {
+    activeWordIndex = -1,
+    activeWordColor = style.activeWordColor || DEFAULT_ACTIVE_WORD_COLOR,
+    words = layout.words || null,
+  } = options;
   const opacity = Math.max(0, Math.min(1, Number(style.backgroundOpacity ?? 0.62)));
   const borderWidth = Math.max(0, Number(style.borderWidth ?? 0)) * metrics.scale;
   context.save();
@@ -306,6 +361,13 @@ export function drawCaptionLayout(context, layout, position = { x: 0, y: 0 }) {
   context.shadowOffsetY = metrics.shadowOffsetY;
   const blockHeight = layout.lines.length * metrics.lineHeight;
   const firstLineY = position.y + (layout.height - blockHeight) / 2 + metrics.lineHeight / 2;
+
+  const isKeywordActive = isKeywordHighlightEnabled(style, options.captionSegment);
+  const keywords = isKeywordActive ? resolveKeywords(style, options.captionSegment) : [];
+  const keywordColor = resolveKeywordColor(style, options.captionSegment, DEFAULT_KEYWORD_COLOR);
+  const defaultTextColor = style.textColor || "#f5fbff";
+
+  let wordCursor = 0;
   layout.lines.forEach((line, index) => {
     const textX = position.x + layout.width / 2;
     const textY = firstLineY + index * metrics.lineHeight;
@@ -320,12 +382,49 @@ export function drawCaptionLayout(context, layout, position = { x: 0, y: 0 }) {
       context.strokeText(line, textX, textY, layout.contentWidth);
       context.restore();
     }
-    context.fillText(
-      line,
-      textX,
-      textY,
-      layout.contentWidth,
-    );
+
+    const hasKaraokeHighlight = activeWordIndex >= 0 && Array.isArray(words) && words.length > 0;
+    const hasKeywordHighlight = isKeywordActive && keywords.length > 0;
+
+    if (hasKaraokeHighlight || hasKeywordHighlight) {
+      const { chunks, nextWordCursor } = splitLineIntoWordChunks(
+        line,
+        words,
+        wordCursor,
+        activeWordIndex,
+        {
+          keywords,
+          keywordHighlight: isKeywordActive,
+          keywordColor,
+          activeWordColor,
+          textColor: defaultTextColor,
+        }
+      );
+      wordCursor = nextWordCursor;
+      const hasColoredChunk = chunks.some((c) => c.color && c.color !== defaultTextColor);
+      if (!hasColoredChunk) {
+        context.fillText(line, textX, textY, layout.contentWidth);
+      } else {
+        const lineWidth = context.measureText(line).width;
+        const startX = textX - lineWidth / 2;
+        context.textAlign = "left";
+        for (const chunk of chunks) {
+          if (!chunk.text) continue;
+          const chunkStartX = startX + context.measureText(line.slice(0, chunk.offset)).width;
+          context.fillStyle = chunk.color || defaultTextColor;
+          context.fillText(chunk.text, chunkStartX, textY);
+        }
+        context.textAlign = "center";
+        context.fillStyle = defaultTextColor;
+      }
+    } else {
+      context.fillText(
+        line,
+        textX,
+        textY,
+        layout.contentWidth,
+      );
+    }
   });
   context.restore();
 }

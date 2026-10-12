@@ -1488,7 +1488,8 @@ export function App({ currentUser = null, onLogout } = {}) {
     if (!review.hasChanges) throw Object.assign(new Error(), { code: "NO_CHANGES" });
     const snapshot = getProjectSnapshot();
     const runtime = getBrowserRuntimeProject();
-    if (review.fingerprint !== browserProjectFingerprint(snapshot, rippleEditing, visualSegments, runtime)) {
+    const expectedRipple = review.rippleEditing !== undefined ? review.rippleEditing : rippleEditing;
+    if (review.fingerprint !== browserProjectFingerprint(snapshot, expectedRipple, visualSegments, runtime)) {
       throw Object.assign(new Error(), { code: "BROWSER_EDIT_STALE_PLAN" });
     }
     const firstChanged = review.rows?.find((row) => row.changed);

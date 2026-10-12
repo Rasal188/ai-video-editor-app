@@ -410,7 +410,9 @@ export function getSegmentIndexAtTime(captionSegments, currentTime, targetDurati
   const timeline = getCaptionTimeline(captionSegments, targetDuration);
   const time = Math.max(0, currentTime);
   for (let index = 0; index < timeline.length; index += 1) {
-    if (time >= timeline[index].start && time <= timeline[index].end) {
+    const isLast = index === timeline.length - 1;
+    const { start, end } = timeline[index];
+    if (time >= start && (isLast ? time <= end : time < end)) {
       return index;
     }
   }

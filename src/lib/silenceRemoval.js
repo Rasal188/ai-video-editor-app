@@ -147,6 +147,32 @@ export function buildSilenceRemovalReview(snapshot, runtime, clipId, candidates,
       return parts.map((range, i) => {
         const item = { ...caption, id: i ? crypto.randomUUID() : caption.id,
           start: collapseTime(range.start, cuts), end: collapseTime(range.end, cuts) };
+        if (Array.isArray(caption.words)) {
+          const retainedWords = caption.words
+            .filter((w) => {
+              const ws = Number(w?.start);
+              const we = Number(w?.end);
+              if (!Number.isFinite(ws) || !Number.isFinite(we)) return false;
+              if (Math.abs(we - ws) < EPS) {
+                return ws >= range.start - EPS && ws <= range.end + EPS;
+              }
+              return we > range.start + EPS && ws < range.end - EPS;
+            })
+            .map((w) => {
+              const ws = Math.max(range.start, Number(w.start));
+              const we = Math.max(ws, Math.min(range.end, Number(w.end)));
+              return {
+                ...w,
+                start: collapseTime(ws, cuts),
+                end: collapseTime(we, cuts),
+              };
+            });
+          item.words = retainedWords;
+          if ((parts.length > 1 || retainedWords.length < caption.words.length) && retainedWords.length > 0) {
+            const isCjk = retainedWords.some((w) => /[\u3400-\u9fff\u3040-\u30ff]/u.test(w.text));
+            item.text = isCjk ? retainedWords.map((w) => w.text).join("") : retainedWords.map((w) => w.text).join(" ").trim();
+          }
+        }
         for (const field of ["audioSegmentId", "detachedAudioSegmentId"]) {
           if (!audioPieces.has(caption[field])) continue;
           const source = audioPieces.get(caption[field]).find((audio) => audio.start < item.end - EPS && audio.start + audio.duration > item.start + EPS);

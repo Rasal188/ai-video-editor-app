@@ -214,7 +214,8 @@ export function PreviewStage({
   const focusPreviewOrientation = previewRatioValue > 1.1 ? "landscape" : previewRatioValue < 0.9 ? "portrait" : "square";
   const visibleStickers = stickers;
   const hasStickerOverlay = visibleStickers.some((sticker) => sticker?.src || sticker?.text);
-  const hasPreviewContent = Boolean(previewVisualSrc || hasStickerOverlay || visualOverlays.length);
+  const hasCaptionOverlay = captionsEnabled && trackVisibility?.caption !== false && Boolean(currentCaption || (Array.isArray(currentCaptions) && currentCaptions.length));
+  const hasPreviewContent = Boolean(previewVisualSrc || hasStickerOverlay || visualOverlays.length || hasCaptionOverlay);
   const baseRenderedVisualSrc = previewVisualRenderSrc || previewVisualSrc;
   const activeObjectFit = visualObjectFit || fitMode;
   const activeObjectPosition = visualObjectPosition || "50% 50%";
@@ -971,6 +972,7 @@ export function PreviewStage({
                   return (
                     <CaptionOverlay
                       key={caption.id}
+                      caption={caption}
                       text={caption.text}
                       captionSize={resolveCaptionSizeForSegment(captionSize, caption)}
                       captionStyle={resolveCaptionStyleForSegment(captionStyle, caption)}
@@ -979,6 +981,7 @@ export function PreviewStage({
                         y: basePlacement.y + (caption.placement ? 0 : (index - (visibleCaptions.length - 1) / 2) * 12),
                       }}
                       frameSize={activePreviewFrameSize}
+                      currentTime={currentTime}
                       onPointerDown={(event) => startCaptionDrag(event, caption.id)}
                       onDoubleClick={() => setActiveTool("caption")}
                     />

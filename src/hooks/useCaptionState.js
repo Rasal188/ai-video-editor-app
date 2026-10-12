@@ -3,7 +3,7 @@ import { useState } from "react";
 import { DEFAULT_SCRIPT } from "../config/editor.js";
 import { createCaptionSegments } from "../lib/timeline.js";
 
-const DEFAULT_CAPTION_STYLE = {
+export const DEFAULT_CAPTION_STYLE = {
   backgroundColor: "#05080d",
   backgroundOpacity: 0.62,
   textColor: "#f5fbff",
@@ -17,6 +17,11 @@ const DEFAULT_CAPTION_STYLE = {
   fontId: "default",
   textStrokeColor: "#05080d",
   textStrokeWidth: 0,
+  karaoke: false,
+  activeWordColor: "#ffd43b",
+  keywordHighlight: false,
+  keywords: [],
+  keywordColor: "#38d9a9",
 };
 
 export function useCaptionState() {

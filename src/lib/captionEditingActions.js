@@ -1,4 +1,5 @@
 import { getCaptionScript } from "./timeline.js";
+import { updateSegmentText } from "./transcriptReview.js";
 
 export function setCaptionSegmentPlacement(segments, segmentId, placement) {
   return segments.map((segment) => (
@@ -51,9 +52,7 @@ export function createCaptionEditingActions(d) {
       return;
     }
     d.setCaptionSegments((items) => {
-      const nextSegments = items.map((segment) =>
-        segment.id === segmentId ? { ...segment, text } : segment,
-      );
+      const nextSegments = updateSegmentText(items, segmentId, text);
       d.setScript(getCaptionScript(nextSegments));
       return nextSegments;
     });

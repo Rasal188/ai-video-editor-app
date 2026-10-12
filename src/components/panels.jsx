@@ -1231,12 +1231,14 @@ export function ToolPanel(props) {
               ...Object.fromEntries(CAPTION_VISUAL_STYLE_KEYS.map((key) => [key, preset.style?.[key] ?? captionStyle[key]])),
               captionSize: preset.captionSize,
             },
+            ...(preset.placement ? { placement: preset.placement } : preset.position ? { placement: { top: { x: 50, y: 18 }, middle: { x: 50, y: 50 }, bottom: { x: 50, y: 78 } }[preset.position] || { x: 50, y: 78 } } : {}),
           }
           : segment
       )));
     } else {
       setCaptionStyle(applyCaptionPresetToStyle(captionStyle, preset));
-      setCaptionSize(preset.captionSize);
+      if (preset.captionSize) setCaptionSize(preset.captionSize);
+      if (preset.position) setCaptionPosition(preset.position);
       setCaptionStylePresetId(preset.id);
       setCaptionSegments((items) => items.map((segment) => {
         const { styleOverrides: _styleOverrides, fontId: _fontId, ...rest } = segment;
@@ -1399,6 +1401,68 @@ export function ToolPanel(props) {
             <label>{t("captionTextColor")}<input type="color" value={effectiveCaptionStyle.textColor} onChange={(event) => updateCaptionStyleField("textColor", event.target.value)} /></label>
             <label>{t("captionBackground")}<input type="color" value={effectiveCaptionStyle.backgroundColor} onChange={(event) => updateCaptionStyleField("backgroundColor", event.target.value)} /></label>
             <label>{t("captionBorderColor")}<input type="color" value={effectiveCaptionStyle.borderColor} onChange={(event) => updateCaptionStyleField("borderColor", event.target.value)} /></label>
+          </div>
+          <div className="caption-karaoke-row">
+            <label className="caption-karaoke-toggle">
+              <input
+                id="caption-karaoke-toggle"
+                type="checkbox"
+                checked={Boolean(effectiveCaptionStyle.karaoke)}
+                onChange={(event) => updateCaptionStyleField("karaoke", event.target.checked)}
+              />
+              <span>{t("captionKaraoke", "Karaoke (Active Word)")}</span>
+            </label>
+            {effectiveCaptionStyle.karaoke ? (
+              <label className="caption-color-inline">
+                <span>{t("captionActiveWordColor", "Highlight")}</span>
+                <input
+                  id="caption-active-word-color"
+                  type="color"
+                  value={effectiveCaptionStyle.activeWordColor || "#ffd43b"}
+                  onChange={(event) => updateCaptionStyleField("activeWordColor", event.target.value)}
+                />
+              </label>
+            ) : null}
+          </div>
+          <div className="caption-keyword-row">
+            <div className="caption-keyword-header">
+              <label className="caption-karaoke-toggle">
+                <input
+                  id="caption-keyword-highlight-toggle"
+                  type="checkbox"
+                  checked={Boolean(effectiveCaptionStyle.keywordHighlight)}
+                  onChange={(event) => updateCaptionStyleField("keywordHighlight", event.target.checked)}
+                />
+                <span>{t("captionKeywords", "Highlight Keywords")}</span>
+              </label>
+              {effectiveCaptionStyle.keywordHighlight ? (
+                <label className="caption-color-inline">
+                  <span>{t("captionKeywordColor", "Color")}</span>
+                  <input
+                    id="caption-keyword-color"
+                    type="color"
+                    value={effectiveCaptionStyle.keywordColor || "#38d9a9"}
+                    onChange={(event) => updateCaptionStyleField("keywordColor", event.target.value)}
+                  />
+                </label>
+              ) : null}
+            </div>
+            {effectiveCaptionStyle.keywordHighlight ? (
+              <div className="caption-keyword-inputs">
+                <input
+                  id="caption-keywords-input"
+                  type="text"
+                  className="caption-keyword-text-input"
+                  placeholder={t("captionKeywordsPlaceholder", "e.g. password, safe, website")}
+                  value={Array.isArray(effectiveCaptionStyle.keywords) ? effectiveCaptionStyle.keywords.join(", ") : (effectiveCaptionStyle.keywords || "")}
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    const parsed = raw.split(/[,;\n]+/).map((k) => k.trim()).filter(Boolean);
+                    updateCaptionStyleField("keywords", parsed);
+                  }}
+                />
+              </div>
+            ) : null}
           </div>
           {[["backgroundOpacity", t("captionOpacity"), 0, 1, 0.05, "%"], ["textStrokeWidth", t("captionOutlineWidth"), 0, 6, 1, "px"], ["borderWidth", t("captionBorderWidth"), 0, 8, 1, "px"], ["radius", t("captionRadius"), 0, 28, 1, "px"], ["paddingX", t("captionPaddingX"), 0, 52, 1, "px"], ["paddingY", t("captionPaddingY"), 0, 32, 1, "px"], ["shadowOpacity", t("captionShadow"), 0, 1, 0.05, "%"]].map(([key, label, min, max, step, unit]) => (
             <div className="slider-field compact-slider" key={key}><div><label>{label}</label><span>{unit === "%" ? `${Math.round(effectiveCaptionStyle[key] * 100)}%` : `${effectiveCaptionStyle[key]}${unit}`}</span></div><input type="range" min={min} max={max} step={step} value={effectiveCaptionStyle[key]} onChange={(event) => updateCaptionStyleField(key, Number(event.target.value))} /></div>

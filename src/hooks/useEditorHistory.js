@@ -12,7 +12,15 @@ const HISTORY_LIMIT = 50;
 const HISTORY_DEBOUNCE_MS = 180;
 
 function cloneItems(items = []) {
-  return (Array.isArray(items) ? items : []).map((item) => ({ ...item }));
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (item && Array.isArray(item.words)) {
+      return {
+        ...item,
+        words: item.words.map((w) => ({ ...w })),
+      };
+    }
+    return { ...item };
+  });
 }
 
 function createSnapshot(d) {

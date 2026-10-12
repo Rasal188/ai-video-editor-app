@@ -122,6 +122,13 @@ async function runSmartPipelineE2ETest() {
 
   const page = await context.newPage();
 
+  if (!authCookie) {
+    await page.route("**/api/auth/me", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ success: true, user: { id: "test-user-e2e", email: "e2e.alice@example.com" } }),
+    }));
+  }
+
   page.on("console", (msg) => {
     console.log(`[Browser Console ${msg.type()}] ${msg.text()}`);
   });

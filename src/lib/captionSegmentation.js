@@ -28,9 +28,24 @@ export function captionSegmentsFromWords(chunks, duration, {
     const end = group.at(-1).end;
     if (end <= start) return; // Keep zero-length tokens with the next timed word.
     const text = normalizeText(rawText);
+    const segStart = offset + start;
+    const segEnd = offset + end;
+    const segWords = group
+      .filter((item) => item && Number.isFinite(item.start) && Number.isFinite(item.end))
+      .map((item) => {
+        const itemStart = Math.max(start, Math.min(end, item.start));
+        const itemEnd = Math.max(itemStart, Math.min(end, item.end));
+        return {
+          text: String(item.text).trim() || String(item.text),
+          start: offset + itemStart,
+          end: offset + itemEnd,
+        };
+      })
+      .filter((w) => w.text.length > 0 && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end >= w.start);
     segments.push({
-      id: makeId("caption"), text, start: offset + start, end: offset + end,
+      id: makeId("caption"), text, start: segStart, end: segEnd,
       hidden: false, source: "asr", timingSource: "asr-word",
+      words: segWords,
       ...(text !== rawText ? { rawText } : {}),
     });
     group = [];
@@ -63,6 +78,21 @@ export function captionSegmentsFromWords(chunks, duration, {
     const last = segments.at(-1);
     last.text = normalizeText((last.rawText ?? last.text) + group.map((item) => item.text).join(""));
     delete last.rawText;
+    if (Array.isArray(last.words)) {
+      const extraWords = group
+        .filter((item) => item && Number.isFinite(item.start) && Number.isFinite(item.end))
+        .map((item) => {
+          const itemStart = Math.min(last.end, Math.max(last.start, offset + item.start));
+          const itemEnd = Math.max(itemStart, Math.min(last.end, offset + item.end));
+          return {
+            text: String(item.text).trim() || String(item.text),
+            start: itemStart,
+            end: itemEnd,
+          };
+        })
+        .filter((w) => w.text.length > 0 && w.end >= w.start);
+      last.words.push(...extraWords);
+    }
   } else if (group.length || !segments.length) throw timingError();
   return segments;
 }

@@ -149,7 +149,8 @@ function resolvePlacementCoords(placement) {
 function assertSupportedProject(project) {
   const unsupported = [];
   const visibleCaptions = (project.captionSegments || []).filter((item) => !item.hidden);
-  if (visibleCaptions.some((item) => item.animation === "karaoke" && Array.isArray(item.words) && item.words.length > 1)) {
+  const isKaraokeProject = Boolean(project.captionStyle?.karaoke);
+  if (visibleCaptions.some((item) => (item.animation === "karaoke" || item.styleOverrides?.karaoke || (isKaraokeProject && item.styleOverrides?.karaoke !== false)) && Array.isArray(item.words) && item.words.length > 1)) {
     unsupported.push("karaoke caption animation");
   }
   const visibleOverlays = (project.visualOverlaySegments || []).filter((item) => !item.hidden);

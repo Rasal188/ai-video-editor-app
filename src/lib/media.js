@@ -21,6 +21,11 @@ import {
 } from "./captionLayout.js";
 import { resolveCaptionStyleForSegment } from "./captionFonts.js";
 import { resolveCaptionSizeForSegment } from "./captionStyles.js";
+import {
+  getActiveWordIndex,
+  isKaraokeEnabled,
+  resolveActiveWordColor,
+} from "./karaoke.js";
 import { resolveVisionAnalysisAtTime } from "./vision.js";
 import { getVisualFitRect } from "./visualGeometry.js";
 import { resolveSmartFrameCropAtTime, smartFrameCropToPixels } from "./smartFrame.js";
@@ -1183,6 +1188,8 @@ export function drawPreviewFrame(context, visual, canvas, options) {
     visualTime = 0,
     visualOverlays = [],
     visualOverlaySources = [],
+    currentTime = 0,
+    captionSegment = null,
   } = options;
 
   const { width, height } = canvas;
@@ -1421,11 +1428,18 @@ export function drawPreviewFrame(context, visual, canvas, options) {
   });
 
   if (captionsEnabled && subtitle) {
+    const isKaraoke = isKaraokeEnabled(captionStyle, captionSegment);
+    const activeWordIndex = isKaraoke
+      ? getActiveWordIndex(captionSegment?.words, currentTime, captionSegment)
+      : -1;
+    const activeWordColor = resolveActiveWordColor(captionStyle, captionSegment);
+
     const captionLayout = getCaptionTextLayout({
       context,
       text: subtitle,
       captionSize,
       captionStyle,
+      words: captionSegment?.words,
       referenceFrame: captionReferenceSize ?? canvas,
       renderFrame: canvas,
     });
@@ -1434,6 +1448,12 @@ export function drawPreviewFrame(context, visual, canvas, options) {
       context,
       captionLayout,
       positionCaptionLayout(captionLayout, effectiveCaptionPlacement),
+      {
+        activeWordIndex,
+        activeWordColor,
+        words: captionSegment?.words,
+        captionSegment,
+      },
     );
   }
 
@@ -2013,6 +2033,8 @@ export async function exportBrowserVideo({
       captionSize: resolveCaptionSizeForSegment(captionSize, activeCaptionSegment),
       captionStyle: resolveCaptionStyleForSegment(captionStyle, activeCaptionSegment),
       captionReferenceSize,
+      captionSegment: activeCaptionSegment,
+      currentTime: timelineTime,
       stickers: exportStickers,
       stickerImages: exportStickers.map((item) => item?.src ? stickerImageMap.get(item.src) : null),
       transitionId: nextVisualItem ? junction.id : "none",
@@ -2100,6 +2122,8 @@ export async function exportBrowserVideo({
       captionSize: resolveCaptionSizeForSegment(captionSize, finalCaptionSegment),
       captionStyle: resolveCaptionStyleForSegment(captionStyle, finalCaptionSegment),
       captionReferenceSize,
+      captionSegment: finalCaptionSegment,
+      currentTime: finalTimelineTime,
       stickers: finalStickers,
       stickerImages: finalStickers.map((item) => item?.src ? stickerImageMap.get(item.src) : null),
       transitionId,
