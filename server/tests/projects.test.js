@@ -321,4 +321,126 @@ describe("Projects & Project Versions API", () => {
       });
     });
   });
+
+  describe("Project Duplication & Search", () => {
+    it("should duplicate project with independent archive and revision history", async () => {
+      const session = await env.createSession("duplicator@example.com");
+      const otherSession = await env.createSession("outsider@example.com");
+
+      await withServer(env.app, async (baseUrl) => {
+        // 1. Create original project
+        const createRes = await fetch(`${baseUrl}/api/projects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session.cookie },
+          body: JSON.stringify({
+            title: "Original Masterpiece",
+            duration: 88.5,
+            fps: 60,
+            ratio: "9:16",
+            metadata: { customField: "preserved" },
+          }),
+        });
+        const { project: original } = await createRes.json();
+
+        // Upload an archive to original
+        const archivePayload = Buffer.from("PK-DUPLICATE-TEST-ARCHIVE");
+        await fetch(`${baseUrl}/api/projects/${original.id}/archive`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/octet-stream", Cookie: session.cookie },
+          body: archivePayload,
+        });
+
+        // 2. Duplicate project with custom title
+        const dupRes = await fetch(`${baseUrl}/api/projects/${original.id}/duplicate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session.cookie },
+          body: JSON.stringify({ title: "Remix Cut" }),
+        });
+        assert.equal(dupRes.status, 201);
+        const dupBody = await dupRes.json();
+        assert.equal(dupBody.ok, true);
+        const dupProject = dupBody.project;
+
+        assert.notEqual(dupProject.id, original.id);
+        assert.equal(dupProject.title, "Remix Cut");
+        assert.equal(dupProject.duration, 88.5);
+        assert.equal(dupProject.fps, 60);
+        assert.equal(dupProject.ratio, "9:16");
+        assert.equal(dupProject.current_revision, 1);
+        assert.notEqual(dupProject.archive_storage_path, original.archive_storage_path);
+        assert.equal(dupProject.metadata.duplicatedFrom, original.id);
+        assert.equal(dupProject.metadata.customField, "preserved");
+
+        // Verify duplicated archive is accessible and identical content
+        const dupDownloadRes = await fetch(`${baseUrl}/api/projects/${dupProject.id}/archive`, {
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(dupDownloadRes.status, 200);
+        const dupBuffer = Buffer.from(await dupDownloadRes.arrayBuffer());
+        assert.deepEqual(dupBuffer, archivePayload);
+
+        // 3. Test cross-user duplicate rejection (IDOR)
+        const outsiderDupRes = await fetch(`${baseUrl}/api/projects/${original.id}/duplicate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: otherSession.cookie },
+          body: JSON.stringify({ title: "Stolen Copy" }),
+        });
+        assert.equal(outsiderDupRes.status, 403);
+
+        // 4. Test non-existent project duplicate
+        const notFoundDup = await fetch(`${baseUrl}/api/projects/00000000-0000-0000-0000-000000000000/duplicate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session.cookie },
+        });
+        assert.equal(notFoundDup.status, 404);
+      });
+    });
+
+    it("should filter projects by search query", async () => {
+      const session = await env.createSession("searcher@example.com");
+
+      await withServer(env.app, async (baseUrl) => {
+        await fetch(`${baseUrl}/api/projects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session.cookie },
+          body: JSON.stringify({ title: "Podcast Episode 101" }),
+        });
+        await fetch(`${baseUrl}/api/projects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session.cookie },
+          body: JSON.stringify({ title: "Product Promo 2026" }),
+        });
+        await fetch(`${baseUrl}/api/projects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session.cookie },
+          body: JSON.stringify({ title: "Podcast Episode 102" }),
+        });
+
+        // Search "Podcast"
+        const searchRes = await fetch(`${baseUrl}/api/projects?search=Podcast`, {
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(searchRes.status, 200);
+        const searchBody = await searchRes.json();
+        assert.equal(searchBody.projects.length, 2);
+        assert.ok(searchBody.projects.every((p) => p.title.includes("Podcast")));
+
+        // Search "Promo"
+        const promoRes = await fetch(`${baseUrl}/api/projects?search=Promo`, {
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(promoRes.status, 200);
+        const promoBody = await promoRes.json();
+        assert.equal(promoBody.projects.length, 1);
+        assert.equal(promoBody.projects[0].title, "Product Promo 2026");
+
+        // Search non-existent
+        const emptyRes = await fetch(`${baseUrl}/api/projects?search=UnmatchedQuery`, {
+          headers: { Cookie: session.cookie },
+        });
+        const emptyBody = await emptyRes.json();
+        assert.equal(emptyBody.projects.length, 0);
+      });
+    });
+  });
 });

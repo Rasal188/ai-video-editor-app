@@ -11,7 +11,7 @@ import { chromium } from "playwright";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
-const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173";
+const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173/?view=editor";
 const ARTIFACTS_DIR = resolve("test-artifacts/playwright");
 
 async function obtainTestAuthCookie() {

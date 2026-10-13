@@ -1,5 +1,8 @@
+import { existsSync } from "node:fs";
+import { copyFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import * as projectQueries from "../../db/queries/projects.js";
-import { validateStoragePath } from "../storage/storageSecurity.js";
+import { resolveSafeStoragePath, validateStoragePath } from "../storage/storageSecurity.js";
 import {
   BadRequestError,
   ForbiddenError,
@@ -85,17 +88,19 @@ export async function getProject({ projectId, userId }) {
 /**
  * Lists all projects owned by the specified user with pagination.
  */
-export async function listProjects({ userId, limit = 50, offset = 0 }) {
+export async function listProjects({ userId, limit = 50, offset = 0, search = null }) {
   if (!isValidUuid(userId)) {
     throw new BadRequestError("Invalid user ID.", "INVALID_USER_ID");
   }
 
   const parsedLimit = Math.max(1, Math.min(100, Number.parseInt(limit, 10) || 50));
   const parsedOffset = Math.max(0, Number.parseInt(offset, 10) || 0);
+  const cleanSearch = typeof search === "string" ? search.trim().slice(0, 100) : null;
 
   return projectQueries.listProjectsByOwner(userId, {
     limit: parsedLimit,
     offset: parsedOffset,
+    search: cleanSearch,
   });
 }
 
@@ -172,6 +177,70 @@ export async function updateProject({ projectId, userId, updates = {} }) {
 export async function deleteProject({ projectId, userId }) {
   await getProject({ projectId, userId });
   return projectQueries.deleteProject(projectId);
+}
+
+/**
+ * Duplicates a project without sharing mutable state or corrupting media references.
+ */
+export async function duplicateProject({ projectId, userId, newTitle = null }) {
+  const source = await getProject({ projectId, userId });
+
+  const titleToUse = typeof newTitle === "string" && newTitle.trim()
+    ? newTitle.trim().slice(0, 255)
+    : `${source.title} (Copy)`.slice(0, 255);
+
+  const sourceArchiveRelPath = source.archive_storage_path;
+
+  // 1. Create the new project record in PostgreSQL
+  const duplicated = await projectQueries.createProject({
+    ownerId: userId,
+    title: titleToUse,
+    currentRevision: source.current_revision ? 1 : 0,
+    duration: source.duration,
+    fps: source.fps,
+    ratio: source.ratio,
+    archiveStoragePath: null,
+    metadata: {
+      ...(typeof source.metadata === "object" && source.metadata ? source.metadata : {}),
+      duplicatedFrom: source.id,
+    },
+  });
+
+  // 2. If source project has an archive file, copy it safely to an independent file
+  if (sourceArchiveRelPath) {
+    try {
+      const sourceAbsPath = resolveSafeStoragePath(sourceArchiveRelPath);
+      if (existsSync(sourceAbsPath)) {
+        const newArchiveRelPath = `storage/projects/${duplicated.id}-rev1.timeline`;
+        const newAbsPath = resolveSafeStoragePath(newArchiveRelPath);
+        await mkdir(dirname(newAbsPath), { recursive: true });
+        await copyFile(sourceAbsPath, newAbsPath);
+
+        // Create initial revision for the duplicate
+        await projectQueries.createProjectVersion({
+          projectId: duplicated.id,
+          revision: 1,
+          archiveStoragePath: newArchiveRelPath,
+          duration: source.duration,
+          changeSummary: `Duplicated from ${source.title}`,
+          metadata: { duplicatedFromRevision: source.current_revision },
+        });
+
+        // Update duplicated project with the archive path
+        await projectQueries.updateProject(duplicated.id, {
+          archive_storage_path: newArchiveRelPath,
+          current_revision: 1,
+        });
+
+        duplicated.archive_storage_path = newArchiveRelPath;
+        duplicated.current_revision = 1;
+      }
+    } catch (copyErr) {
+      console.warn("Failed to copy project archive on duplicate:", copyErr.message);
+    }
+  }
+
+  return duplicated;
 }
 
 /**

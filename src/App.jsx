@@ -115,7 +115,13 @@ import { getVisualPropertyTabIds } from "./lib/visualPropertyTabs.js";
 import { applyTimelineRipple } from "./lib/timelineRipple.js";
 import { COMPACT_WORKSPACE_QUERY } from "./config/editor.js";
 
-export function App({ currentUser = null, onLogout } = {}) {
+export function App({
+  currentUser = null,
+  onLogout,
+  activeProject = null,
+  initialImportFile = null,
+  onBackToDashboard = null,
+} = {}) {
   const [uiLanguage, setUiLanguage] = useState(() => getStoredLanguage());
   const [mobilePanel, setMobilePanel] = useState("");
   const [mobilePanelClosing, setMobilePanelClosing] = useState(false);
@@ -1375,6 +1381,9 @@ export function App({ currentUser = null, onLogout } = {}) {
   }), [currentTime, depthRecords, previewVisualOverlays]);
 
   const { projectImportProgress, getProjectSnapshot, createCurrentArchive, handleExportProject, handleImportProject, handleNewProject, currentCloudProject, savingToCloud, saveProjectToCloud, handleOpenCloudProject } = useProjectFiles({
+    initialProject: activeProject,
+    initialImportFile,
+    previewCanvasRef,
     language: activeLanguage, pauseTimelineMedia, setIsPlaying,
     timelineMarkers, setTimelineMarkers,
     audioBlob, audioDuration, audioSegments, captionPlacement, captionPosition, captionSegments, captionSize,
@@ -1767,6 +1776,7 @@ export function App({ currentUser = null, onLogout } = {}) {
         saveProjectToCloud={saveProjectToCloud}
         handleOpenCloudProject={handleOpenCloudProject}
         handleCloudRender={handleCloudRender}
+        onBackToDashboard={onBackToDashboard}
       />
 
       <WebMcpReview agent={webMcp} language={activeLanguage} />

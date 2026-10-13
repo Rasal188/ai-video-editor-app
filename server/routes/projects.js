@@ -45,11 +45,12 @@ router.post("/", async (req, res, next) => {
  */
 router.get("/", async (req, res, next) => {
   try {
-    const { limit, offset } = req.query;
+    const { limit, offset, search } = req.query;
     const projects = await projectService.listProjects({
       userId: req.user.id,
       limit,
       offset,
+      search,
     });
     return res.status(200).json({
       ok: true,
@@ -133,6 +134,33 @@ router.delete("/:id", async (req, res, next) => {
     return res.status(200).json({
       ok: true,
       message: "Project deleted successfully.",
+    });
+  } catch (err) {
+    if (err instanceof ApiError) {
+      return res.status(err.status).json({
+        ok: false,
+        code: err.code,
+        message: err.message,
+      });
+    }
+    next(err);
+  }
+});
+
+/**
+ * POST /api/projects/:id/duplicate
+ * Duplicates an existing project with an independent archive and revision history.
+ */
+router.post("/:id/duplicate", async (req, res, next) => {
+  try {
+    const project = await projectService.duplicateProject({
+      projectId: req.params.id,
+      userId: req.user.id,
+      newTitle: req.body?.title,
+    });
+    return res.status(201).json({
+      ok: true,
+      project,
     });
   } catch (err) {
     if (err instanceof ApiError) {

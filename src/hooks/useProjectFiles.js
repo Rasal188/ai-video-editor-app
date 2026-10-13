@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_SCRIPT, DEFAULT_TIMELINE_DURATION_SECONDS, normalizeVoiceId, RATIO_OPTIONS, VOICES } from "../config/editor.js";
 import { decodeWaveform, downloadBlob } from "../lib/media.js";
 import { createProjectArchive, readProjectArchive, readProjectFileAsText, resolveProjectVisualMedia } from "../lib/projectArchive.js";
@@ -16,8 +16,11 @@ export function useProjectFiles(deps) {
   const [projectImportProgress, setProjectImportProgress] = useState(null);
   const importingRef = useRef(false);
   const commandStateRef = useRef({ schemaVersion: 1, revision: 0, appliedOperationIds: [] });
-  const [currentCloudProject, setCurrentCloudProject] = useState(null);
+  const [currentCloudProject, setCurrentCloudProject] = useState(deps.initialProject || null);
   const [savingToCloud, setSavingToCloud] = useState(false);
+  const initialLoadedRef = useRef(false);
+
+
   const getProjectSnapshot = useCallback(() => {
     const visualSegments = deps.visualSegments.map(({ blob, trackFrames, src, cutoutVisual, enhancement: _enhancement, ...segment }) => segment);
     const visualOverlaySegments = deps.visualOverlaySegments.map(({ blob, src, ...segment }) => segment);
@@ -60,6 +63,17 @@ export function useProjectFiles(deps) {
       let projectRecord = currentCloudProject;
       const titleToUse = customTitle || projectRecord?.title || deps.script?.slice(0, 30)?.trim() || "Untitled Project";
 
+      // Capture preview thumbnail if canvas is available
+      let thumbnail = null;
+      try {
+        const canvas = deps.previewCanvasRef?.current;
+        if (canvas && canvas.width > 0 && canvas.height > 0) {
+          thumbnail = canvas.toDataURL("image/jpeg", 0.65);
+        }
+      } catch {
+        // Thumbnail capture non-fatal
+      }
+
       if (!projectRecord) {
         const createRes = await fetch("/api/projects", {
           method: "POST",
@@ -70,6 +84,7 @@ export function useProjectFiles(deps) {
             ratio: deps.ratioId || "16:9",
             duration: Number(deps.audioDuration || 0),
             fps: 30,
+            metadata: thumbnail ? { thumbnail } : {},
           }),
         });
         if (!createRes.ok) {
@@ -77,6 +92,18 @@ export function useProjectFiles(deps) {
         }
         const createData = await createRes.json();
         projectRecord = createData.project;
+      } else if (thumbnail) {
+        fetch(`/api/projects/${projectRecord.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            metadata: {
+              ...(typeof projectRecord.metadata === "object" && projectRecord.metadata ? projectRecord.metadata : {}),
+              thumbnail,
+            },
+          }),
+        }).catch(() => {});
       }
 
       deps.notify(`正在上传工程版本并存储至云端 (${titleToUse})…`);
@@ -364,6 +391,39 @@ export function useProjectFiles(deps) {
     setCurrentCloudProject(projectRecord);
     await handleImportProject(file);
   }, [handleImportProject]);
+
+  const { initialProject, initialImportFile, setRatioId, notify } = deps;
+
+  useEffect(() => {
+    if (initialLoadedRef.current) return;
+    if (initialProject) {
+      initialLoadedRef.current = true;
+      setCurrentCloudProject(initialProject);
+      if (initialProject.ratio && setRatioId) {
+        setRatioId(initialProject.ratio);
+      }
+      if (initialProject.current_revision > 0) {
+        notify?.(`Loading project "${initialProject.title}"...`);
+        fetch(`/api/projects/${initialProject.id}/archive`, { credentials: "include" })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Archive download failed (${res.status})`);
+            return res.blob();
+          })
+          .then((blob) => {
+            const file = new File([blob], `${initialProject.title || "project"}.timeline`, {
+              type: "application/zip",
+            });
+            return handleImportProject(file);
+          })
+          .catch((err) => {
+            console.error("Auto load archive error:", err);
+          });
+      }
+    } else if (initialImportFile) {
+      initialLoadedRef.current = true;
+      handleImportProject(initialImportFile);
+    }
+  }, [initialProject, initialImportFile, setRatioId, notify, handleImportProject]);
 
   return { projectImportProgress, handleExportProject, handleImportProject, handleNewProject, getProjectSnapshot, createCurrentArchive, currentCloudProject, savingToCloud, saveProjectToCloud, handleOpenCloudProject };
 }

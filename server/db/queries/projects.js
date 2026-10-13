@@ -42,16 +42,24 @@ export async function getProjectById(id, executor = null) {
   return result.rows[0] || null;
 }
 
-export async function listProjectsByOwner(ownerId, { limit = 50, offset = 0 } = {}, executor = null) {
+export async function listProjectsByOwner(ownerId, { limit = 50, offset = 0, search = null } = {}, executor = null) {
   const q = executor ? executor.query.bind(executor) : defaultQuery;
+  const values = [ownerId, limit, offset];
+  let searchClause = "";
+
+  if (typeof search === "string" && search.trim()) {
+    values.push(`%${search.trim()}%`);
+    searchClause = `AND title ILIKE $${values.length}`;
+  }
+
   const sql = `
     SELECT id, owner_id, title, current_revision, duration, fps, ratio, archive_storage_path, metadata, created_at, updated_at
     FROM projects
-    WHERE owner_id = $1
+    WHERE owner_id = $1 ${searchClause}
     ORDER BY updated_at DESC
     LIMIT $2 OFFSET $3;
   `;
-  const result = await q(sql, [ownerId, limit, offset]);
+  const result = await q(sql, values);
   return result.rows;
 }
 

@@ -1,12 +1,65 @@
 import { useState, useEffect, useCallback } from "react";
 import { CircleNotch } from "@phosphor-icons/react";
 import { App } from "../App.jsx";
+import { Dashboard } from "./Dashboard.jsx";
 import { AuthModal } from "./AuthModal.jsx";
+import { useToast } from "../hooks/useToast.js";
 import "./AuthModal.css";
 
 export function AuthGate() {
   const [authState, setAuthState] = useState("checking"); // "checking" | "authenticated" | "unauthenticated"
   const [currentUser, setCurrentUser] = useState(null);
+  const [currentView, setCurrentView] = useState(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("view") === "editor" || params.get("project") || window.location.pathname === "/editor") {
+        return "editor";
+      }
+    }
+    return "dashboard";
+  });
+  const [activeProject, setActiveProject] = useState(null);
+  const [initialImportFile, setInitialImportFile] = useState(null);
+  const { notify, toast } = useToast(3000, "en");
+
+  // Check URL on load if a project ID is present
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const projectId = params.get("project");
+      if (projectId && (!activeProject || activeProject.id !== projectId)) {
+        let isCancelled = false;
+        fetch(`/api/projects/${projectId}`, { credentials: "include" })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (!isCancelled && data?.project) {
+              setActiveProject(data.project);
+              setCurrentView("editor");
+            }
+          })
+          .catch(() => {});
+        return () => {
+          isCancelled = true;
+        };
+      }
+    }
+  }, [activeProject]);
+
+  // Listen to popstate for browser Back/Forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const view = params.get("view");
+      const projId = params.get("project");
+      if (view === "editor" || projId || window.location.pathname === "/editor") {
+        setCurrentView("editor");
+      } else {
+        setCurrentView("dashboard");
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -41,6 +94,52 @@ export function AuthGate() {
   const handleLogout = useCallback(() => {
     setCurrentUser(null);
     setAuthState("unauthenticated");
+    setActiveProject(null);
+    setCurrentView("dashboard");
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("view");
+      url.searchParams.delete("project");
+      window.history.pushState({}, "", url);
+    }
+  }, []);
+
+  const handleOpenProject = useCallback((project) => {
+    setActiveProject(project);
+    setInitialImportFile(null);
+    setCurrentView("editor");
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("view", "editor");
+      if (project?.id) {
+        url.searchParams.set("project", project.id);
+      }
+      window.history.pushState({}, "", url);
+    }
+  }, []);
+
+  const handleImportArchive = useCallback((file) => {
+    setActiveProject(null);
+    setInitialImportFile(file);
+    setCurrentView("editor");
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("view", "editor");
+      url.searchParams.delete("project");
+      window.history.pushState({}, "", url);
+    }
+  }, []);
+
+  const handleBackToDashboard = useCallback(() => {
+    setActiveProject(null);
+    setInitialImportFile(null);
+    setCurrentView("dashboard");
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("view");
+      url.searchParams.delete("project");
+      window.history.pushState({}, "", url);
+    }
   }, []);
 
   if (authState === "checking") {
@@ -64,9 +163,29 @@ export function AuthGate() {
   }
 
   return (
-    <App
-      currentUser={currentUser}
-      onLogout={handleLogout}
-    />
+    <>
+      {currentView === "dashboard" ? (
+        <Dashboard
+          currentUser={currentUser}
+          onLogout={handleLogout}
+          onOpenProject={handleOpenProject}
+          onImportArchive={handleImportArchive}
+          notify={notify}
+        />
+      ) : (
+        <App
+          currentUser={currentUser}
+          onLogout={handleLogout}
+          activeProject={activeProject}
+          initialImportFile={initialImportFile}
+          onBackToDashboard={handleBackToDashboard}
+        />
+      )}
+      {toast && (
+        <aside className="toast" role="status" aria-live="polite">
+          {toast}
+        </aside>
+      )}
+    </>
   );
 }

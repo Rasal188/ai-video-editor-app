@@ -17,6 +17,7 @@ import {
   Play,
   ShieldCheck,
   SlidersHorizontal,
+  SquaresFour,
   UserCircle,
   XLogo,
 } from "@phosphor-icons/react";
@@ -81,6 +82,7 @@ export function Topbar({
   saveProjectToCloud,
   handleOpenCloudProject,
   handleCloudRender,
+  onBackToDashboard,
 }) {
   const exportAnchorRef = useRef(null);
   const ratioAnchorRef = useRef(null);
@@ -155,12 +157,26 @@ export function Topbar({
   return (
     <header className="topbar">
       <div className="project-cluster">
+        {onBackToDashboard && (
+          <button
+            type="button"
+            className="topbar-dashboard-btn"
+            onClick={onBackToDashboard}
+            title="Return to Dashboard"
+            data-testid="topbar-back-to-dashboard-btn"
+          >
+            <SquaresFour size={16} weight="bold" />
+            <span>Dashboard</span>
+          </button>
+        )}
         <IconButton label={t("collapseSidebar")} active={compactRail} onClick={() => setCompactRail((v) => !v)}>
           <SlidersHorizontal size={19} />
         </IconButton>
         <div>
           <div className="project-title-row">
-            <div className="project-title">{t("projectTitle")}</div>
+            <div className="project-title" title={currentCloudProject?.title || t("projectTitle")}>
+              {currentCloudProject?.title || t("projectTitle")}
+            </div>
             <div className="menu-anchor">
               <button className="project-file-button" type="button" onClick={() => setShowFileMenu((open) => !open)}>
                 {t("fileMenu")} <CaretDown size={13} />
@@ -172,6 +188,19 @@ export function Topbar({
                       <span>{t("projectMenuHeading")}</span>
                       <small>Timeline Studio</small>
                     </div>
+                    {onBackToDashboard && (
+                      <button
+                        className="file-menu-action"
+                        type="button"
+                        onClick={() => {
+                          setShowFileMenu(false);
+                          onBackToDashboard();
+                        }}
+                      >
+                        <span className="file-menu-icon"><SquaresFour size={17} /></span>
+                        <span className="file-menu-copy"><strong>Projects Dashboard</strong><small>Back to dashboard</small></span>
+                      </button>
+                    )}
                     <button className="file-menu-action file-menu-new" type="button" onClick={handleNewProject}>
                       <span className="file-menu-icon"><FilePlus size={17} /></span>
                       <span className="file-menu-copy"><strong>{t("newProject")}</strong><small>{t("newProjectHint")}</small></span>
