@@ -45,6 +45,116 @@ export function splitVisualSegmentState(source, firstDuration, secondDuration) {
   ];
 }
 
+function remapKeyframes(keyframes, start, end) {
+  return (Array.isArray(keyframes) ? keyframes : [])
+    .filter((frame) => Number(frame?.time) >= start && Number(frame?.time) <= end)
+    .map((frame) => ({ ...frame, time: Number((Number(frame.time) - start).toFixed(3)) }));
+}
+
+/**
+ * Validates and sanitizes scene cut timestamps within a clip's duration.
+ * Ensures timestamps are finite numbers, strictly inside (0, duration), sorted, unique,
+ * and enforce the minimum segment duration constraint.
+ *
+ * @param {number[]} boundaries
+ * @param {number} clipDuration
+ * @param {number} [minInterval=MIN_VISUAL_SEGMENT_SECONDS]
+ * @returns {number[]}
+ */
+export function validateSceneCutBoundaries(boundaries, clipDuration, minInterval = MIN_VISUAL_SEGMENT_SECONDS) {
+  const duration = Number(clipDuration);
+  if (!Array.isArray(boundaries) || !Number.isFinite(duration) || duration <= minInterval * 2) {
+    return [];
+  }
+
+  const numbers = boundaries
+    .map((b) => Number(b))
+    .filter((b) => Number.isFinite(b) && b > 0 && b < duration)
+    .map((b) => Number(b.toFixed(3)))
+    .sort((a, b) => a - b);
+
+  if (!numbers.length) return [];
+
+  const result = [];
+  let lastPoint = 0;
+
+  for (const b of numbers) {
+    if (b - lastPoint >= minInterval && duration - b >= minInterval) {
+      result.push(b);
+      lastPoint = b;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Splits a visual segment into contiguous sub-segments at approved cut boundaries.
+ * Preserves source media continuity, handles playback rates, keyframes, transitions, and archive IDs.
+ *
+ * @param {Object} source
+ * @param {number[]} rawBoundaries
+ * @returns {Array<Object>}
+ */
+export function splitVisualSegmentAtBoundaries(source, rawBoundaries = []) {
+  if (!source) return [];
+  const duration = Number(source.duration) || 0;
+  if (duration <= MIN_VISUAL_SEGMENT_SECONDS) return [source];
+
+  const validBoundaries = validateSceneCutBoundaries(rawBoundaries, duration);
+  if (!validBoundaries.length) {
+    return [source];
+  }
+
+  const playbackRate = source.type === "video"
+    ? Math.max(0.25, Math.min(4, Number(source.playbackRate) || 1))
+    : 1;
+  const baseSourceStart = Math.max(0, Number(source.sourceStart) || 0);
+  const archiveMediaId = source.archiveMediaId || source.id;
+
+  const points = [0, ...validBoundaries, duration];
+  const segments = [];
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const startPoint = points[i];
+    const endPoint = points[i + 1];
+    const segDuration = Number((endPoint - startPoint).toFixed(3));
+    const isLast = i === points.length - 2;
+
+    const segOverrides = {
+      id: makeId("visual"),
+      archiveMediaId,
+      duration: segDuration,
+    };
+
+    if (source.type === "video") {
+      segOverrides.sourceStart = baseSourceStart + startPoint * playbackRate;
+      segOverrides.sourceDuration = segDuration * playbackRate;
+    }
+
+    if (Array.isArray(source.keyframes)) {
+      segOverrides.keyframes = remapKeyframes(source.keyframes, startPoint, endPoint);
+    }
+
+    if (source.propertyKeyframes && typeof source.propertyKeyframes === "object") {
+      segOverrides.propertyKeyframes = Object.fromEntries(
+        Object.entries(source.propertyKeyframes).map(([k, frames]) => [
+          k,
+          remapKeyframes(frames, startPoint, endPoint),
+        ]),
+      );
+    }
+
+    if (!isLast && source.transition) {
+      segOverrides.transition = { id: "none", duration: 0 };
+    }
+
+    segments.push(cloneVisualSegment(source, segOverrides));
+  }
+
+  return segments;
+}
+
 export function createTimelineCutActions(d) {
   const handleCutVisualSegment = () => {
     if (d.trackLocks.image) return void d.notify("图片轨已锁定，无法剪切");

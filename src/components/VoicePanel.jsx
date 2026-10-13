@@ -37,6 +37,7 @@ import {
   PersonSimpleRun,
   Plus,
   RadioButton,
+  Scan,
   Scissors,
   ShieldCheck,
   SlidersHorizontal,
@@ -1463,6 +1464,7 @@ export function VoicePanel({
   roughCut,
   _smartPipeline,
   openSmartPipeline,
+  openSceneDetection,
   uiLanguage,
   captionStyle,
   setCaptionStyle,
@@ -1548,6 +1550,7 @@ export function VoicePanel({
   const isSilenceRemovalContext = isSmartContext && smartMode === "remove-pauses";
   const isRoughCutContext = isSmartContext && smartMode === "rough-cut";
   const isSmartPipelineContext = isSmartContext && smartMode === "smart-pipeline";
+  const isSceneDetectContext = isSmartContext && smartMode === "scene-detect";
   const isFaceSwapContext = isEffectsContext && effectsPanelMode === "face-swap";
   const isOpticalFlowContext = isEffectsContext && effectsPanelMode === "vector-tracking";
   const isCinematicDepthContext = isEffectsContext && ["cinematic-depth", "depth-map", "relight"].includes(effectsPanelMode);
@@ -1600,8 +1603,8 @@ export function VoicePanel({
     background: t("effectBackground"),
     edge: t("effectEdgeCleanup"),
   }[mobileInspectorSection];
-  const title = focusedSectionTitle || (isSmartPipelineContext ? t("smartPipelineTitle") : isRoughCutContext ? t("roughCutTitle") : isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartAutoContext ? t("smartAutoEdit") : isSmartFrameContext ? t("smartFrame") : isAvatarContext ? t("avatarTitle") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
-  const panelStatusText = isSmartPipelineContext ? t("smartPipelineHint") : isRoughCutContext ? t("roughCutHint") : isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
+  const title = focusedSectionTitle || (isSmartPipelineContext ? t("smartPipelineTitle") : isSceneDetectContext ? t("sceneDetectTitle") : isRoughCutContext ? t("roughCutTitle") : isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartAutoContext ? t("smartAutoEdit") : isSmartFrameContext ? t("smartFrame") : isAvatarContext ? t("avatarTitle") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
+  const panelStatusText = isSmartPipelineContext ? t("smartPipelineHint") : isSceneDetectContext ? t("sceneDetectHint") : isRoughCutContext ? t("roughCutHint") : isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
     ? faceSwap?.job?.running ? `${faceSwap.job.progress}%` : hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")
     : isOpticalFlowContext ? t("effectFlowExperimental")
     : isCinematicDepthContext ? cinematicDepth?.job?.running
@@ -1782,6 +1785,31 @@ export function VoicePanel({
             >
               <Sparkle size={18} weight="fill" />
               <span>{t("smartPipelineStart")}</span>
+            </button>
+          </div>
+        ) : null}
+        {isSceneDetectContext ? (
+          <div className="rough-cut-panel" data-testid="scene-detect-panel">
+            <div className="rough-cut-header">
+              <Scan size={24} weight="duotone" className="rough-cut-icon" />
+              <p className="rough-cut-intro">{t("sceneDetectHint")}</p>
+            </div>
+            <div className="rough-cut-clip">
+              {hasVisual ? (
+                <span>{selectedVisualSegment?.name || t("sceneDetectTitle")}</span>
+              ) : (
+                <span className="rough-cut-select-prompt">{t("sceneDetectSelect")}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 16px" }}
+              onClick={() => openSceneDetection?.()}
+              data-testid="scene-detect-open-btn"
+            >
+              <Scan size={18} />
+              <span>{t("sceneDetectAnalyze")}</span>
             </button>
           </div>
         ) : null}

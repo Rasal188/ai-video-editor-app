@@ -17,6 +17,7 @@ import ProjectImportOverlay from "./components/ProjectImportOverlay.jsx";
 import { CloudRenderModal } from "./components/CloudRenderModal.jsx";
 import { TranscriptReviewModal } from "./components/TranscriptReviewModal.jsx";
 import { SmartPipelineModal } from "./components/SmartPipelineModal.jsx";
+import { SceneDetectionModal } from "./components/SceneDetectionModal.jsx";
 import {
   canShowFirstVisualGuide,
   FIRST_VISUAL_GUIDE_MOBILE_QUERY,
@@ -42,6 +43,7 @@ import { useAutoEdit } from "./hooks/useAutoEdit.js";
 import { useSilenceRemoval } from "./hooks/useSilenceRemoval.js";
 import { useRoughCut } from "./hooks/useRoughCut.js";
 import { useSmartPipeline } from "./hooks/useSmartPipeline.js";
+import { useSceneDetection } from "./hooks/useSceneDetection.js";
 import { useWebMcpEditor } from "./hooks/useWebMcpEditor.js";
 import { sampleEditorMedia } from "./lib/webMcpMediaSample.js";
 import { browserProjectFingerprint, restoreBrowserProjectMedia } from "./lib/browserEditPlan.js";
@@ -68,7 +70,11 @@ import { createTimelineMoveControls } from "./lib/timelineMoveControls.js";
 import { createImageResizeControl } from "./lib/imageResizeControl.js";
 import { createTimelineClipboardActions } from "./lib/timelineClipboardActions.js";
 import { appendImportedCaptions } from "./lib/subtitles.js";
-import { createTimelineCutActions } from "./lib/timelineCutActions.js";
+import {
+  createTimelineCutActions,
+  splitVisualSegmentAtBoundaries,
+  validateSceneCutBoundaries,
+} from "./lib/timelineCutActions.js";
 import { createTimelineSegmentCountActions } from "./lib/timelineSegmentCountActions.js";
 import { createTimelineDurationActions } from "./lib/timelineDurationActions.js";
 import { createAudioClipActions, updateAudioSegmentPlaybackRate } from "./lib/audioClipActions.js";
@@ -1578,6 +1584,73 @@ export function App({ currentUser = null, onLogout } = {}) {
       window.removeEventListener("test:open-smart-pipeline", handleTestOpenPipeline);
     };
   }, [smartPipeline]);
+  const handleApplySceneCuts = ({ clipId, boundaries, draft } = {}) => {
+    if (trackLocks.image) {
+      notify(t("sceneDetectClipLocked", "Visual track is locked. Unlock it to cut clips."));
+      return { success: false, reason: "LOCKED" };
+    }
+    const currentVisuals = visualSegments.length ? visualSegments : [];
+    const targetId = clipId || selectedVisualSegment?.id;
+    const targetIndex = currentVisuals.findIndex((s) => s.id === targetId);
+    if (targetIndex < 0) {
+      notify(t("sceneDetectClipNotFound", "Target video clip not found on the timeline."));
+      return { success: false, reason: "CLIP_NOT_FOUND" };
+    }
+    const targetClip = currentVisuals[targetIndex];
+    if (draft && draft.version && draft.version !== historySignature) {
+      notify(t("sceneDetectStale", "The project or clip changed. Analyze again."));
+      return { success: false, reason: "STALE" };
+    }
+    const validCuts = validateSceneCutBoundaries(boundaries, targetClip.duration);
+    if (!validCuts.length) {
+      notify(t("sceneDetectNoBoundaries", "No valid scene boundaries selected"));
+      return { success: false, reason: "NO_BOUNDARIES" };
+    }
+
+    const splitSegments = splitVisualSegmentAtBoundaries(targetClip, validCuts);
+    if (splitSegments.length <= 1) {
+      notify(t("sceneDetectNoBoundaries", "No valid scene boundaries selected"));
+      return { success: false, reason: "NO_SPLIT" };
+    }
+
+    checkpointHistory();
+    const nextVisuals = [...currentVisuals];
+    nextVisuals.splice(targetIndex, 1, ...splitSegments);
+
+    const message = t(
+      "sceneDetectApplied",
+      "Applied {count} scene cuts to timeline"
+    ).replace("{count}", validCuts.length);
+
+    commitVisualSegments(nextVisuals, message, targetIndex);
+    return { success: true, count: validCuts.length, splitSegments };
+  };
+
+  const sceneDetection = useSceneDetection({
+    selectedSegment: selectedVisualSegment,
+    visualSegments,
+    projectVersion: historySignature,
+    locked: Boolean(trackLocks.image),
+    seekTo,
+    notify,
+    t,
+    onApplyCuts: handleApplySceneCuts,
+  });
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const handleTestOpenSceneDetection = (e) => {
+      sceneDetection.open(e?.detail?.result || e?.detail?.prefill);
+    };
+    const handleTestApplySceneCuts = (e) => {
+      handleApplySceneCuts(e?.detail || {});
+    };
+    window.addEventListener("test:open-scene-detection", handleTestOpenSceneDetection);
+    window.addEventListener("test:apply-scene-cuts", handleTestApplySceneCuts);
+    return () => {
+      window.removeEventListener("test:open-scene-detection", handleTestOpenSceneDetection);
+      window.removeEventListener("test:apply-scene-cuts", handleTestApplySceneCuts);
+    };
+  }, [sceneDetection, handleApplySceneCuts]);
   const webMcp = useWebMcpEditor({
     language: activeLanguage, visualSegments, visualOverlaySegments, audioSegments, musicSegments,
     sourceAudioBlob, musicBlob, audioBlob, rippleEditing, getProjectSnapshot,
@@ -1722,6 +1795,11 @@ export function App({ currentUser = null, onLogout } = {}) {
         visualSegments={visualSegments}
         t={t}
       />
+      <SceneDetectionModal
+        isOpen={Boolean(sceneDetection.isOpen)}
+        tool={sceneDetection}
+        t={t}
+      />
       <section className={`editor-grid ${compactRail ? "is-compact-rail" : ""}`}>
         <EditorSidebar model={{
           activeLanguage, activeTool, analyzeCurrentVisual, analyzeEffectVisual, audioBlob, audioDuration,
@@ -1735,7 +1813,7 @@ export function App({ currentUser = null, onLogout } = {}) {
           imageSrc, isDragging, mediaTab, musicBlob, musicDuration, musicName, musicVolume,
           libraryType, libraryQuery, setLibraryQuery, selectLibraryType, libraryStatus, libraryError, libraryProvider,
           assetDownloadStates, prefetchLibraryAsset,
-          notify, openAvatarPanel, openSmartPipeline: () => smartPipeline.open(), previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
+          notify, openAvatarPanel, openSmartPipeline: () => smartPipeline.open(), openSceneDetection: () => sceneDetection.open(), previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
           previewVisionOptions, previewVisualSrc, previewVisualType, progress, script,
           seekTo, segments, selectTool, selectedCaptionSegment, selectedFilterId,
           selectedLibraryAssetId, selectedSegmentId, selectedStickerId, selectedTransitionId,
@@ -1941,6 +2019,8 @@ export function App({ currentUser = null, onLogout } = {}) {
           roughCut={roughCut}
           smartPipeline={smartPipeline}
           openSmartPipeline={() => smartPipeline.open()}
+          sceneDetection={sceneDetection}
+          openSceneDetection={() => sceneDetection.open()}
           uiLanguage={activeLanguage}
           captionStyle={captionStyle}
           setCaptionStyle={setCaptionStyle}

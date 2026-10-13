@@ -1105,6 +1105,7 @@ export function ToolPanel(props) {
     analyzeEffectVisual,
     openAvatarPanel,
     openSmartPipeline,
+    openSceneDetection,
     smartMode,
     setSmartMode,
     openMobileInspector,
@@ -1480,6 +1481,7 @@ export function ToolPanel(props) {
         <div className="smart-hub-grid" role="tablist" aria-label={t("smartTools")}>
           {[
             ["smart-pipeline", Sparkle, t("smartPipelineTitle"), t("smartPipelineHint")],
+            ["scene-detect", Scan, t("sceneDetectTitle"), t("sceneDetectHint")],
             ["rough-cut", MagicWand, t("roughCutTitle"), t("roughCutHint")],
             ["remove-pauses", Waveform, t("pauseTitle"), t("pauseHint")],
             ["auto-edit", Scissors, t("smartAutoEdit"), t("smartAutoEditHint")],
@@ -1497,9 +1499,10 @@ export function ToolPanel(props) {
               onClick={() => {
                 setSmartMode(id);
                 if (id === "smart-pipeline") openSmartPipeline?.();
+                if (id === "scene-detect") openSceneDetection?.();
                 if (id === "avatar") openAvatarPanel();
                 if (id === "ai-music" && window.matchMedia?.("(max-width: 760px)").matches) openMobileInspector?.();
-                if ((id === "remove-pauses" || id === "rough-cut" || id === "smart-pipeline") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
+                if ((id === "remove-pauses" || id === "rough-cut" || id === "smart-pipeline" || id === "scene-detect") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
               }}
             >
               <Icon size={24} weight="duotone" /><strong>{title}</strong><span>{hint}</span>
