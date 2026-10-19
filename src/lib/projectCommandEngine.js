@@ -1,6 +1,18 @@
 import { MAX_TIMELINE_MARKER_SECONDS, TIMELINE_MARKER_COLORS, TIMELINE_MARKER_TYPES, normalizeTimelineMarkers } from "./timelineMarkers.js";
 import { getCaptionTimeline, getTimedSegmentsEnd } from "./timeline.js";
-import { CAPTION_FONT_CATALOG } from "./captionFonts.js";
+import { CAPTION_FONT_CATALOG, findCaptionFontInCatalog } from "./captionFonts.js";
+import { resolveColorToHex } from "./captionStyles.js";
+import { normalizeColorGrade } from "./colorGrade.js";
+import {
+  compilePunchInKeyframes,
+  detectSpeechPunchInMoments,
+  normalizePunchIn,
+  normalizePunchInScale,
+  normalizePunchInTransition,
+  resolvePunchInOffset,
+  SMART_ZOOM_DEFAULTS,
+} from "./smartZoom.js";
+
 
 export const PROJECT_COMMAND_SCHEMA_VERSION = 1;
 
@@ -10,10 +22,11 @@ const MIN_TIMED_CAPTION_SECONDS = 0.2;
 export const CAPTION_STYLE_PROPERTY_SCHEMA = Object.freeze({
   fontId: { type: "string", enum: CAPTION_FONT_CATALOG.map((font) => font.id) },
   captionSize: { type: "number", minimum: 12, maximum: 42 },
-  ...Object.fromEntries(["textColor", "backgroundColor", "borderColor", "textStrokeColor"].map((key) => [key, { type: "string", pattern: "^#[0-9a-fA-F]{6}$" }])),
+  ...Object.fromEntries(["textColor", "backgroundColor", "borderColor", "textStrokeColor", "activeWordColor"].map((key) => [key, { type: "string", pattern: "^#[0-9a-fA-F]{6}$" }])),
   ...Object.fromEntries(Object.entries({ backgroundOpacity: 1, shadowOpacity: 1, textStrokeWidth: 6, borderWidth: 8, radius: 28, paddingX: 52, paddingY: 32 })
     .map(([key, maximum]) => [key, { type: "number", minimum: 0, maximum }])),
   effect: { type: "string", enum: ["normal", "neon"] },
+  karaoke: { type: "boolean" },
 });
 
 const TIMED_COLLECTIONS = Object.freeze({ audio: "audioSegments", music: "musicSegments", overlay: "visualOverlaySegments", overlays: "visualOverlaySegments", sticker: "stickerSegments", stickers: "stickerSegments" });
@@ -182,13 +195,28 @@ function materializeSourceAudioMappings(project) {
 function trimVisual(project, operation) {
   materializeSourceAudioMappings(project);
   const segment = findById(project.visualSegments, operation.clipId, "Visual clip");
-  if (segment.type !== "video") throw Object.assign(new Error("visual.trim currently supports video clips only"), { code: "UNSUPPORTED_MEDIA_TYPE" });
+  if (segment.type !== "video") {
+    if (segment.type === "image") {
+      const sourceIn = Object.hasOwn(operation, "sourceIn") ? finiteNonNegative(operation.sourceIn, "sourceIn") : 0;
+      const sourceOut = Object.hasOwn(operation, "sourceOut")
+        ? finiteNonNegative(operation.sourceOut, "sourceOut")
+        : (Object.hasOwn(operation, "duration") ? finitePositive(operation.duration, "duration") + sourceIn : 0);
+      if (sourceOut <= sourceIn) throw Object.assign(new Error("sourceOut must be after sourceIn"), { code: "INVALID_RANGE" });
+      const duration = sourceOut - sourceIn;
+      segment.duration = duration;
+      if (Array.isArray(segment.keyframes)) segment.keyframes = remapKeyframes(segment.keyframes, sourceIn, sourceOut);
+      return { removedLocalTime: sourceIn, duration };
+    }
+    throw Object.assign(new Error("visual.trim currently supports video and image clips only"), { code: "UNSUPPORTED_MEDIA_TYPE" });
+  }
   trimSourceRange(segment, operation);
 }
 
 function trimSourceRange(segment, operation) {
-  const sourceIn = finiteNonNegative(operation.sourceIn, "sourceIn");
-  const sourceOut = finiteNonNegative(operation.sourceOut, "sourceOut");
+  const sourceIn = Object.hasOwn(operation, "sourceIn") ? finiteNonNegative(operation.sourceIn, "sourceIn") : 0;
+  const sourceOut = Object.hasOwn(operation, "sourceOut")
+    ? finiteNonNegative(operation.sourceOut, "sourceOut")
+    : (Object.hasOwn(operation, "duration") ? finitePositive(operation.duration, "duration") + sourceIn : 0);
   if (sourceOut <= sourceIn) throw Object.assign(new Error("sourceOut must be after sourceIn"), { code: "INVALID_RANGE" });
   const previousSourceIn = Math.max(0, Number(segment.sourceStart) || 0);
   const previousSourceDuration = Math.max(0, Number(segment.sourceDuration) || (Number(segment.duration) || 0) * visualPlaybackRate(segment));
@@ -235,8 +263,9 @@ function splitVisual(project, operation) {
   const at = finitePositive(operation.at, "at");
   const duration = finitePositive(Number(segment.duration), "clip duration");
   if (at >= duration) throw Object.assign(new Error("at must be inside the visual clip"), { code: "INVALID_RANGE" });
-  const rightClipId = typeof operation.rightClipId === "string" ? operation.rightClipId.trim() : "";
-  if (!rightClipId) throw Object.assign(new Error("rightClipId is required"), { code: "INVALID_ARGUMENT" });
+  const rightClipId = (typeof operation.rightClipId === "string" && operation.rightClipId.trim())
+    ? operation.rightClipId.trim()
+    : `${operation.clipId}-split-${Date.now()}`;
   requireNewClipId(project, rightClipId);
   const rate = segment.type === "video" ? visualPlaybackRate(segment) : 1;
   const archiveMediaId = segment.archiveMediaId || segment.id;
@@ -369,7 +398,20 @@ function deleteVisual(project, operation) {
 function duplicateVisual(project, operation) {
   materializeSourceAudioMappings(project);
   const source = findById(project.visualSegments, operation.clipId, "Visual clip");
-  const id = requireNewClipId(project, operation.newClipId);
+  let id = typeof operation.newClipId === "string" ? operation.newClipId.trim() : "";
+  if (!id) {
+    let suffix = 1;
+    while (true) {
+      const candidate = `${source.id}-dup-${suffix}`;
+      const exists = Object.values(TRACK_COLLECTIONS).some((key) => (project?.[key] || []).some((clip) => clip.id === candidate));
+      if (!exists) {
+        id = candidate;
+        break;
+      }
+      suffix++;
+    }
+  }
+  requireNewClipId(project, id);
   const sourceIndex = project.visualSegments.indexOf(source);
   const atIndex = operation.atIndex === undefined ? sourceIndex + 1 : operation.atIndex;
   if (!Number.isInteger(atIndex) || atIndex < 0 || atIndex > project.visualSegments.length) {
@@ -529,7 +571,8 @@ function deleteClip(project, operation) {
   if (!key) throw Object.assign(new Error(`Unsupported clip track: ${operation.track}`), { code: "UNSUPPORTED_TRACK" });
   if (key === "captionSegments") project.captionSegments = materializeProjectCaptionTimings(project).captionSegments;
   if (operation.track === "audio") project.captionSegments = materializeProjectCaptionTimings(project).captionSegments;
-  findById(project[key], operation.clipId, `${operation.track === "caption" ? "Caption" : "Audio"} clip`);
+  const kind = operation.track === "caption" ? "Caption" : operation.track === "music" ? "Music" : "Audio";
+  findById(project[key], operation.clipId, `${kind} clip`);
   project[key] = project[key].filter((item) => item.id !== operation.clipId);
   if (key === "captionSegments") {
     project.script = project.captionSegments.map((item) => item.text).join("\n");
@@ -544,7 +587,236 @@ function deleteClip(project, operation) {
     project.musicName = "";
     project.musicDuration = 0;
     project.musicStart = 0;
+    project.musicVolume = 0;
   }
+}
+
+function deleteAudio(project, operation) {
+  project.captionSegments = materializeProjectCaptionTimings(project).captionSegments;
+  const audioSegments = Array.isArray(project.audioSegments) ? project.audioSegments : [];
+  let clipId = typeof operation.clipId === "string" ? operation.clipId.trim() : "";
+  if (!clipId) {
+    if (audioSegments.length === 0) {
+      throw Object.assign(new Error("No audio clips found to delete"), { code: "CLIP_NOT_FOUND" });
+    }
+    if (audioSegments.length > 1) {
+      throw Object.assign(new Error("Multiple audio clips exist; clipId is required to avoid ambiguity"), { code: "CLIP_ID_AMBIGUOUS" });
+    }
+    clipId = audioSegments[0].id;
+  }
+  deleteClip(project, { ...operation, track: "audio", clipId });
+}
+
+function deleteMusic(project, operation) {
+  const musicSegments = Array.isArray(project.musicSegments) ? project.musicSegments : [];
+  let clipId = typeof operation.clipId === "string" ? operation.clipId.trim() : "";
+  if (!clipId) {
+    if (musicSegments.length === 0) {
+      throw Object.assign(new Error("No music clips found to delete"), { code: "CLIP_NOT_FOUND" });
+    }
+    if (musicSegments.length > 1) {
+      throw Object.assign(new Error("Multiple music clips exist; clipId is required to avoid ambiguity"), { code: "CLIP_ID_AMBIGUOUS" });
+    }
+    clipId = musicSegments[0].id;
+  }
+  deleteClip(project, { ...operation, track: "music", clipId });
+}
+
+function duckMusic(project, operation) {
+  if (project?.trackLocks?.music || project?.tracks?.music?.locked) {
+    throw Object.assign(new Error("music track is locked"), { code: "TRACK_LOCKED" });
+  }
+  const musicSegments = Array.isArray(project.musicSegments) ? project.musicSegments : [];
+  let clipId = typeof operation.clipId === "string" ? operation.clipId.trim() : "";
+  if (!clipId) {
+    if (musicSegments.length === 0) {
+      throw Object.assign(new Error("No music clips found to duck"), { code: "CLIP_NOT_FOUND" });
+    }
+    clipId = musicSegments[0].id;
+  }
+  let clipIndex = musicSegments.findIndex((m) => m.id === clipId);
+  if (clipIndex < 0 && clipId) {
+    clipIndex = musicSegments.findIndex((m) => m.parentClipId === clipId || (m.id && m.id.startsWith(`${clipId}-`)));
+  }
+  if (clipIndex < 0) {
+    throw Object.assign(new Error(`Music clip not found: ${clipId}`), { code: "CLIP_NOT_FOUND" });
+  }
+  const musicClip = musicSegments[clipIndex];
+  // Check if music segments are already ducked and share a common parent
+  let startIndex = clipIndex;
+  let endIndex = clipIndex + 1;
+  const parentId = musicClip.parentClipId || (musicClip.id.includes("-seg-") || musicClip.id.includes("-duck-") ? musicClip.id.split(/-(?:seg|duck)-/)[0] : "");
+  let unifiedClip = musicClip;
+  const matchingSegments = [];
+
+  if (parentId) {
+    const matchingIndices = [];
+    musicSegments.forEach((m, idx) => {
+      const mParent = m.parentClipId || (m.id.includes("-seg-") || m.id.includes("-duck-") ? m.id.split(/-(?:seg|duck)-/)[0] : "");
+      if (mParent === parentId || m.id === parentId) {
+        matchingIndices.push(idx);
+        matchingSegments.push(m);
+      }
+    });
+    if (matchingIndices.length > 1) {
+      startIndex = Math.min(...matchingIndices);
+      endIndex = Math.max(...matchingIndices) + 1;
+      const firstSeg = musicSegments[startIndex];
+      const lastSeg = musicSegments[endIndex - 1];
+      const totalDur = (Number(lastSeg.start) || 0) + (Number(lastSeg.duration) || 0) - (Number(firstSeg.start) || 0);
+      const unifiedRate = Number(firstSeg.playbackRate) || 1;
+      unifiedClip = {
+        ...firstSeg,
+        id: parentId,
+        parentClipId: parentId,
+        start: Number(firstSeg.start) || 0,
+        duration: Math.max(0.001, totalDur),
+        sourceStart: Number(firstSeg.sourceStart) || 0,
+        sourceDuration: totalDur * unifiedRate,
+      };
+    }
+  }
+
+  // Determine true original volume without assuming 0.8 or defaulting to a ducked volume
+  let baseVolume = unifiedClip.originalVolume;
+  if (!Number.isFinite(baseVolume)) {
+    const segWithOrig = matchingSegments.find((m) => Number.isFinite(m.originalVolume));
+    if (segWithOrig) {
+      baseVolume = segWithOrig.originalVolume;
+    } else {
+      const normalSeg = matchingSegments.find((m) => m.id && m.id.includes("-seg-") && Number.isFinite(m.volume));
+      if (normalSeg) {
+        baseVolume = normalSeg.volume;
+      } else if (Number.isFinite(musicClip.volume) && !musicClip.id.includes("-duck-")) {
+        baseVolume = musicClip.volume;
+      } else if (Number.isFinite(project.musicVolume)) {
+        baseVolume = project.musicVolume;
+      } else {
+        baseVolume = 0.8;
+      }
+    }
+  }
+
+  const duckVolume = Number.isFinite(Number(operation.duckVolume)) ? Math.max(0, Math.min(1, Number(operation.duckVolume))) : 0.18;
+  const normalVolume = Number.isFinite(Number(operation.normalVolume)) ? Math.max(0, Math.min(4, Number(operation.normalVolume))) : baseVolume;
+  unifiedClip.volume = normalVolume;
+  unifiedClip.originalVolume = baseVolume;
+
+  // Gather speech intervals from audioSegments and captionSegments
+  const speechIntervals = [];
+  for (const a of project.audioSegments || []) {
+    const s = Math.max(0, Number(a.start) || 0);
+    const d = Math.max(0, Number(a.duration) || 0);
+    if (d > 0) speechIntervals.push({ start: s, end: s + d });
+  }
+  for (const c of project.captionSegments || []) {
+    const s = Math.max(0, Number(c.start) || 0);
+    const e = Math.max(0, Number(c.end) || 0);
+    if (e > s) speechIntervals.push({ start: s, end: e });
+  }
+
+  if (speechIntervals.length === 0) {
+    throw Object.assign(new Error("No speech or captions found to duck music against"), { code: "NO_DIALOGUE_FOUND" });
+  }
+
+  // Sort and merge overlapping speech intervals
+  speechIntervals.sort((a, b) => a.start - b.start);
+  const mergedSpeech = [];
+  for (const interval of speechIntervals) {
+    if (!mergedSpeech.length) {
+      mergedSpeech.push({ ...interval });
+    } else {
+      const last = mergedSpeech[mergedSpeech.length - 1];
+      if (interval.start <= last.end + 0.1) {
+        last.end = Math.max(last.end, interval.end);
+      } else {
+        mergedSpeech.push({ ...interval });
+      }
+    }
+  }
+
+  const musicStart = Math.max(0, Number(unifiedClip.start) || 0);
+  const musicDuration = Math.max(0.001, Number(unifiedClip.duration) || 0);
+  const musicEnd = musicStart + musicDuration;
+  const rate = Math.max(0.25, Math.min(4, Number(unifiedClip.playbackRate) || 1));
+  const baseSourceStart = Math.max(0, Number(unifiedClip.sourceStart) || 0);
+
+  // Intersect merged speech with the music clip's timeline window
+  const activeDucks = [];
+  for (const sp of mergedSpeech) {
+    const dStart = Math.max(musicStart, sp.start);
+    const dEnd = Math.min(musicEnd, sp.end);
+    if (dEnd > dStart + 0.05) {
+      activeDucks.push({ start: dStart, end: dEnd });
+    }
+  }
+
+  if (activeDucks.length === 0) {
+    throw Object.assign(new Error("No speech overlap found within the music track timing"), { code: "NO_DIALOGUE_OVERLAP" });
+  }
+
+  // Create split segments covering [musicStart, musicEnd]
+  const newSegments = [];
+  let currentTime = musicStart;
+  let segIndex = 0;
+  const effectiveParentId = parentId || unifiedClip.id;
+
+  for (const duck of activeDucks) {
+    if (duck.start > currentTime + 0.05) {
+      const dur = duck.start - currentTime;
+      const sStart = baseSourceStart + (currentTime - musicStart) * rate;
+      newSegments.push({
+        ...unifiedClip,
+        id: `${effectiveParentId}-seg-${segIndex++}`,
+        parentClipId: effectiveParentId,
+        archiveMediaId: unifiedClip.archiveMediaId || effectiveParentId,
+        start: currentTime,
+        duration: dur,
+        sourceStart: sStart,
+        sourceDuration: dur * rate,
+        volume: normalVolume,
+        originalVolume: baseVolume,
+      });
+    }
+    const duckDur = duck.end - duck.start;
+    const duckSourceStart = baseSourceStart + (duck.start - musicStart) * rate;
+    newSegments.push({
+      ...unifiedClip,
+      id: `${effectiveParentId}-duck-${segIndex++}`,
+      parentClipId: effectiveParentId,
+      archiveMediaId: unifiedClip.archiveMediaId || effectiveParentId,
+      start: duck.start,
+      duration: duckDur,
+      sourceStart: duckSourceStart,
+      sourceDuration: duckDur * rate,
+      volume: duckVolume,
+      originalVolume: baseVolume,
+    });
+    currentTime = duck.end;
+  }
+
+  if (currentTime < musicEnd - 0.05) {
+    const dur = musicEnd - currentTime;
+    const sStart = baseSourceStart + (currentTime - musicStart) * rate;
+    newSegments.push({
+      ...unifiedClip,
+      id: `${effectiveParentId}-seg-${segIndex}`,
+      parentClipId: effectiveParentId,
+      archiveMediaId: unifiedClip.archiveMediaId || effectiveParentId,
+      start: currentTime,
+      duration: dur,
+      sourceStart: sStart,
+      sourceDuration: dur * rate,
+      volume: normalVolume,
+      originalVolume: baseVolume,
+    });
+  }
+
+  project.musicSegments = [
+    ...musicSegments.slice(0, startIndex),
+    ...newSegments,
+    ...musicSegments.slice(endIndex),
+  ];
 }
 
 function captionEditScope(project, operation) {
@@ -557,9 +829,32 @@ function captionEditScope(project, operation) {
 }
 
 function setCaptionStyle(project, operation) {
+  if (project?.trackLocks?.caption || project?.trackLocks?.captions) {
+    throw Object.assign(new Error("Caption track is locked"), { code: "TRACK_LOCKED" });
+  }
   const caption = captionEditScope(project, operation);
   const style = operation.style;
   if (!style || typeof style !== "object" || Array.isArray(style) || !Object.keys(style).length) invalidArgument("style must contain at least one supported property");
+
+  // Normalize fontId to canonical lowercase catalog font id if provided as name, family, or mixed case
+  if (Object.hasOwn(style, "fontId") && typeof style.fontId === "string") {
+    const matched = findCaptionFontInCatalog(style.fontId);
+    if (matched) {
+      style.fontId = matched.id;
+    }
+  }
+
+  // Normalize activeWordColor and other color properties if named color
+  const colorKeys = ["textColor", "backgroundColor", "borderColor", "textStrokeColor", "activeWordColor"];
+  for (const cKey of colorKeys) {
+    if (Object.hasOwn(style, cKey) && typeof style[cKey] === "string") {
+      const hex = resolveColorToHex(style[cKey]);
+      if (hex) {
+        style[cKey] = hex;
+      }
+    }
+  }
+
   for (const [key, value] of Object.entries(style)) {
     const rule = CAPTION_STYLE_PROPERTY_SCHEMA[key];
     if (!rule || typeof value !== rule.type || rule.enum && !rule.enum.includes(value)
@@ -571,7 +866,11 @@ function setCaptionStyle(project, operation) {
     return;
   }
   const { captionSize, ...visualStyle } = style;
-  project.captionStyle = { ...(project.captionStyle || {}), ...visualStyle };
+  project.captionStyle = {
+    ...(project.captionStyle || {}),
+    ...visualStyle,
+    ...(captionSize !== undefined ? { captionSize } : {}),
+  };
   if (captionSize !== undefined) project.captionSize = captionSize;
   project.captionStylePresetId = "modified";
   // Default-style edits have the same semantics as the editor inspector:
@@ -666,17 +965,63 @@ const NUMERIC_CLIP_PROPERTIES = Object.freeze({
 });
 
 function setClipProperty(project, operation) {
-  const { clip } = findClipMatch(project, operation.clipId);
+  if (operation.scope === "all" || operation.clipId === "all") {
+    if (project?.trackLocks?.image) {
+      throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
+    }
+    const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
+    for (const clip of visuals) {
+      setClipProperty(project, { ...operation, scope: "single", clipId: clip.id });
+    }
+    return;
+  }
+  let clipId = typeof operation.clipId === "string" ? operation.clipId.trim() : "";
+  if (!clipId || clipId === "music" || clipId === "background-music") {
+    if (project.musicSegments?.length === 1) clipId = project.musicSegments[0].id;
+  }
+  if (!clipId || clipId === "audio" || clipId === "voiceover") {
+    if (project.audioSegments?.length === 1) clipId = project.audioSegments[0].id;
+  }
+  const { track, clip } = findClipMatch(project, clipId);
+  if (project?.trackLocks?.[track === "visuals" ? "image" : track]) {
+    throw Object.assign(new Error(`${track} track is locked`), { code: "TRACK_LOCKED" });
+  }
   const limits = NUMERIC_CLIP_PROPERTIES[operation.property];
   if (!limits) throw Object.assign(new Error(`Unsupported clip property: ${operation.property}`), { code: "UNSUPPORTED_PROPERTY" });
-  if (typeof operation.value !== "number" || !Number.isFinite(operation.value) || operation.value < limits.min || operation.value > limits.max) {
+  let value = operation.value;
+  if (operation.property === "volume" && typeof value === "number" && value > 4 && value <= 400) {
+    value = Number((value / 100).toFixed(3));
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value < limits.min || value > limits.max) {
     throw Object.assign(new Error(`${operation.property} must be between ${limits.min} and ${limits.max}`), { code: "INVALID_ARGUMENT" });
   }
-  clip[operation.property] = operation.value;
+  clip[operation.property] = value;
+  if (operation.property === "volume" && project.musicSegments?.some((m) => m.id === clip.id)) {
+    project.musicVolume = value;
+  }
 }
 
 function setClipSpeed(project, operation) {
+  if (operation.scope === "all" || operation.clipId === "all") {
+    if (project?.trackLocks?.image) {
+      throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
+    }
+    const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
+    for (const clip of visuals) {
+      if (clip.type === "video") {
+        setClipSpeed(project, { ...operation, scope: "single", clipId: clip.id });
+      }
+    }
+    return;
+  }
   const match = findClipMatch(project, operation.clipId);
+  const isLocked =
+    project?.trackLocks?.[match.track === "visuals" ? "image" : match.track] ||
+    project?.trackLocks?.[match.track] ||
+    project?.tracks?.[match.track]?.locked;
+  if (isLocked) {
+    throw Object.assign(new Error(`${match.track} track is locked`), { code: "TRACK_LOCKED" });
+  }
   if (match.track === "captions" || match.track === "stickers" || (match.track === "visuals" && match.clip.type !== "video") || (match.track === "overlays" && match.clip.type !== "video")) {
     throw Object.assign(new Error(`Speed is unsupported for ${match.track} clip ${operation.clipId}`), { code: "UNSUPPORTED_MEDIA_TYPE" });
   }
@@ -688,6 +1033,7 @@ function setClipSpeed(project, operation) {
   const sourceDuration = Math.max(0.001, Number(clip.sourceDuration) || previousDuration * previousRate);
   const duration = sourceDuration / speed;
   clip.playbackRate = speed;
+  clip.speed = speed;
   clip.sourceDuration = sourceDuration;
   clip.duration = duration;
   if (Array.isArray(clip.keyframes)) {
@@ -702,9 +1048,63 @@ function setClipSpeed(project, operation) {
   }
 }
 
+const SUPPORTED_CLIP_FILTERS = new Set([
+  "none", "cool", "film", "bright",
+  "effect-clean", "effect-soft", "effect-cinematic", "effect-vivid",
+  "effect-night", "effect-warm", "effect-cold", "effect-noir", "effect-dream",
+]);
+
+function setClipFilter(project, operation) {
+  if (project?.trackLocks?.image || project?.trackLocks?.visuals || project?.tracks?.visuals?.locked) {
+    throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
+  }
+  const filterId = typeof operation.filterId === "string" ? operation.filterId.trim().toLowerCase() : "";
+  if (!SUPPORTED_CLIP_FILTERS.has(filterId)) {
+    throw Object.assign(new Error(`Unsupported filter: ${operation.filterId}`), { code: "INVALID_FILTER" });
+  }
+  if (operation.scope === "all" || operation.clipId === "all" || !operation.clipId) {
+    project.selectedFilterId = filterId;
+    const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
+    for (const clip of visuals) {
+      clip.filterId = filterId;
+      clip.filter = filterId;
+    }
+    return;
+  }
+  const match = findClipMatch(project, operation.clipId);
+  match.clip.filterId = filterId;
+  match.clip.filter = filterId;
+}
+
+function setClipColorGrade(project, operation) {
+  if (project?.trackLocks?.image || project?.trackLocks?.visuals || project?.tracks?.visuals?.locked) {
+    throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
+  }
+  if (!operation.colorGrade || typeof operation.colorGrade !== "object" || Array.isArray(operation.colorGrade)) {
+    throw Object.assign(new Error("colorGrade must be an object"), { code: "INVALID_ARGUMENT" });
+  }
+  const nextGrade = normalizeColorGrade(operation.colorGrade);
+  if (operation.scope === "all" || operation.clipId === "all" || !operation.clipId) {
+    const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
+    for (const clip of visuals) {
+      clip.colorGrade = { ...(clip.colorGrade || {}), ...nextGrade };
+    }
+    return;
+  }
+  const match = findClipMatch(project, operation.clipId);
+  match.clip.colorGrade = { ...(match.clip.colorGrade || {}), ...nextGrade };
+}
+
 function setClipMuted(project, operation) {
   if (typeof operation.muted !== "boolean") throw Object.assign(new Error("muted must be a boolean"), { code: "INVALID_ARGUMENT" });
-  const { track, clip } = findClipMatch(project, operation.clipId);
+  let clipId = typeof operation.clipId === "string" ? operation.clipId.trim() : "";
+  if (!clipId || clipId === "music" || clipId === "background-music") {
+    if (project.musicSegments?.length === 1) clipId = project.musicSegments[0].id;
+  }
+  if (!clipId || clipId === "audio" || clipId === "voiceover") {
+    if (project.audioSegments?.length === 1) clipId = project.audioSegments[0].id;
+  }
+  const { track, clip } = findClipMatch(project, clipId);
   if (!["visuals", "audio", "overlays", "music"].includes(track)) {
     throw Object.assign(new Error(`Mute is unsupported for ${track} clips`), { code: "UNSUPPORTED_TRACK" });
   }
@@ -844,6 +1244,201 @@ function deleteMarker(project, operation) {
   project.timelineMarkers.splice(index, 1);
 }
 
+function punchInVisual(project, operation) {
+  if (project?.trackLocks?.image || project?.trackLocks?.visuals || project?.tracks?.visuals?.locked) {
+    throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
+  }
+
+  const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
+  if (!visuals.length) {
+    throw Object.assign(new Error("No visual clips available for Smart Zoom"), { code: "CLIP_NOT_FOUND" });
+  }
+
+  // Handle auto mode (speech/caption moment discovery)
+  if (operation.mode === "auto") {
+    const moments = detectSpeechPunchInMoments(project, operation);
+    if (!moments.length) {
+      throw Object.assign(new Error("No suitable speech moments found for Smart Zoom"), { code: "NO_MOMENTS_FOUND" });
+    }
+    const excludeIds = new Set(Array.isArray(operation.excludeClipIds) ? operation.excludeClipIds : []);
+    for (const moment of moments) {
+      if (excludeIds.has(moment.clipId)) continue;
+      const clip = visuals.find((c) => c.id === moment.clipId);
+      if (!clip || clip.locked) continue;
+
+      const punchIns = Array.isArray(clip.punchIns) ? [...clip.punchIns] : [];
+      const existingIdx = punchIns.findIndex((p) => Math.abs(p.time - moment.time) < 1.0);
+      const normalized = normalizePunchIn({
+        id: existingIdx >= 0 ? punchIns[existingIdx].id : moment.id,
+        time: moment.time,
+        duration: moment.duration,
+        scale: moment.scale,
+        transition: moment.transition,
+        transitionDuration: moment.transitionDuration,
+        faceAnchored: moment.faceAnchored,
+        x: moment.x,
+        y: moment.y,
+      }, clip.duration);
+
+      if (existingIdx >= 0) {
+        punchIns[existingIdx] = normalized;
+      } else {
+        punchIns.push(normalized);
+      }
+      clip.punchIns = punchIns.sort((a, b) => a.time - b.time);
+      clip.keyframes = compilePunchInKeyframes(clip.keyframes, clip.punchIns, clip.duration);
+    }
+    return;
+  }
+
+  // Handle targeted or all-clips punch-in
+  const isAll = operation.scope === "all" || operation.clipId === "all";
+  const targetClips = isAll ? visuals : [findById(visuals, operation.clipId, "Visual clip")];
+
+  for (const clip of targetClips) {
+    if (clip.locked) {
+      if (!isAll) throw Object.assign(new Error(`Clip is locked: ${clip.id}`), { code: "CLIP_LOCKED" });
+      continue;
+    }
+
+    const clipDuration = Math.max(0.1, Number(clip.duration) || 0);
+    let localTime = 0;
+    if (Number.isFinite(Number(operation.time))) {
+      localTime = Number(operation.time);
+      if (localTime >= clipDuration && !isAll) {
+        const clipIdx = visuals.indexOf(clip);
+        const clipStart = visuals.slice(0, clipIdx).reduce((sum, c) => sum + (Number(c.duration) || 0), 0);
+        if (localTime >= clipStart && localTime < clipStart + clipDuration) {
+          localTime = localTime - clipStart;
+        }
+      }
+    } else if (Number.isFinite(Number(operation.timelineTime))) {
+      const clipIdx = visuals.indexOf(clip);
+      const clipStart = visuals.slice(0, clipIdx).reduce((sum, c) => sum + (Number(c.duration) || 0), 0);
+      localTime = Math.max(0, Number(operation.timelineTime) - clipStart);
+    }
+
+    if (localTime < 0 || localTime >= clipDuration) {
+      if (!isAll) throw Object.assign(new Error(`Punch-in timestamp ${localTime}s is outside clip boundaries (0s - ${clipDuration}s)`), { code: "INVALID_ARGUMENT" });
+      continue;
+    }
+
+    const scale = normalizePunchInScale(operation.scale ?? operation.intensity);
+    const duration = Math.min(
+      Math.max(SMART_ZOOM_DEFAULTS.minDuration, Number(operation.duration) || SMART_ZOOM_DEFAULTS.duration),
+      clipDuration - localTime
+    );
+    const transition = normalizePunchInTransition(operation.transition);
+    const transitionDuration = Math.max(
+      SMART_ZOOM_DEFAULTS.minTransitionDuration,
+      Math.min(SMART_ZOOM_DEFAULTS.maxTransitionDuration, Number(operation.transitionDuration) || SMART_ZOOM_DEFAULTS.transitionDuration)
+    );
+    const faceAnchored = Boolean(operation.faceAnchored);
+
+    const offset = resolvePunchInOffset({
+      segment: clip,
+      scale,
+      faceAnchored,
+      time: localTime,
+      manualX: operation.x,
+      manualY: operation.y,
+    });
+
+    const punchIns = Array.isArray(clip.punchIns) ? [...clip.punchIns] : [];
+    const existingIdx = operation.punchInId
+      ? punchIns.findIndex((p) => p.id === operation.punchInId)
+      : punchIns.findIndex((p) => Math.abs(p.time - localTime) < 0.5);
+
+    const newPunchIn = normalizePunchIn({
+      id: existingIdx >= 0 ? punchIns[existingIdx].id : operation.punchInId,
+      time: localTime,
+      duration,
+      scale,
+      transition,
+      transitionDuration,
+      faceAnchored,
+      x: offset.x,
+      y: offset.y,
+    }, clipDuration);
+
+    if (existingIdx >= 0) {
+      punchIns[existingIdx] = newPunchIn;
+    } else {
+      punchIns.push(newPunchIn);
+    }
+
+    clip.punchIns = punchIns.sort((a, b) => a.time - b.time);
+    clip.keyframes = compilePunchInKeyframes(clip.keyframes, clip.punchIns, clipDuration);
+  }
+}
+
+function removePunchInVisual(project, operation) {
+  if (project?.trackLocks?.image || project?.trackLocks?.visuals || project?.tracks?.visuals?.locked) {
+    throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
+  }
+
+  const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
+  const isAll = operation.scope === "all" || operation.clipId === "all" || !operation.clipId;
+  const targetClips = isAll ? visuals : [findById(visuals, operation.clipId, "Visual clip")];
+
+  let removedAny = false;
+  for (const clip of targetClips) {
+    if (clip.locked) {
+      if (!isAll) throw Object.assign(new Error(`Clip is locked: ${clip.id}`), { code: "CLIP_LOCKED" });
+      continue;
+    }
+    const current = Array.isArray(clip.punchIns) ? clip.punchIns : [];
+    if (!current.length) continue;
+
+    let next;
+    if (operation.punchInId) {
+      next = current.filter((p) => p.id !== operation.punchInId);
+    } else if (Number.isFinite(Number(operation.time)) || Number.isFinite(Number(operation.timelineTime))) {
+      let targetTime = Number.isFinite(Number(operation.time)) ? Number(operation.time) : Number(operation.timelineTime);
+      const clipIdx = visuals.indexOf(clip);
+      const clipStart = visuals.slice(0, clipIdx).reduce((sum, c) => sum + (Number(c.duration) || 0), 0);
+      if (targetTime >= clipStart && targetTime < clipStart + (Number(clip.duration) || 0)) {
+        targetTime -= clipStart;
+      }
+      next = current.filter((p) => Math.abs(p.time - targetTime) > 0.5);
+    } else {
+      next = current.slice(0, -1);
+    }
+
+    if (next.length !== current.length) {
+      removedAny = true;
+      clip.punchIns = next;
+      clip.keyframes = compilePunchInKeyframes(clip.keyframes, clip.punchIns, clip.duration);
+    }
+  }
+
+  if (!isAll && !removedAny) {
+    throw Object.assign(new Error("Punch-in not found"), { code: "PUNCH_IN_NOT_FOUND" });
+  }
+}
+
+function resetZoomVisual(project, operation) {
+  if (project?.trackLocks?.image || project?.trackLocks?.visuals || project?.tracks?.visuals?.locked) {
+    throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
+  }
+
+  const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
+  const isAll = operation.scope === "all" || operation.clipId === "all" || !operation.clipId;
+  const targetClips = isAll ? visuals : [findById(visuals, operation.clipId, "Visual clip")];
+
+  for (const clip of targetClips) {
+    if (clip.locked) {
+      if (!isAll) throw Object.assign(new Error(`Clip is locked: ${clip.id}`), { code: "CLIP_LOCKED" });
+      continue;
+    }
+    clip.punchIns = [];
+    clip.scale = 1;
+    clip.x = 0;
+    clip.y = 0;
+    clip.keyframes = compilePunchInKeyframes(clip.keyframes, [], clip.duration);
+  }
+}
+
 const reducers = {
   "asset.import": importAsset,
   "asset.insert": insertPreparedAsset,
@@ -857,6 +1452,9 @@ const reducers = {
   "visual.insert": insertVisual,
   "visual.delete": deleteVisual,
   "visual.duplicate": duplicateVisual,
+  "visual.punch_in": punchInVisual,
+  "visual.remove_punch_in": removePunchInVisual,
+  "visual.reset_zoom": resetZoomVisual,
   "overlay.add": addOverlay,
   "overlay.set_transform": setOverlayTransform,
   "transition.set": setTransition,
@@ -868,12 +1466,17 @@ const reducers = {
   "caption.delete": (project, operation) => deleteClip(project, { ...operation, track: "caption" }),
   "caption.unlink_audio": unlinkCaption,
   "caption.link_audio": linkCaption,
+  "audio.delete": deleteAudio,
+  "music.delete": deleteMusic,
+  "music.duck": duckMusic,
   "marker.add": addMarker,
   "marker.update": updateMarker,
   "marker.delete": deleteMarker,
   "clip.delete": deleteClip,
   "clip.set_property": setClipProperty,
   "clip.set_speed": setClipSpeed,
+  "clip.set_filter": setClipFilter,
+  "clip.set_color_grade": setClipColorGrade,
   "clip.set_muted": setClipMuted,
   "track.set_visibility": (project, operation) => setTrackState(project, operation, "visible"),
   "track.set_locked": (project, operation) => setTrackState(project, operation, "locked"),
@@ -1047,7 +1650,7 @@ function sameValue(left, right) {
 }
 
 export function diffProjects(beforeProject, afterProject) {
-  const projectFields = ["ratioId", "fitMode", "trackVisibility", "trackLocks", "script", "captionsEnabled", "captionStyle", "captionSize", "captionStylePresetId", "captionPlacement", "captionPosition"]
+  const projectFields = ["ratioId", "fitMode", "selectedFilterId", "trackVisibility", "trackLocks", "script", "captionsEnabled", "captionStyle", "captionSize", "captionStylePresetId", "captionPlacement", "captionPosition"]
     .flatMap((field) => sameValue(beforeProject?.[field], afterProject?.[field]) ? [] : [{ field, before: beforeProject?.[field] ?? null, after: afterProject?.[field] ?? null }]);
   const tracks = Object.fromEntries(Object.entries(TRACK_COLLECTIONS).flatMap(([track, key]) => {
     const before = Array.isArray(beforeProject?.[key]) ? beforeProject[key] : [];
@@ -1141,3 +1744,5 @@ export function applyCommandPlan(project, plan) {
     changes: diffProjects(project, next),
   };
 }
+
+export { inspectPunchIns } from "./smartZoom.js";

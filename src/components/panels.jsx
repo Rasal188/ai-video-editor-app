@@ -14,6 +14,7 @@ import {
   Diamond,
   DownloadSimple,
   FrameCorners,
+  MagnifyingGlassPlus,
   MicrophoneStage,
   MusicNote,
   MagicWand,
@@ -21,9 +22,7 @@ import {
   Palette,
   PlayCircle,
   Plus,
-  PersonSimpleRun,
   Scan,
-  Scissors,
   Sparkle,
   Trash,
   Waveform,
@@ -1103,7 +1102,6 @@ export function ToolPanel(props) {
     vocalSeparationJob,
     analyzeCurrentVisual,
     analyzeEffectVisual,
-    openAvatarPanel,
     openSmartPipeline,
     openSceneDetection,
     smartMode,
@@ -1484,10 +1482,9 @@ export function ToolPanel(props) {
             ["scene-detect", Scan, t("sceneDetectTitle"), t("sceneDetectHint")],
             ["rough-cut", MagicWand, t("roughCutTitle"), t("roughCutHint")],
             ["remove-pauses", Waveform, t("pauseTitle"), t("pauseHint")],
-            ["auto-edit", Scissors, t("smartAutoEdit"), t("smartAutoEditHint")],
             ["ai-music", MusicNote, aiCopy.title, aiCopy.hint],
             ["smart-frame", FrameCorners, t("smartFrame"), t("smartFrameHint")],
-            ["avatar", PersonSimpleRun, t("smartAvatar"), t("smartAvatarHint")],
+            ["smart-zoom", MagnifyingGlassPlus, t("smartZoomTitle", "智能变焦特写"), t("smartZoomHint", "人脸居中 · 节奏推进与跳切")],
           ].map(([id, Icon, title, hint]) => (
             <button
               className={smartMode === id ? "is-active" : ""}
@@ -1500,9 +1497,8 @@ export function ToolPanel(props) {
                 setSmartMode(id);
                 if (id === "smart-pipeline") openSmartPipeline?.();
                 if (id === "scene-detect") openSceneDetection?.();
-                if (id === "avatar") openAvatarPanel();
                 if (id === "ai-music" && window.matchMedia?.("(max-width: 760px)").matches) openMobileInspector?.();
-                if ((id === "remove-pauses" || id === "rough-cut" || id === "smart-pipeline" || id === "scene-detect") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
+                if ((id === "remove-pauses" || id === "rough-cut" || id === "smart-pipeline" || id === "scene-detect" || id === "smart-zoom") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
               }}
             >
               <Icon size={24} weight="duotone" /><strong>{title}</strong><span>{hint}</span>

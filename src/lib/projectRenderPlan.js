@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { buildSmartZoomCropFilter } from "./smartZoom.js";
 
 const RATIO_SIZES = Object.freeze({
   "16:9": { width: 1280, height: 720 },
@@ -347,7 +348,9 @@ export function buildFfmpegRenderPlan({ project, media = {}, extractedFiles, med
     const scaleFilter = fitMode === "cover"
       ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},`
       : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,`;
-    filters.push(`[${inputIndex}:v]${trim}${scaleFilter}fps=${frameRate},settb=1/${frameRate},setsar=1,format=yuv420p[v${index}]`);
+    const zoomFilter = buildSmartZoomCropFilter(segment.punchIns, width, height, clipDuration);
+    filters.push(`[${inputIndex}:v]${trim}${scaleFilter}${zoomFilter}fps=${frameRate},settb=1/${frameRate},setsar=1,format=yuv420p[v${index}]`);
+
 
     if (hasVisualAudio) {
       if (hasAudio) {

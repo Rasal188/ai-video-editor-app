@@ -38,7 +38,6 @@ import {
   Plus,
   RadioButton,
   Scan,
-  Scissors,
   ShieldCheck,
   SlidersHorizontal,
   Sparkle,
@@ -61,8 +60,6 @@ import { AudioClipExportControl } from "./AudioClipExportControl.jsx";
 import { SilenceRemovalPanel } from "./SilenceRemovalPanel.jsx";
 import { RoughCutPanel } from "./RoughCutPanel.jsx";
 import { cancelOpenVoiceTasks, convertVoiceBlob, extractVoiceEmbedding } from "../lib/openVoiceRuntime.js";
-import { LIVE_PORTRAIT_WEB_MODEL } from "../config/livePortrait.js";
-import { probeLivePortraitWebEnvironment } from "../lib/livePortraitWeb.js";
 import {
   ensureCaptionFontLoaded,
   getCaptionFont,
@@ -91,6 +88,7 @@ import {
 import { MAX_SRT_FILE_BYTES, parseSrt } from "../lib/subtitles.js";
 import { AI_MUSIC_COPY, AiMusicGenerator, FavoriteVoicesPanel, HistoryPanel, MyVoicesPanel, VisualEffectsPanel, VoiceSynthesisPanel } from "./panels.jsx";
 import { SmartFramePanel } from "./SmartFramePanel.jsx";
+import { SmartZoomPanel } from "./SmartZoomPanel.jsx";
 import { ClickRippleInspector, SubjectEffectsInspector } from "./SubjectEffectsPanel.jsx";
 import { OpticalFlowTrackingPanel } from "./OpticalFlowTrackingPanel.jsx";
 import { CinematicDepthPanel } from "./CinematicDepthPanel.jsx";
@@ -115,105 +113,6 @@ const AUDIO_SPATIAL_PRESENTATION = {
   forest: { Icon: Tree, Signal: CellSignalMedium },
   subway: { Icon: Subway, Signal: CellSignalHigh },
 };
-
-function AutoEditReviewDialog({ t, autoEdit }) {
-  const { review, job } = autoEdit || {};
-  if (!review?.open || typeof document === "undefined") return null;
-  const complete = !job.running && review.captions.length > 0;
-  return createPortal(
-    <div className="auto-edit-review-backdrop" role="presentation">
-      <section className="auto-edit-review-dialog" role="dialog" aria-modal="true" aria-label={t("autoEditReviewTitle")}>
-        <header className="auto-edit-review-header">
-          <div className="auto-edit-review-mark"><Sparkle size={19} weight="fill" /></div>
-          <div><span>{t("smartAutoEdit")}</span><h2>{t("autoEditReviewTitle")}</h2></div>
-          <div className={`auto-edit-review-status ${complete ? "is-complete" : review.error ? "is-error" : ""}`}><i />{review.error ? t("autoEditReviewFailed") : complete ? t("autoEditReviewReady") : job.phase}</div>
-          <button type="button" className="auto-edit-review-close" aria-label={t("close")} onClick={autoEdit.closeReview}><X size={18} /></button>
-        </header>
-
-        <div className="auto-edit-review-progress"><span style={{ width: `${job.progress || 0}%` }} /></div>
-        <div className="auto-edit-review-body">
-          <section className="auto-edit-review-section">
-            <div className="auto-edit-review-section-title"><div><span>01</span><strong>{t("autoEditCandidateTitle")}</strong></div><em>{review.candidates.length} {t("autoEditFramesUnit")}</em></div>
-            <p>{t("autoEditCandidateHint")}</p>
-            {review.candidates.length ? <div className="auto-edit-candidate-grid">{review.candidates.map((candidate, index) => (
-              <article className="auto-edit-candidate-card" key={candidate.id}>
-                <div><img src={candidate.url} alt={`${t("autoEditCandidateFrame")} ${index + 1}`} /><span>#{String(index + 1).padStart(2, "0")}</span><em>{candidate.aspectRatio}</em><time>{formatTime(candidate.time)}</time></div>
-                <footer><span>{t("autoEditVisualChange")}</span><strong>{Math.round(candidate.difference * 100)}%</strong><i><b style={{ width: `${Math.min(100, Math.max(5, candidate.difference * 100))}%` }} /></i></footer>
-              </article>
-            ))}</div> : <div className="auto-edit-review-loading"><i /><span>{t("autoEditFindingScenes")}</span></div>}
-          </section>
-
-          <section className="auto-edit-review-section auto-edit-model-results">
-            <div className="auto-edit-review-section-title"><div><span>02</span><strong>{t("autoEditModelResultTitle")}</strong></div><em>{review.captions.length} {t("captionSegmentsUnit")}</em></div>
-            <p>{t("autoEditModelResultHint")}</p>
-            {review.error ? <div className="auto-edit-review-error"><strong>{t("autoEditReviewFailed")}</strong><span>{review.error}</span></div> : review.segments.length ? <div className="auto-edit-clip-results">{review.segments.map((segment) => {
-              const segmentCaptions = review.captions.filter((caption) => caption.visualSegmentId === segment.id);
-              const preview = review.candidates.find((candidate) => candidate.segmentId === segment.id);
-              return <article className={`auto-edit-clip-result is-${segment.status}`} key={segment.id}>
-                <header>{preview ? <img src={preview.url} alt="" /> : null}<div><strong>{segment.name || `${t("autoEditClip")} ${(segment.index ?? 0) + 1}`}</strong><span>{review.candidates.filter((candidate) => candidate.segmentId === segment.id).length} {t("autoEditFramesUnit")}</span></div><em>{t(`autoEditSegmentStatus_${segment.status}`)}</em></header>
-                {segment.error ? <p className="auto-edit-clip-error">{segment.error}</p> : segmentCaptions.length ? <><div className="auto-edit-result-list">{segmentCaptions.map((caption, index) => (
-                  <article key={caption.id}><span>{String(index + 1).padStart(2, "0")}</span><div><p>{caption.text}</p><time>{formatTime(caption.start)} → {formatTime(caption.end)}</time></div></article>
-                ))}</div>{segment.status === "running" ? <div className="auto-edit-clip-pending"><i /><span>{t("autoEditWindowProgress").replace("{current}", segment.windowIndex || 0).replace("{total}", segment.totalWindows || 0)}</span></div> : null}</> : <div className="auto-edit-clip-pending">{segment.status === "running" ? <i /> : null}<span>{segment.status === "running" && segment.totalWindows ? t("autoEditWindowProgress").replace("{current}", segment.windowIndex || 0).replace("{total}", segment.totalWindows) : t(`autoEditSegmentHint_${segment.status}`)}</span></div>}
-              </article>;
-            })}</div> : <div className="auto-edit-review-loading"><i /><span>{job.running ? job.phase : t("autoEditWaitingForModel")}</span></div>}
-          </section>
-        </div>
-        <footer className="auto-edit-review-actions">
-          <div><strong>{complete ? t("autoEditReviewSummaryReady") : t("autoEditReviewSummaryRunning")}</strong><span>{t("autoEditReviewSummaryHint")}</span></div>
-          <button type="button" className="panel-secondary" onClick={autoEdit.closeReview}>{job.running ? t("cancel") : t("close")}</button>
-          <button type="button" className="auto-edit-apply" disabled={!complete} onClick={autoEdit.applyCaptions}><Sparkle size={16} weight="fill" />{t("autoEditApplyCaptions")}</button>
-        </footer>
-      </section>
-    </div>, document.body,
-  );
-}
-
-function AutoEditPanel({ t, hasVisual, autoEdit }) {
-  const availability = autoEdit?.support?.availability || "unknown";
-  const ready = availability === "available" || availability === "downloadable" || availability === "downloading";
-  const downloadProgress = Math.max(0, Math.min(100, Number(autoEdit?.support?.progress) || 0));
-  const isPreparingSupport = availability === "downloading" && Number.isFinite(autoEdit?.support?.progress);
-  const showDownloadDetails = isPreparingSupport || autoEdit?.support?.stalled;
-  const downloadRows = [
-    ["prompt", t("autoEditPromptModel")],
-    ...(autoEdit?.support?.promptLanguage !== autoEdit?.support?.language ? [["translation", t("autoEditTranslationModel")]] : []),
-  ].map(([id, label]) => ({ id, label, ...(autoEdit?.support?.downloads?.[id] || { progress: 0, state: "downloading", attempt: 1 }) }));
-  const getDownloadStateLabel = (download) => download.state === "complete"
-    ? t("autoEditDownloadComplete")
-    : download.state === "stalled" ? t("autoEditDownloadStalled")
-      : `${download.progress > 0 ? t("autoEditDownloadActive") : t("autoEditDownloadWaiting")}${download.attempt > 1 ? ` · ${t("autoEditDownloadAttempt").replace("{attempt}", download.attempt)}` : ""}`;
-  const supportActionLabel = availability === "downloading"
-    ? `${t("autoEditDownloadingModel")}${downloadProgress ? ` ${downloadProgress}%` : ""}`
-    : availability === "downloadable" ? t(autoEdit?.support?.stalled ? "autoEditRetryDownload" : "autoEditDownloadModel") : t("autoEditCheckSupport");
-  return (<>
-    <div className="auto-edit-panel">
-      <section className="auto-edit-intro"><Scissors size={28} weight="duotone" /><div><strong>{t("autoEditCreateTitle")}</strong><span>{t("autoEditCreateDesc")}</span></div></section>
-      <section className="auto-edit-status-card">
-        <div><span>{t("autoEditBrowserModel")}</span><strong className={`auto-edit-availability is-${availability}`}>{t(`autoEditStatus_${availability}`)}</strong></div>
-        <p>{t("autoEditPrivacyHint")}</p>
-        {availability === "available"
-          ? <div className="auto-edit-model-ready" role="status"><CheckCircle size={17} weight="fill" /><span>{t("autoEditModelReady")}</span></div>
-          : <button className="panel-secondary" type="button" disabled={autoEdit?.job?.running || availability === "checking" || isPreparingSupport} onClick={availability === "downloadable" || availability === "downloading" ? autoEdit?.prepareSupport : autoEdit?.checkSupport}>{supportActionLabel}</button>}
-        {showDownloadDetails ? <div className="auto-edit-model-downloads" aria-live="polite">
-          {downloadRows.map((download) => <div className={`auto-edit-model-download is-${download.state}`} key={download.id}>
-            <div><span>{download.label}</span><span className="auto-edit-model-download-meta"><small>{getDownloadStateLabel(download)}</small><strong>{download.progress}%</strong></span></div>
-            <progress max="100" value={download.progress} aria-label={`${download.label} ${download.progress}%`} />
-          </div>)}
-          <div className="auto-edit-download-total"><span>{t("autoEditDownloadTotal")}</span><strong>{downloadProgress}%</strong></div>
-          {autoEdit?.support?.stalled ? <p className="auto-edit-download-warning">{t("autoEditDownloadStalledHint")}</p> : null}
-        </div> : null}
-      </section>
-      <div className="auto-edit-flow"><span>1</span><p><strong>{t("autoEditStepScenes")}</strong><small>{t("autoEditStepScenesHint")}</small></p><span>2</span><p><strong>{t("autoEditStepCaptions")}</strong><small>{t("autoEditStepCaptionsHint")}</small></p><span>3</span><p><strong>{t("autoEditStepTimeline")}</strong><small>{t("autoEditStepTimelineHint")}</small></p></div>
-      {autoEdit?.job?.running ? <div className="auto-edit-progress"><div><span>{autoEdit.job.phase}</span><strong>{autoEdit.job.progress}%</strong></div><progress max="100" value={autoEdit.job.progress} /><button className="panel-secondary" type="button" onClick={autoEdit.cancel}>{t("cancel")}</button></div> : null}
-      <button className="auto-edit-generate" type="button" disabled={!hasVisual || !ready || autoEdit?.job?.running} onClick={autoEdit?.run}>
-        <span className="auto-edit-generate-icon"><Sparkle size={17} weight="fill" /></span>
-        <span><strong>{hasVisual ? t("autoEditGenerate") : t("autoEditNeedsVisual")}</strong><small>{hasVisual ? t("autoEditGenerateHint") : t("autoEditNeedsVisualHint")}</small></span>
-        <span className="auto-edit-generate-arrow">→</span>
-      </button>
-    </div>
-    <AutoEditReviewDialog t={t} autoEdit={autoEdit} />
-  </>);
-}
 
 function VectorDesignRange({ label, value, min, max, step = 1, suffix = "", onChange }) {
   return (
@@ -1087,75 +986,7 @@ function StickerContextPanel({ t, segment, updateStickerSegment, deleteStickerSe
   );
 }
 
-function DigitalHumanContextPanel({ t, hasVisual, visualType, audioBlob, audioDuration, captionSegments, selectedVoice, avatarJob, generateAvatarAcceptanceFrame }) {
-  const hasPortrait = hasVisual && visualType === "image";
-  const [probeState, setProbeState] = useState("idle");
-  const [probeResult, setProbeResult] = useState(null);
-  const [avatarQuality, setAvatarQuality] = useState("preview");
 
-  const runProbe = async () => {
-    setProbeState("running");
-    try {
-      setProbeResult(await probeLivePortraitWebEnvironment());
-      setProbeState("done");
-    } catch (error) {
-      setProbeResult({ readyForPorting: false, checks: [{ id: "runtime", state: "failed", detail: error instanceof Error ? error.message : String(error) }] });
-      setProbeState("done");
-    }
-  };
-
-  return (
-    <div className="avatar-context-panel">
-      <div className="avatar-context-hero">
-        <span><Waveform size={21} weight="duotone" /></span>
-        <div><small>{t("avatarKicker")}</small><strong>{t("avatarLipSyncTitle")}</strong><em>{t("avatarLipSyncDescription")}</em></div>
-      </div>
-      <div className="avatar-input-list">
-        <div className={hasPortrait ? "is-ready" : ""}><CheckCircle size={17} weight="fill" /><span><strong>{t("avatarPortrait")}</strong><em>{hasPortrait ? t("avatarCurrentPortrait") : t("avatarNeedsPortrait")}</em></span></div>
-        <div className={audioBlob ? "is-ready" : ""}><Waveform size={17} weight="duotone" /><span><strong>{t("avatarAudio")}</strong><em>{audioBlob ? `${selectedVoice?.name ?? "AI"} · ${audioDuration.toFixed(1)}s` : t("avatarNeedsAudio")}</em></span></div>
-        <div className={captionSegments.length ? "is-ready" : ""}><ClosedCaptioning size={17} weight="duotone" /><span><strong>{t("avatarLipSyncSource")}</strong><em>{captionSegments.length ? `${captionSegments.length} ${t("captionSegmentsUnit")} · ${t("avatarCaptionSync")}` : t("avatarNeedsCaptions")}</em></span></div>
-      </div>
-      <div className="avatar-sync-mode"><span>{t("avatarModelSource")}</span><strong>{LIVE_PORTRAIT_WEB_MODEL.id}</strong></div>
-      <div className="avatar-quality-picker" aria-label={t("avatarQuality")}>
-        <button type="button" className={avatarQuality === "preview" ? "is-active" : ""} onClick={() => setAvatarQuality("preview")}>
-          <strong>{t("avatarQualityPreview")}</strong><em>{t("avatarQualityPreviewHint")}</em>
-        </button>
-        <button type="button" className={avatarQuality === "quality" ? "is-active" : ""} onClick={() => setAvatarQuality("quality")}>
-          <strong>{t("avatarQualityFull")}</strong><em>{t("avatarQualityFullHint")}</em>
-        </button>
-      </div>
-      <p className="avatar-context-note">{t("avatarGenerationNote")}</p>
-      <div className="avatar-porting-stages" aria-label={t("avatarPortingStatus")}>
-        <div className="is-done"><span>1</span><strong>{t("avatarStagePinned")}</strong></div>
-        <div className="is-done"><span>2</span><strong>{t("avatarStageGrid")}</strong></div>
-        <div className="is-done"><span>3</span><strong>{t("avatarStageAudio")}</strong></div>
-      </div>
-      {probeResult ? (
-        <div className="avatar-probe-results">
-          {probeResult.checks.map((check) => <div className={`is-${check.state}`} key={check.id}><span />{check.detail}</div>)}
-        </div>
-      ) : null}
-      <button className="panel-secondary avatar-probe-button" type="button" disabled={probeState === "running"} onClick={runProbe}>
-        {probeState === "running" ? t("avatarChecking") : t("avatarCheck")}
-      </button>
-      {avatarJob?.running || avatarJob?.progress > 0 || avatarJob?.phase ? (
-        <div className="avatar-generation-progress" aria-live="polite">
-          <div><span>{avatarJob.phase || t("avatarGenerating")}</span><strong>{avatarJob.progress}%</strong></div>
-          <i><b style={{ width: `${avatarJob.progress}%` }} /></i>
-        </div>
-      ) : null}
-      <button
-        className="panel-primary avatar-generate-button"
-        type="button"
-        disabled={!hasPortrait || avatarJob?.running}
-        onClick={() => generateAvatarAcceptanceFrame(avatarQuality)}
-      >
-        <PersonSimpleRun size={17} weight="duotone" />
-        {avatarJob?.running ? t("avatarGenerating") : t("avatarGenerate")}
-      </button>
-    </div>
-  );
-}
 
 function FaceSwapContextPanel({ t, hasVisual, visualType, faceSwap }) {
   const inputRef = useRef(null);
@@ -1266,9 +1097,7 @@ function FaceSwapContextPanel({ t, hasVisual, visualType, faceSwap }) {
   );
 }
 
-function AvatarContextPanel(props) {
-  return <DigitalHumanContextPanel {...props} />;
-}
+
 
 function CaptionFontSheet({
   t,
@@ -1456,10 +1285,8 @@ export function VoicePanel({
   generateCaptionsFromSourceAudio,
   isGeneratingCaptions,
   automaticCaptionProgress,
-  avatarPanelOpen,
-  smartMode = "auto-edit",
+  smartMode = "smart-pipeline",
   aiMusic,
-  autoEdit,
   silenceRemoval,
   roughCut,
   _smartPipeline,
@@ -1475,8 +1302,6 @@ export function VoicePanel({
   hasVisual,
   visualType,
   audioDuration,
-  avatarJob,
-  generateAvatarAcceptanceFrame,
   selectedTrack,
   selectedAudioSegment,
   selectedTrackAudioSegment,
@@ -1530,6 +1355,9 @@ export function VoicePanel({
   updateSelectedPhotoParallax,
   onOpticalFlowAssetReady,
   generationPlugins,
+  getProjectSnapshot,
+  onApplyPlan,
+  visualSegments = [],
 }) {
   const [captionPanelTab, setCaptionPanelTab] = useState("caption");
   const panelRef = useRef(null);
@@ -1543,9 +1371,8 @@ export function VoicePanel({
   const isPluginsContext = panelContext === "plugins";
   const selectedPluginConnection = generationPlugins?.connections?.[generationPlugins?.selectedPluginId];
   const isEffectsContext = panelContext === "effects" || mobileInspectorSection === "effects";
-  const isAvatarContext = isSmartContext && smartMode === "avatar" && avatarPanelOpen;
-  const isSmartAutoContext = isSmartContext && smartMode === "auto-edit";
   const isSmartFrameContext = isSmartContext && smartMode === "smart-frame";
+  const isSmartZoomContext = isSmartContext && smartMode === "smart-zoom";
   const isAiMusicContext = isSmartContext && smartMode === "ai-music";
   const isSilenceRemovalContext = isSmartContext && smartMode === "remove-pauses";
   const isRoughCutContext = isSmartContext && smartMode === "rough-cut";
@@ -1603,7 +1430,7 @@ export function VoicePanel({
     background: t("effectBackground"),
     edge: t("effectEdgeCleanup"),
   }[mobileInspectorSection];
-  const title = focusedSectionTitle || (isSmartPipelineContext ? t("smartPipelineTitle") : isSceneDetectContext ? t("sceneDetectTitle") : isRoughCutContext ? t("roughCutTitle") : isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartAutoContext ? t("smartAutoEdit") : isSmartFrameContext ? t("smartFrame") : isAvatarContext ? t("avatarTitle") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
+  const title = focusedSectionTitle || (isSmartPipelineContext ? t("smartPipelineTitle") : isSceneDetectContext ? t("sceneDetectTitle") : isRoughCutContext ? t("roughCutTitle") : isSilenceRemovalContext ? t("pauseTitle") : isPluginsContext ? getPluginCopy(uiLanguage).title : isFaceSwapContext ? t("faceSwapTitle") : isOpticalFlowContext ? t("effectVectorTracking") : isCinematicDepthContext ? t(effectsPanelMode === "relight" ? "relightTitle" : effectsPanelMode === "depth-map" ? "depthMapTitle" : "depthTitle") : isPhotoParallaxContext ? t("parallaxTitle") : isEffectsContext ? t("effectProperties") : isAiMusicContext ? (AI_MUSIC_COPY[uiLanguage] || AI_MUSIC_COPY.en).title : isSmartFrameContext ? t("smartFrame") : isSmartZoomContext ? t("smartZoomTitle", "智能变焦特写") : isVectorOverlay || isVectorVisual ? t("vectorProperties", "矢量图形") : isOverlayContext ? t("pictureInPicture", "画中画") : isStickerContext ? t("stickerProperties") : isVisualContext ? t("visualPanelTitle") : isCaptionContext ? t("caption") : isAudioClipContext ? t("audioClipProperties") : t("aiVoice"));
   const panelStatusText = isSmartPipelineContext ? t("smartPipelineHint") : isSceneDetectContext ? t("sceneDetectHint") : isRoughCutContext ? t("roughCutHint") : isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
     ? faceSwap?.job?.running ? `${faceSwap.job.progress}%` : hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")
     : isOpticalFlowContext ? t("effectFlowExperimental")
@@ -1620,7 +1447,7 @@ export function VoicePanel({
       ? t(effectAnalysis?.targetKind === "object" ? "effectObjectAnalysisComplete" : "effectAnalysisComplete")
       : effectAnalysis
         ? t("effectAnalysisPartial")
-        : t(effectAnalysis?.targetKind === "object" ? "effectObjectAnalysisNeeded" : "effectAnalysisNeeded")) : isAiMusicContext ? (aiMusic?.job?.state === "running" ? `${Math.round((aiMusic.job.progress || 0) * 100)}%` : aiMusic?.job?.state === "complete" ? t("complete") : t("modelReady")) : isSmartAutoContext ? t(`autoEditStatus_${autoEdit?.support?.availability || "unknown"}`) : isSmartFrameContext ? (hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")) : isCaptionContext
+        : t(effectAnalysis?.targetKind === "object" ? "effectObjectAnalysisNeeded" : "effectAnalysisNeeded")) : isAiMusicContext ? (aiMusic?.job?.state === "running" ? `${Math.round((aiMusic.job.progress || 0) * 100)}%` : aiMusic?.job?.state === "complete" ? t("complete") : t("modelReady")) : isSmartFrameContext ? (hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")) : isSmartZoomContext ? (hasVisual ? t("smartVisualReady", "片段就绪") : t("smartWaitingVisual", "待选片段")) : isCaptionContext
     ? captionSegments.length
       ? `${captionSegments.length} ${t("captionSegmentsUnit", "条字幕")}`
       : t("noCaptionSegments")
@@ -1632,8 +1459,6 @@ export function VoicePanel({
       ? selectedVisualSegment
         ? `${visualLocalTime.toFixed(2)}s · ${normalizeVisualKeyframes(selectedVisualSegment.keyframes).length} ${t("visualFrames")}`
         : t("visualSelectClip")
-    : isAvatarContext
-      ? t("avatarPortingStatus")
     : isAudioClipContext
       ? `${formatTime(audioPropertySegment.duration)} · ${audioPropertySegment.start.toFixed(1)}s`
     : statusText === "模型待命"
@@ -1662,7 +1487,7 @@ export function VoicePanel({
   }, [activeTool, smartMode]);
 
   return (
-    <aside ref={panelRef} className={`voice-panel ${isCaptionContext ? "is-caption-context" : ""} ${isAvatarContext ? "is-avatar-context" : ""} ${isAudioClipContext ? "is-audio-clip-context" : ""} ${isStickerContext ? "is-sticker-context" : ""} ${isVisualContext ? "is-visual-context" : ""} ${isEffectsContext ? "is-effects-context" : ""} ${isCinematicDepthContext && effectsPanelMode === "relight" ? "is-relight-context" : ""} ${isPluginsContext ? "is-plugins-context" : ""} ${isVectorOverlay ? "is-vector-overlay-context" : ""} ${mobileInspectorSection ? "is-focused-mobile-section" : ""}`}>
+    <aside ref={panelRef} className={`voice-panel ${isCaptionContext ? "is-caption-context" : ""} ${isAudioClipContext ? "is-audio-clip-context" : ""} ${isStickerContext ? "is-sticker-context" : ""} ${isVisualContext ? "is-visual-context" : ""} ${isEffectsContext ? "is-effects-context" : ""} ${isCinematicDepthContext && effectsPanelMode === "relight" ? "is-relight-context" : ""} ${isPluginsContext ? "is-plugins-context" : ""} ${isVectorOverlay ? "is-vector-overlay-context" : ""} ${mobileInspectorSection ? "is-focused-mobile-section" : ""}`}>
       {mobileInspectorSection ? <header className="focused-mobile-sheet-header"><strong>{title}</strong><button type="button" aria-label={t("close", "关闭")} onClick={onCloseMobileInspector}><X size={20} /></button></header> : null}
       <div className="panel-title-row">
         <h1>{title}</h1>
@@ -1673,7 +1498,7 @@ export function VoicePanel({
         )}
       </div>
 
-      {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAvatarContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext ? (
+      {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext ? (
         <div className="tabs compact">
           {[
             ["synthesis", t("voiceSynthesis")],
@@ -1758,8 +1583,20 @@ export function VoicePanel({
           onCancel={photoParallaxDepth?.cancel}
           onChange={updateSelectedPhotoParallax}
         /> : null}
-        {isSmartAutoContext ? <AutoEditPanel t={t} hasVisual={hasVisual} language={uiLanguage} autoEdit={autoEdit} /> : null}
         {isSmartFrameContext ? <SmartFramePanel t={t} smartFrame={smartFrame} /> : null}
+        {isSmartZoomContext ? (
+          <SmartZoomPanel
+            t={t}
+            getProjectSnapshot={getProjectSnapshot}
+            onApplyPlan={onApplyPlan}
+            updateSelectedVisualEffects={updateSelectedVisualEffects}
+            currentTime={currentTime}
+            captionSegments={captionSegments}
+            selectedVisualSegment={selectedVisualSegment}
+            visualSegments={visualSegments}
+            notify={notify}
+          />
+        ) : null}
         {isAiMusicContext ? <AiMusicGenerator language={uiLanguage} music={aiMusic} embedded /> : null}
         {isSilenceRemovalContext ? <SilenceRemovalPanel t={t} tool={silenceRemoval} /> : null}
         {isRoughCutContext ? <RoughCutPanel t={t} tool={roughCut} /> : null}
@@ -1949,11 +1786,9 @@ export function VoicePanel({
           </div>
         ) : null}
 
-        {isAvatarContext ? <AvatarContextPanel t={t} hasVisual={hasVisual} visualType={visualType} audioBlob={audioBlob} audioDuration={audioDuration} captionSegments={captionSegments} selectedVoice={selectedVoice} avatarJob={avatarJob} generateAvatarAcceptanceFrame={generateAvatarAcceptanceFrame} /> : null}
-
         {isAudioClipContext ? <AudioClipContextPanel t={t} segment={{ ...audioPropertySegment, id: audioPropertySegment.id || audioPropertySegment.segmentId, track: audioPropertySegment.track || selectedTrack }} updateAudioSegment={selectedTrack === "audio" ? updateAudioSegment : updateSelectedTrackAudioSegment} toggleAudioSegmentReverse={toggleAudioSegmentReverse} deleteAudioSegment={selectedTrack === "audio" ? deleteAudioSegment : deleteSelectedTrackAudioSegment} downloadBlob={downloadBlob} requestedSection={mobileInspectorSection} voiceProfiles={voiceProfiles} onVoiceColorAssetReady={onVoiceColorAssetReady} onApplyVoiceColor={onApplyVoiceColor} onRestoreVoiceColor={onRestoreVoiceColor} /> : null}
 
-        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAvatarContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "synthesis" ? (
+        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "synthesis" ? (
           <VoiceSynthesisPanel
             script={script}
             updateScript={updateScript}
@@ -1988,7 +1823,7 @@ export function VoicePanel({
           />
         ) : null}
 
-        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAvatarContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "mine" ? (
+        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "mine" ? (
           <MyVoicesPanel
             notify={notify}
             t={t}
@@ -2008,7 +1843,7 @@ export function VoicePanel({
           />
         ) : null}
 
-        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAvatarContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "favorites" ? (
+        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "favorites" ? (
           <FavoriteVoicesPanel
             favoriteVoiceIds={favoriteVoiceIds}
             setFavoriteVoiceIds={setFavoriteVoiceIds}
@@ -2023,7 +1858,7 @@ export function VoicePanel({
           />
         ) : null}
 
-        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAvatarContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "history" ? (
+        {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "history" ? (
           <HistoryPanel
             historyItems={historyItems}
             useHistoryItem={useHistoryItem}
