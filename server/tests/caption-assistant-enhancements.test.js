@@ -577,6 +577,27 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
 
       const greenPlan = parseNaturalLanguageEditingPlan("Change the highlighted word color to green");
       assert.equal(greenPlan.actions[0].params.style.activeWordColor, "#00FF00");
+
+      // Verify resolveColorToHex exports and handles case-insensitivity, 3-digit & 6-digit hex, and invalid values
+      assert.equal(resolveColorToHex("RED"), "#FF0000");
+      assert.equal(resolveColorToHex("  blue  "), "#0000FF");
+      assert.equal(resolveColorToHex("#ff0000"), "#FF0000");
+      assert.equal(resolveColorToHex("#00ff00"), "#00FF00");
+      assert.equal(resolveColorToHex("#f00"), "#FF0000");
+      assert.equal(resolveColorToHex("#0f0"), "#00FF00");
+      assert.equal(resolveColorToHex("#00f"), "#0000FF");
+      assert.equal(resolveColorToHex("#abc"), "#AABBCC");
+      assert.equal(resolveColorToHex("   #123456   "), "#123456");
+
+      // Invalid / unknown values return null safely
+      assert.equal(resolveColorToHex("notAColor"), null);
+      assert.equal(resolveColorToHex("#12345"), null);
+      assert.equal(resolveColorToHex("#1234567"), null);
+      assert.equal(resolveColorToHex(""), null);
+      assert.equal(resolveColorToHex("   "), null);
+      assert.equal(resolveColorToHex(null), null);
+      assert.equal(resolveColorToHex(undefined), null);
+      assert.equal(resolveColorToHex(12345), null);
     });
 
     // 4. Explicit hex colors are validated

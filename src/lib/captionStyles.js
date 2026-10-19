@@ -298,3 +298,86 @@ export function buildCaptionPresetSnapshot(name, captionStyle, captionSize) {
     style: Object.fromEntries(CAPTION_VISUAL_STYLE_KEYS.map((key) => [key, captionStyle[key]])),
   };
 }
+
+export const REAL_CAPTION_STYLE_NAMES = Object.freeze({
+  classic: "Classic",
+  bold: "Bold",
+  karaoke: "Karaoke",
+  minimal: "Minimal",
+  social: "Social",
+  plain: "Plain",
+  outline: "Outline",
+  translucent: "Translucent",
+  neon: "Neon",
+});
+
+export function getAvailableCaptionStyles(offset = 0, limit = 5) {
+  const all = BUILTIN_CAPTION_STYLE_PRESETS.map((p) => ({
+    id: p.id,
+    name: REAL_CAPTION_STYLE_NAMES[p.id] || p.id,
+    labelKey: p.labelKey,
+    sampleClass: p.sampleClass,
+    captionSize: p.captionSize,
+    style: p.style,
+  }));
+  const items = all.slice(offset, offset + limit);
+  const nextOffset = offset + limit < all.length ? offset + limit : null;
+  const hasMore = nextOffset !== null;
+  return { items, hasMore, nextOffset, total: all.length };
+}
+
+export function findCaptionStylePreset(query) {
+  if (!query || typeof query !== "string") return null;
+  const q = query.trim().toLowerCase();
+  return (
+    BUILTIN_CAPTION_STYLE_PRESETS.find(
+      (p) =>
+        p.id.toLowerCase() === q ||
+        (REAL_CAPTION_STYLE_NAMES[p.id] && REAL_CAPTION_STYLE_NAMES[p.id].toLowerCase() === q)
+    ) || null
+  );
+}
+
+export const SUPPORTED_CAPTION_EFFECTS = Object.freeze(["normal", "neon"]);
+
+export const NAMED_COLOR_MAP = Object.freeze({
+  red: "#FF0000",
+  green: "#00FF00",
+  blue: "#0000FF",
+  yellow: "#FFFF00",
+  cyan: "#00FFFF",
+  magenta: "#FF00FF",
+  white: "#FFFFFF",
+  black: "#000000",
+  orange: "#FFA500",
+  purple: "#800080",
+  pink: "#FFC0CB",
+  gold: "#FFD700",
+  teal: "#008080",
+  lime: "#00FF00",
+  violet: "#EE82EE",
+  amber: "#FFBF00",
+  emerald: "#50C878",
+  indigo: "#4B0082",
+  crimson: "#DC143C",
+  coral: "#FF7F50",
+  turquoise: "#40E0D0",
+  navy: "#000080",
+  silver: "#C0C0C0",
+  gray: "#808080",
+  grey: "#808080",
+});
+
+export function resolveColorToHex(input) {
+  if (!input || typeof input !== "string") return null;
+  const str = input.trim();
+  const lower = str.toLowerCase();
+  if (NAMED_COLOR_MAP[lower]) return NAMED_COLOR_MAP[lower];
+  if (/^#[0-9a-fA-F]{6}$/.test(str)) {
+    return str.toUpperCase();
+  }
+  if (/^#[0-9a-fA-F]{3}$/.test(str)) {
+    return `#${str[1]}${str[1]}${str[2]}${str[2]}${str[3]}${str[3]}`.toUpperCase();
+  }
+  return null;
+}
