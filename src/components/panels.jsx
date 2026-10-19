@@ -1484,7 +1484,7 @@ export function ToolPanel(props) {
             ["remove-pauses", Waveform, t("pauseTitle"), t("pauseHint")],
             ["ai-music", MusicNote, aiCopy.title, aiCopy.hint],
             ["smart-frame", FrameCorners, t("smartFrame"), t("smartFrameHint")],
-            ["smart-zoom", MagnifyingGlassPlus, t("smartZoomTitle", "智能变焦特写"), t("smartZoomHint", "人脸居中 · 节奏推进与跳切")],
+            ["smart-zoom", MagnifyingGlassPlus, t("smartZoomTitle", uiLanguage === "zh" ? "智能变焦特写" : "Smart Zoom"), t("smartZoomHint", uiLanguage === "zh" ? "人脸居中 · 节奏推进与跳切" : "Face close-ups & dynamic transitions")],
           ].map(([id, Icon, title, hint]) => (
             <button
               className={smartMode === id ? "is-active" : ""}

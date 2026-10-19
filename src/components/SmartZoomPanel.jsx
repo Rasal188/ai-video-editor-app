@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, Component } from "react";
 import {
   MagnifyingGlassPlus,
   Trash,
@@ -7,6 +7,7 @@ import {
   User,
   ArrowsInLineHorizontal,
   ArrowCounterClockwise,
+  Warning,
 } from "@phosphor-icons/react";
 import { applyCommandPlan } from "../lib/projectCommandEngine.js";
 import { detectSpeechPunchInMoments, inspectPunchIns } from "../lib/smartZoom.js";
@@ -18,7 +19,48 @@ function formatTimestamp(seconds) {
   return `${mins}:${secs}`;
 }
 
-export function SmartZoomPanel({
+class SmartZoomErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("[SmartZoomPanel] Error caught by boundary:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const { t } = this.props;
+      return (
+        <div className="smart-zoom-panel" style={{ padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#f87171", marginBottom: 8 }}>
+            <Warning size={20} weight="bold" />
+            <strong>{t?.("smartZoomErrorTitle", "Smart Zoom unavailable") || "Smart Zoom unavailable"}</strong>
+          </div>
+          <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 12 }}>
+            {t?.("smartZoomErrorDesc", "An unexpected error occurred while loading Smart Zoom.") || "An unexpected error occurred while loading Smart Zoom."}
+          </p>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: 12, padding: "6px 12px" }}
+            onClick={() => this.setState({ hasError: false, error: null })}
+          >
+            {t?.("retry", "Retry") || "Retry"}
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function SmartZoomPanelInner({
   t,
   getProjectSnapshot,
   onApplyPlan,
@@ -36,19 +78,28 @@ export function SmartZoomPanel({
   const [transitionDuration, setTransitionDuration] = useState(0.35);
   const [anchorFace, setAnchorFace] = useState(true);
 
-  const activeClipId = selectedVisualSegment?.id || visualSegments[0]?.id || "";
-  const activeClip = visualSegments.find((c) => c.id === activeClipId) || selectedVisualSegment;
+  const safeVisualSegments = Array.isArray(visualSegments) ? visualSegments : [];
+  const activeClipId = selectedVisualSegment?.id || safeVisualSegments[0]?.id || "";
+  const activeClip = safeVisualSegments.find((c) => c?.id === activeClipId) || selectedVisualSegment || null;
 
   // Compute active punch-ins from the current project snapshot or visualSegments
   const activePunchIns = useMemo(() => {
-    const proj = (getProjectSnapshot ? getProjectSnapshot() : null)
-      || { visualSegments: visualSegments.length ? visualSegments : (activeClip ? [activeClip] : []) };
-    const inspection = inspectPunchIns(proj);
-    if (scope === "clip") {
-      return inspection.filter((item) => item.clipId === activeClipId);
+    try {
+      const proj = (typeof getProjectSnapshot === "function" ? getProjectSnapshot() : null)
+        || { visualSegments: safeVisualSegments.length ? safeVisualSegments : (activeClip ? [activeClip] : []) };
+      const inspection = inspectPunchIns(proj);
+      const punchInsList = Array.isArray(inspection)
+        ? inspection
+        : (Array.isArray(inspection?.punchIns) ? inspection.punchIns : []);
+      if (scope === "clip") {
+        return activeClipId ? punchInsList.filter((item) => item && item.clipId === activeClipId) : [];
+      }
+      return punchInsList;
+    } catch (err) {
+      console.error("[SmartZoomPanel] Failed to inspect punch-ins:", err);
+      return [];
     }
-    return inspection;
-  }, [getProjectSnapshot, visualSegments, activeClip, scope, activeClipId]);
+  }, [getProjectSnapshot, safeVisualSegments, activeClip, scope, activeClipId]);
 
   const handleAddPunchIn = useCallback(() => {
     const currentProj = (getProjectSnapshot ? getProjectSnapshot() : null)
@@ -540,13 +591,13 @@ export function SmartZoomPanel({
             >
               <div>
                 <div style={{ fontWeight: 600, color: "#e2e8f0" }}>
-                  {`${formatTimestamp(p.timestamp)} · ${p.scale.toFixed(2)}x`}
+                  {`${formatTimestamp(p.timelineTime ?? p.time ?? p.timestamp ?? 0)} · ${(Number(p.scale) || 1).toFixed(2)}x`}
                   <span style={{ marginLeft: 6, fontSize: 10, color: "#38bdf8", background: "rgba(56,189,248,0.12)", padding: "2px 6px", borderRadius: 4 }}>
-                    {p.transitionDuration > 0 ? "平滑" : "跳切"}
+                    {(p.transition === "smooth" || (p.transitionDuration || 0) > 0) ? (t?.("smartZoomSmoothBadge", "平滑") || "平滑") : (t?.("smartZoomJumpBadge", "跳切") || "跳切")}
                   </span>
                 </div>
                 <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
-                  {`持续 ${p.duration.toFixed(1)}s · ${p.anchorFace ? "人脸锚定" : "中心缩放"}`}
+                  {`${t?.("smartZoomDurationLabel", "持续") || "持续"} ${(Number(p.duration) || 0).toFixed(1)}s · ${(p.faceAnchored ?? p.anchorFace) ? (t?.("smartZoomFaceAnchoredBadge", "人脸锚定") || "人脸锚定") : (t?.("smartZoomCenterBadge", "中心缩放") || "中心缩放")}`}
                 </div>
               </div>
               <button
@@ -558,7 +609,7 @@ export function SmartZoomPanel({
                   cursor: "pointer",
                   padding: 4,
                 }}
-                title="删除此特写"
+                title={t?.("smartZoomDeletePunchIn", "删除此特写") || "删除此特写"}
                 onClick={() => handleRemovePunchIn(p.clipId, p.punchInId)}
                 onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
                 onMouseLeave={(e) => (e.currentTarget.style.color = "#94a3b8")}
@@ -571,5 +622,13 @@ export function SmartZoomPanel({
         </div>
       )}
     </div>
+  );
+}
+
+export function SmartZoomPanel(props) {
+  return (
+    <SmartZoomErrorBoundary t={props?.t}>
+      <SmartZoomPanelInner {...props} />
+    </SmartZoomErrorBoundary>
   );
 }

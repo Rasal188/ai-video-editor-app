@@ -368,6 +368,53 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
       assert.equal(intent.type, "unsupported_font");
       assert.match(intent.clarification.message, /not available/i);
     });
+
+    it("findCaptionFontInCatalog correctly resolves fonts by id, family, or label case-insensitively", () => {
+      // By exact id
+      const interById = findCaptionFontInCatalog("inter");
+      assert.ok(interById);
+      assert.equal(interById.id, "inter");
+
+      // Case-insensitive family
+      const poppinsByFamily = findCaptionFontInCatalog("Poppins");
+      assert.ok(poppinsByFamily);
+      assert.equal(poppinsByFamily.id, "poppins");
+
+      // By label / display name
+      const barlow = findCaptionFontInCatalog("Barlow Condensed");
+      assert.ok(barlow);
+      assert.equal(barlow.id, "barlow-condensed");
+
+      // Quoted input
+      const quoted = findCaptionFontInCatalog('"Montserrat"');
+      assert.ok(quoted);
+      assert.equal(quoted.id, "montserrat");
+
+      // Unknown / empty / invalid queries
+      assert.equal(findCaptionFontInCatalog("NonExistentFont123"), null);
+      assert.equal(findCaptionFontInCatalog(""), null);
+      assert.equal(findCaptionFontInCatalog("   "), null);
+      assert.equal(findCaptionFontInCatalog(null), null);
+      assert.equal(findCaptionFontInCatalog(undefined), null);
+    });
+
+    it("getAvailableCaptionFontChoices provides paginated font list with metadata", () => {
+      const page1 = getAvailableCaptionFontChoices("en", 0, 5);
+      assert.equal(page1.items.length, 5);
+      assert.equal(page1.hasMore, true);
+      assert.equal(page1.nextOffset, 5);
+      assert.ok(page1.total >= 10);
+      assert.ok(page1.items[0].id);
+      assert.ok(page1.items[0].name);
+
+      const page2 = getAvailableCaptionFontChoices("en", 5, 5);
+      assert.equal(page2.items.length, 5);
+      // Ensure no duplicates between page 1 and page 2
+      const ids1 = new Set(page1.items.map((i) => i.id));
+      for (const item of page2.items) {
+        assert.equal(ids1.has(item.id), false);
+      }
+    });
   });
 
   // =========================================================================

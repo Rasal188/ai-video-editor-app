@@ -282,3 +282,32 @@ export async function ensureCaptionFontLoaded(fontId, text = "") {
   }
   return selected;
 }
+
+export function getAvailableCaptionFontChoices(language = "en", offset = 0, limit = 5) {
+  const fonts = getCaptionFontsForLanguage(language);
+  const items = fonts.slice(offset, offset + limit).map((f) => ({
+    id: f.id,
+    name: f.label && f.label !== f.id ? f.label : (f.family || f.id),
+    family: f.family,
+    label: f.label,
+    category: f.category,
+    sample: f.sample,
+  }));
+  const nextOffset = offset + limit < fonts.length ? offset + limit : null;
+  const hasMore = nextOffset !== null;
+  return { items, hasMore, nextOffset, total: fonts.length };
+}
+
+export function findCaptionFontInCatalog(query) {
+  if (!query || typeof query !== "string") return null;
+  const q = query.trim().toLowerCase().replace(/['"]/g, "");
+  if (!q) return null;
+  return (
+    CAPTION_FONT_CATALOG.find(
+      (f) =>
+        Boolean(f?.id && f.id.toLowerCase() === q) ||
+        Boolean(f?.family && f.family.toLowerCase() === q) ||
+        Boolean(f?.label && f.label.toLowerCase() === q)
+    ) || null
+  );
+}
