@@ -281,7 +281,7 @@ function addAudioTrack({ args, filters, inputs, segments, mediaEntry, mediaEntri
     const volume = Number.isFinite(Number(segment.volume)) ? Number(segment.volume) : defaultVolume;
     const label = `${prefix}${index}`;
     const tempo = Math.abs(rate - 1) < 1e-6 ? "" : `${atempoChain(rate)},`;
-    filters.push(`[${inputIndex}:a]atrim=start=${sourceStart}:duration=${sourceDuration},asetpts=PTS-STARTPTS,${tempo}volume=${volume},adelay=${Math.round(start * 1000)}:all=1,apad,atrim=duration=${duration}[${label}]`);
+    filters.push(`[${inputIndex}:a]atrim=start=${sourceStart}:duration=${sourceDuration},asetpts=PTS-STARTPTS,${tempo}volume=${volume},adelay=${Math.round(start * 1000)}:all=1,apad,asetpts=PTS-STARTPTS,atrim=duration=${duration}[${label}]`);
     return `[${label}]`;
   });
 }
@@ -291,7 +291,7 @@ export function buildFfmpegRenderPlan({ project, media = {}, extractedFiles, med
   assertSupportedProject(project || {});
   const visuals = project.visualSegments || [];
   if (!visuals.length) throw renderError("EMPTY_TIMELINE", "Headless render requires at least one visual clip");
-  const ratio = RATIO_SIZES[project.ratioId] || RATIO_SIZES["16:9"];
+  const ratio = RATIO_SIZES[project.ratioId || project.aspectRatio] || RATIO_SIZES["16:9"];
   const width = evenDimension(settings.width, ratio.width, "width");
   const height = evenDimension(settings.height, ratio.height, "height");
   const frameRate = Math.max(1, Math.min(60, Math.round(Number(settings.frameRate) || 30)));
@@ -343,7 +343,11 @@ export function buildFfmpegRenderPlan({ project, media = {}, extractedFiles, med
     const sourceStart = Math.max(0, Number(segment.sourceStart) || 0);
     const rate = Math.max(0.25, Math.min(4, Number(segment.playbackRate) || 1));
     const trim = segment.type === "video" ? `trim=start=${sourceStart}:duration=${clipDuration * rate},setpts=(PTS-STARTPTS)/${rate},` : "";
-    filters.push(`[${inputIndex}:v]${trim}scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=${frameRate},settb=1/${frameRate},setsar=1,format=yuv420p[v${index}]`);
+    const fitMode = segment.fitMode || project.fitMode || "contain";
+    const scaleFilter = fitMode === "cover"
+      ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},`
+      : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,`;
+    filters.push(`[${inputIndex}:v]${trim}${scaleFilter}fps=${frameRate},settb=1/${frameRate},setsar=1,format=yuv420p[v${index}]`);
 
     if (hasVisualAudio) {
       if (hasAudio) {

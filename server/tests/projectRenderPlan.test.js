@@ -218,6 +218,7 @@ describe("Headless Render Plan & Embedded Audio", () => {
     const fcIdx = plan.args.indexOf("-filter_complex");
     const filterGraph = plan.args[fcIdx + 1];
     assert.match(filterGraph, /concat=n=1:v=1:a=1\[vout\]\[vaout\]/);
+    assert.match(filterGraph, /adelay=500:all=1,apad,asetpts=PTS-STARTPTS,atrim=duration=5\[voice0\]/);
     assert.match(filterGraph, /\[vaout\]\[voice0\]\[music0\]amix=inputs=3/);
   });
 
