@@ -18,12 +18,14 @@ import { CloudRenderModal } from "./components/CloudRenderModal.jsx";
 import { TranscriptReviewModal } from "./components/TranscriptReviewModal.jsx";
 import { SmartPipelineModal } from "./components/SmartPipelineModal.jsx";
 import { SceneDetectionModal } from "./components/SceneDetectionModal.jsx";
+import { AiAssistantPanel } from "./components/AiAssistantPanel.jsx";
 import {
   canShowFirstVisualGuide,
   FIRST_VISUAL_GUIDE_MOBILE_QUERY,
   hasSeenFirstVisualGuide,
   markFirstVisualGuideSeen,
 } from "./lib/firstVisualGuide.js";
+import { normalizeTrackLocks, normalizeTrackVisibility } from "./lib/projectTrackState.js";
 import { useExportElapsed } from "./hooks/useExportElapsed.js";
 import { usePreviewFrameSize } from "./hooks/usePreviewFrameSize.js";
 import { useEditorCatalog } from "./hooks/useEditorCatalog.js";
@@ -39,7 +41,6 @@ import { useVoiceRecorder } from "./hooks/useVoiceRecorder.js";
 import { useVoiceGeneration } from "./hooks/useVoiceGeneration.js";
 import { useVoiceProfiles } from "./hooks/useVoiceProfiles.js";
 import { useAutoCaptions } from "./hooks/useAutoCaptions.js";
-import { useAutoEdit } from "./hooks/useAutoEdit.js";
 import { useSilenceRemoval } from "./hooks/useSilenceRemoval.js";
 import { useRoughCut } from "./hooks/useRoughCut.js";
 import { useSmartPipeline } from "./hooks/useSmartPipeline.js";
@@ -49,7 +50,6 @@ import { sampleEditorMedia } from "./lib/webMcpMediaSample.js";
 import { browserProjectFingerprint, restoreBrowserProjectMedia } from "./lib/browserEditPlan.js";
 import { useSourceAudioExtraction } from "./hooks/useSourceAudioExtraction.js";
 import { useVocalSeparation } from "./hooks/useVocalSeparation.js";
-import { useAvatarGeneration } from "./hooks/useAvatarGeneration.js";
 import { useFaceSwapGeneration } from "./hooks/useFaceSwapGeneration.js";
 import { useDepthOfFieldAnalysis } from "./hooks/useDepthOfFieldAnalysis.js";
 import { useCaptionState } from "./hooks/useCaptionState.js";
@@ -120,6 +120,7 @@ export function App({
   onLogout,
   activeProject = null,
   initialImportFile = null,
+  initialGeneratedProject = null,
   onBackToDashboard = null,
 } = {}) {
   const [uiLanguage, setUiLanguage] = useState(() => getStoredLanguage());
@@ -233,9 +234,7 @@ export function App({
     progress: 0,
     phase: "",
   });
-  const [avatarPanelOpen, setAvatarPanelOpen] = useState(false);
-  const [smartMode, setSmartMode] = useState("auto-edit");
-  const [avatarJob, setAvatarJob] = useState({ running: false, progress: 0, phase: "" });
+  const [smartMode, setSmartMode] = useState("smart-pipeline");
   const lastSaved = useAutosaveTimestamp([
     script, imageSrc, visualType, imageDuration, captionPlacement, selectedVoiceId, speed,
     volume, musicName, musicDuration, musicStart, musicVolume, sourceAudioName, sourceAudioDuration,
@@ -245,7 +244,6 @@ export function App({
 
   const {
     assetDropPulseTimerRef, audioRef, audioSegmentRefs, audioUrlRef, autoRatioSourceKeyRef,
-    avatarMotionCacheRef, avatarMotionWorkerRef, avatarRenderWorkerRef,
     currentTimeRef, draggedAssetIdRef,
     exportAbortControllerRef, exportStartRef, fileInputRef, imageUrlRefs, musicRef, musicUrlRef, pointerAssetDragRef,
     previewCanvasRef, previewShellRef, previewVideoRef, projectFileInputRef, sourceAudioRef,
@@ -745,10 +743,6 @@ export function App({
     setCaptionsEnabled(true);
     setTrackVisibility((current) => ({ ...current, caption: true }));
   };
-  const autoEdit = useAutoEdit({
-    language: activeLanguage, visualSegments, captionSegments, commitCaptionSegments, setCaptionsEnabled,
-    setTrackVisibility, setSelectedSegmentId, setSelectedTrack, notify, t,
-  });
   const {
     clearAudioTrack, clearMusicTrack, clearSourceAudioTrack, commitAudio, commitAudioBatch,
     replaceAudio, replaceMusic, replaceSourceAudio,
@@ -879,7 +873,7 @@ export function App({
     chooseInterfaceLanguage, clearAllVisionState, selectTool, toggleTrackLock,
     toggleTrackVisibility, useHistoryItem,
   } = createEditorCommandActions({
-    notify, replaceAudio, script, selectedTrack, selectedVisualSegment, selectedVisualOverlay, setActiveTool, setAvatarPanelOpen, setCaptionSegments,
+    notify, replaceAudio, script, selectedTrack, selectedVisualSegment, selectedVisualOverlay, setActiveTool, setCaptionSegments,
     setIntroClosing, setScript, setSelectedSegmentId, setSelectedTrack,
     setSelectedVoiceId, setTrackLocks, setTrackVisibility, setUiLanguage,
     setVisionJob, setVisionRecords, setVoiceTab, visionAbortControllerRef,
@@ -931,12 +925,6 @@ export function App({
     commitStickerSegments(stickerSegments.filter((segment) => segment.id !== selectedStickerSegment.id), "已删除贴纸片段");
   };
 
-  const { generateAvatarAcceptanceFrame, openAvatarPanel } = useAvatarGeneration({
-    audioBlob, audioDuration, avatarJob, avatarMotionCacheRef, avatarMotionWorkerRef,
-    avatarRenderWorkerRef, imageDuration, imageUrlRefs, notify, previewVisualSegment,
-    previewVisualSrc, previewVisualType, replaceVisualTimeline, setAvatarJob,
-    setAvatarPanelOpen, setCurrentTime, setUserAssets, t,
-  });
   const faceSwap = useFaceSwapGeneration({
     downloadBlob, imageDuration, imageUrlRefs, notify, previewVisualSegment, previewVisualSrc,
     previewVisualType, setActiveTool, setMediaTab, setSelectedLibraryAssetId,
@@ -1116,7 +1104,7 @@ export function App({
 
   useEditorLifecycle({
     activeLanguage, audioSegments, audioUrlRef, autoRatioSourceKeyRef,
-    avatarMotionWorkerRef, avatarRenderWorkerRef, captionSegments, currentVisualSegment, handleDeleteTrack,
+captionSegments, currentVisualSegment, handleDeleteTrack,
     imageUrlRefs, musicBlob, musicUrlRef, notify, ratioId, replaceAudio,
     replaceVisualTimeline, selectedAudioSegmentId, selectedSegmentId,
     selectedStickerSegmentId, selectedTrack, selectedVisualSegmentId, setCurrentVisualAsset,
@@ -1248,7 +1236,8 @@ export function App({
     setCaptionsEnabled, setProgress, setScript, setSelectedSegmentId,
     setSelectedTrack, setStatus, setStatusText, setTrackVisibility, sourceAudioBlob,
     sourceAudioStart, status, t, trackLocks, uiLanguage,
-    setTranscriptReview,
+    setTranscriptReview, visualSegments, audioSegments, userAssets,
+    selectedVisualSegmentId, selectedAudioSegmentId,
   });
 
   const handleFiles = useFileUpload({
@@ -1555,6 +1544,239 @@ export function App({
     currentTimeRef.current = nextTime;
     setCurrentTime(nextTime);
   };
+  const [isAssistantExpanded, setIsAssistantExpanded] = useState(false);
+  const handleApplyAssistantPlan = useCallback((nextProject, plan, mediaOrigins) => {
+    const snapshot = getProjectSnapshot();
+    const runtime = getBrowserRuntimeProject();
+    const origins = mediaOrigins || plan?.mediaOrigins || {};
+    const next = restoreBrowserProjectMedia(nextProject, runtime, origins, userAssets);
+    const nextVisuals = next.visualSegments;
+    const visualsChanged = JSON.stringify(snapshot.visualSegments) !== JSON.stringify(nextProject.visualSegments);
+
+    checkpointHistory();
+    const ratioSource = nextVisuals.find((clip) => clip.width > 0 && clip.height > 0);
+    if (ratioSource) autoRatioSourceKeyRef.current = `${ratioSource.assetId || ratioSource.id}:${ratioSource.width}x${ratioSource.height}`;
+    pauseTimelineMedia();
+    setIsPlaying(false);
+
+    if (next.script !== undefined) setScript(next.script);
+    if (next.audioSegments !== undefined) {
+      setAudioSegments(next.audioSegments);
+      if (!next.audioSegments.length) {
+        setSelectedAudioSegmentId("");
+      }
+    }
+    if (next.captionSegments !== undefined) setCaptionSegments(next.captionSegments);
+    if (next.timelineMarkers !== undefined) setTimelineMarkers(next.timelineMarkers);
+    if (next.captionsEnabled !== undefined) setCaptionsEnabled(next.captionsEnabled);
+    if (next.captionStyle !== undefined) setCaptionStyle(next.captionStyle);
+    if (next.captionSize !== undefined) setCaptionSize(next.captionSize);
+    if (next.captionStylePresetId !== undefined) setCaptionStylePresetId(next.captionStylePresetId);
+    if (next.captionPlacement !== undefined) setCaptionPlacement(next.captionPlacement);
+    if (next.captionPosition !== undefined) setCaptionPosition(next.captionPosition);
+    if (next.ratioId !== undefined) setRatioId(next.ratioId);
+    if (next.fitMode !== undefined) setFitMode(next.fitMode);
+    if (next.visualOverlaySegments !== undefined) setVisualOverlaySegments(next.visualOverlaySegments);
+    if (next.stickerSegments !== undefined) setStickerSegments(next.stickerSegments);
+    if (next.musicSegments !== undefined) {
+      setMusicSegments(next.musicSegments);
+      if (!next.musicSegments.length) {
+        setMusicBlob(null);
+        setMusicUrl("");
+        setMusicPeaks([]);
+        setMusicDuration(0);
+        setMusicName("");
+        setMusicStart(0);
+        setMusicVolume(0);
+        setSelectedMusicSegmentId("");
+      } else {
+        const firstMusic = next.musicSegments[0];
+        if (firstMusic) {
+          if (firstMusic.blob) setMusicBlob(firstMusic.blob);
+          if (firstMusic.url) setMusicUrl(firstMusic.url);
+          if (firstMusic.name) setMusicName(firstMusic.name);
+          if (typeof firstMusic.volume === "number") setMusicVolume(firstMusic.volume);
+          if (typeof firstMusic.duration === "number") setMusicDuration(firstMusic.duration);
+        }
+      }
+    }
+    if (next.trackVisibility !== undefined) setTrackVisibility(next.trackVisibility);
+
+    const message = plan?.explanation || "Applied AI editing plan";
+    if (visualsChanged) {
+      if (nextVisuals.length) commitVisualSegments(nextVisuals, message, 0);
+      else clearImageTrack(message);
+    } else {
+      notify(message);
+    }
+  }, [
+    getProjectSnapshot,
+    getBrowserRuntimeProject,
+    userAssets,
+    checkpointHistory,
+    pauseTimelineMedia,
+    setIsPlaying,
+    setScript,
+    setAudioSegments,
+    setSelectedAudioSegmentId,
+    setCaptionSegments,
+    setTimelineMarkers,
+    setCaptionsEnabled,
+    setCaptionStyle,
+    setCaptionSize,
+    setCaptionStylePresetId,
+    setCaptionPlacement,
+    setCaptionPosition,
+    setRatioId,
+    setFitMode,
+    setVisualOverlaySegments,
+    setStickerSegments,
+    setMusicSegments,
+    setMusicBlob,
+    setMusicUrl,
+    setMusicPeaks,
+    setMusicDuration,
+    setMusicName,
+    setMusicStart,
+    setMusicVolume,
+    setSelectedMusicSegmentId,
+    setTrackVisibility,
+    commitVisualSegments,
+    clearImageTrack,
+    notify,
+  ]);
+  const initialGeneratedProjectLoadedRef = useRef(false);
+  const isApplyingGeneratedProjectRef = useRef(false);
+
+  const handleApplyGeneratedProject = useCallback((genProject) => {
+    if (!genProject || !Array.isArray(genProject.visualSegments)) return;
+    if (isApplyingGeneratedProjectRef.current) return;
+    isApplyingGeneratedProjectRef.current = true;
+
+    try {
+      checkpointHistory();
+      pauseTimelineMedia();
+      setIsPlaying(false);
+
+    if (genProject.visualSegments) {
+      for (const seg of genProject.visualSegments) {
+        if (seg.blob instanceof Blob && (!seg.src || typeof seg.src !== "string")) {
+          seg.src = URL.createObjectURL(seg.blob);
+        }
+        if (seg.src?.startsWith("blob:")) {
+          imageUrlRefs.current.add(seg.src);
+        }
+      }
+    }
+
+    if (genProject.musicSegments) {
+      for (const seg of genProject.musicSegments) {
+        if (seg.blob instanceof Blob && (!seg.url || typeof seg.url !== "string")) {
+          seg.url = URL.createObjectURL(seg.blob);
+        }
+        if (seg.url?.startsWith("blob:")) {
+          imageUrlRefs.current.add(seg.url);
+        }
+      }
+    }
+
+    if (genProject.audioSegments) {
+      for (const seg of genProject.audioSegments) {
+        if (seg.blob instanceof Blob && (!seg.url || typeof seg.url !== "string")) {
+          seg.url = URL.createObjectURL(seg.blob);
+        }
+        if (seg.url?.startsWith("blob:")) {
+          imageUrlRefs.current.add(seg.url);
+        }
+      }
+    }
+
+    const targetRatio = genProject.ratioId || "16:9";
+    autoRatioSourceKeyRef.current = `locked:${targetRatio}`;
+    setRatioId(targetRatio);
+    if (genProject.fitMode) setFitMode(genProject.fitMode);
+    if (genProject.script !== undefined) setScript(genProject.script);
+    if (genProject.captionSegments !== undefined) setCaptionSegments(genProject.captionSegments);
+    if (genProject.captionsEnabled !== undefined) setCaptionsEnabled(genProject.captionsEnabled);
+    if (genProject.captionPosition !== undefined) setCaptionPosition(genProject.captionPosition);
+    if (genProject.captionStylePresetId !== undefined) setCaptionStylePresetId(genProject.captionStylePresetId);
+    if (genProject.timelineMarkers !== undefined) setTimelineMarkers(genProject.timelineMarkers);
+    if (genProject.audioSegments !== undefined) setAudioSegments(genProject.audioSegments);
+    if (genProject.selectedVoiceId) setSelectedVoiceId(genProject.selectedVoiceId);
+    if (genProject.musicSegments !== undefined) {
+      setMusicSegments(genProject.musicSegments);
+      if (genProject.musicSegments[0]?.blob) {
+        setMusicBlob(genProject.musicSegments[0].blob);
+        if (genProject.musicSegments[0].url) {
+          setMusicUrl(genProject.musicSegments[0].url);
+        }
+        if (typeof genProject.musicSegments[0].volume === "number") {
+          setMusicVolume(genProject.musicSegments[0].volume);
+        }
+      }
+    }
+    setTrackVisibility((prev) => {
+      const incoming = genProject.trackVisibility || {};
+      return normalizeTrackVisibility({
+        ...prev,
+        ...incoming,
+        image: true,
+      });
+    });
+    setTrackLocks((prev) => {
+      const incoming = genProject.trackLocks || {};
+      return normalizeTrackLocks({
+        ...prev,
+        ...incoming,
+        image: false,
+      });
+    });
+
+    const message = `Generated video: "${genProject.title || "AI Video"}"`;
+    if (genProject.visualSegments.length) {
+      commitVisualSegments(genProject.visualSegments, message, 0);
+    } else {
+      clearImageTrack(message);
+    }
+
+    setCurrentTime(0);
+    seekTo(0);
+    notify(message);
+    } finally {
+      isApplyingGeneratedProjectRef.current = false;
+    }
+  }, [
+    checkpointHistory,
+    pauseTimelineMedia,
+    setIsPlaying,
+    imageUrlRefs,
+    autoRatioSourceKeyRef,
+    setRatioId,
+    setFitMode,
+    setScript,
+    setCaptionSegments,
+    setCaptionsEnabled,
+    setCaptionPosition,
+    setCaptionStylePresetId,
+    setTimelineMarkers,
+    setAudioSegments,
+    setSelectedVoiceId,
+    setMusicSegments,
+    setTrackVisibility,
+    setTrackLocks,
+    commitVisualSegments,
+    clearImageTrack,
+    setCurrentTime,
+    seekTo,
+    notify,
+  ]);
+
+  useEffect(() => {
+    if (initialGeneratedProject && !initialGeneratedProjectLoadedRef.current) {
+      initialGeneratedProjectLoadedRef.current = true;
+      handleApplyGeneratedProject(initialGeneratedProject);
+    }
+  }, [initialGeneratedProject, handleApplyGeneratedProject]);
   const silenceRemoval = useSilenceRemoval({
     language: activeLanguage, selectedSegment: selectedVisualSegment, visualSegments, projectVersion: historySignature,
     locked: Boolean(trackLocks.image || sourceAudioBlob && sourceAudioLinked !== false && trackLocks.source),
@@ -1580,6 +1802,10 @@ export function App({
     rippleEditing,
     setRippleEditing,
     seekTo,
+    handlePlayToggle,
+    pauseTimelineMedia,
+    isPlaying,
+    setIsPlaying,
     t,
     notify,
   });
@@ -1641,25 +1867,34 @@ export function App({
     projectVersion: historySignature,
     locked: Boolean(trackLocks.image),
     seekTo,
+    handlePlayToggle,
+    pauseTimelineMedia,
+    setIsPlaying,
+    isPlaying,
+    currentTime,
     notify,
     t,
     onApplyCuts: handleApplySceneCuts,
   });
   useEffect(() => {
     if (!import.meta.env.DEV) return;
-    const handleTestOpenSceneDetection = (e) => {
-      sceneDetection.open(e?.detail?.result || e?.detail?.prefill);
-    };
-    const handleTestApplySceneCuts = (e) => {
-      handleApplySceneCuts(e?.detail || {});
-    };
-    window.addEventListener("test:open-scene-detection", handleTestOpenSceneDetection);
-    window.addEventListener("test:apply-scene-cuts", handleTestApplySceneCuts);
+    let cleanup = null;
+    import("./lib/devTestBridge.js")
+      .then(({ registerDevTestBridge }) => {
+        cleanup = registerDevTestBridge({
+          getProjectSnapshot,
+          sceneDetection,
+          handleApplySceneCuts,
+          setIsAssistantExpanded,
+          handleApplyAssistantPlan,
+          handleApplyGeneratedProject,
+        });
+      })
+      .catch(() => {});
     return () => {
-      window.removeEventListener("test:open-scene-detection", handleTestOpenSceneDetection);
-      window.removeEventListener("test:apply-scene-cuts", handleTestApplySceneCuts);
+      cleanup?.();
     };
-  }, [sceneDetection, handleApplySceneCuts]);
+  }, [sceneDetection, handleApplySceneCuts, handleApplyAssistantPlan, handleApplyGeneratedProject, getProjectSnapshot]);
   const webMcp = useWebMcpEditor({
     language: activeLanguage, visualSegments, visualOverlaySegments, audioSegments, musicSegments,
     sourceAudioBlob, musicBlob, audioBlob, rippleEditing, getProjectSnapshot,
@@ -1687,7 +1922,7 @@ export function App({
     seek: (time) => { pauseTimelineMedia(); setIsPlaying(false); seekTo(time, { immediate: true }); },
     isBusy: () => Boolean(projectImportProgress || exporting || timelineClipDragRef.current || pointerAssetDragRef.current ||
       isDragging || draggedAssetId || ["generating", "captioning"].includes(status) || visualSegments.some((clip) => clip.preparing) ||
-      visualOverlaySegments.some((clip) => clip.preparing) || visionJob.running || avatarJob.running || autoEdit.job.running),
+      visualOverlaySegments.some((clip) => clip.preparing) || visionJob.running),
   });
 
   const guardAgentAi = (action) => (...args) => {
@@ -1697,8 +1932,56 @@ export function App({
   const generateVoiceoverWhenIdle = guardAgentAi(generateVoiceover);
   const generateCaptionsWhenIdle = guardAgentAi(generateCaptionsFromSourceAudio);
 
+  const handleSafeBackToDashboard = useCallback(async () => {
+    const hasMedia = Boolean(
+      visualSegments?.length ||
+      visualOverlaySegments?.length ||
+      audioSegments?.length ||
+      musicSegments?.length ||
+      sourceAudioBlob != null
+    );
+    if (hasMedia) {
+      if (currentCloudProject) {
+        const shouldSave = window.confirm(
+          `Do you want to save latest changes to "${currentCloudProject.title}" before returning to Dashboard?\n\nClick OK to save and exit, or Cancel to continue without saving.`
+        );
+        if (shouldSave) {
+          try {
+            await saveProjectToCloud();
+          } catch (e) {
+            console.error("Auto-save before exit failed:", e);
+          }
+        }
+      } else {
+        const confirmExit = window.confirm(
+          "You have media in your timeline that has not been saved to Cloud. Return to Dashboard anyway?"
+        );
+        if (!confirmExit) return;
+      }
+    }
+
+    if (typeof onBackToDashboard === "function") {
+      onBackToDashboard();
+    } else {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("view");
+      url.searchParams.delete("project");
+      window.history.pushState({}, "", url.pathname + (url.search ? url.search : ""));
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  }, [
+    visualSegments,
+    visualOverlaySegments,
+    audioSegments,
+    musicSegments,
+    sourceAudioBlob,
+    currentCloudProject,
+    saveProjectToCloud,
+    onBackToDashboard,
+  ]);
+
   return (
-    <main className={`app-shell ${isCompactViewport ? "is-compact-workspace" : ""} ${mobilePanel ? `mobile-panel-${mobilePanel}` : ""} ${isCompactViewport && mobileInspectorSection ? `mobile-section-${mobileInspectorSection}` : ""} ${isCompactViewport && mobileInspectorSection === "mask" && (selectedVisualOverlay || selectedVisualSegment)?.mask?.type && (selectedVisualOverlay || selectedVisualSegment).mask.type !== "none" ? "mobile-mask-active" : ""} ${mobilePanelClosing ? "is-mobile-panel-closing" : ""}`} lang={activeLanguage} onDragOver={(event) => {
+    <main className={`app-shell ${!isAssistantExpanded ? "is-assistant-collapsed" : ""} ${isCompactViewport ? "is-compact-workspace" : ""} ${mobilePanel ? `mobile-panel-${mobilePanel}` : ""} ${isCompactViewport && mobileInspectorSection ? `mobile-section-${mobileInspectorSection}` : ""} ${isCompactViewport && mobileInspectorSection === "mask" && (selectedVisualOverlay || selectedVisualSegment)?.mask?.type && (selectedVisualOverlay || selectedVisualSegment).mask.type !== "none" ? "mobile-mask-active" : ""} ${mobilePanelClosing ? "is-mobile-panel-closing" : ""}`} lang={activeLanguage} onDragOver={(event) => {
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
     }} onDrop={async (event) => {
       const files = Array.from(event.dataTransfer?.files ?? []);
@@ -1776,7 +2059,9 @@ export function App({
         saveProjectToCloud={saveProjectToCloud}
         handleOpenCloudProject={handleOpenCloudProject}
         handleCloudRender={handleCloudRender}
-        onBackToDashboard={onBackToDashboard}
+        onBackToDashboard={handleSafeBackToDashboard}
+        onOpenAiAssistant={() => setIsAssistantExpanded((prev) => !prev)}
+        isAssistantOpen={isAssistantExpanded}
       />
 
       <WebMcpReview agent={webMcp} language={activeLanguage} />
@@ -1810,6 +2095,29 @@ export function App({
         tool={sceneDetection}
         t={t}
       />
+      <AiAssistantPanel
+        isExpanded={isAssistantExpanded}
+        onToggleCollapse={() => setIsAssistantExpanded((prev) => !prev)}
+        getProjectSnapshot={getProjectSnapshot}
+        onApplyPlan={handleApplyAssistantPlan}
+        userAssets={userAssets}
+        projectId={currentCloudProject?.id || null}
+        notify={notify}
+        onUndo={undo}
+        onRedo={redo}
+        currentTime={currentTime}
+        selectedVisualSegmentId={selectedVisualSegment?.id || ""}
+        selectedAudioSegmentId={selectedAudioSegmentId}
+        selectedSegmentId={selectedSegmentId}
+        selectedTrack={selectedTrack}
+        onOpenSceneDetection={(clipId) => sceneDetection.open(clipId)}
+        onOpenSilenceRemoval={() => silenceRemoval.open()}
+        onOpenRoughCut={() => roughCut.open()}
+        onOpenSmartPipeline={(clipId, plan) => smartPipeline.open(clipId, plan)}
+        onGenerateCaptions={(options) => generateCaptionsWhenIdle(options)}
+        onToggleSmartFrame={() => setSmartMode((prev) => (prev === "smart-frame" ? "smart-pipeline" : "smart-frame"))}
+        onExportVideo={() => handleExportVideo()}
+      />
       <section className={`editor-grid ${compactRail ? "is-compact-rail" : ""}`}>
         <EditorSidebar model={{
           activeLanguage, activeTool, analyzeCurrentVisual, analyzeEffectVisual, audioBlob, audioDuration,
@@ -1823,7 +2131,7 @@ export function App({
           imageSrc, isDragging, mediaTab, musicBlob, musicDuration, musicName, musicVolume,
           libraryType, libraryQuery, setLibraryQuery, selectLibraryType, libraryStatus, libraryError, libraryProvider,
           assetDownloadStates, prefetchLibraryAsset,
-          notify, openAvatarPanel, openSmartPipeline: () => smartPipeline.open(), openSceneDetection: () => sceneDetection.open(), previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
+          notify, openSmartPipeline: () => smartPipeline.open(), openSceneDetection: () => sceneDetection.open(), previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
           previewVisionOptions, previewVisualSrc, previewVisualType, progress, script,
           seekTo, segments, selectTool, selectedCaptionSegment, selectedFilterId,
           selectedLibraryAssetId, selectedSegmentId, selectedStickerId, selectedTransitionId,
@@ -2021,10 +2329,8 @@ export function App({
           generateCaptionsFromSourceAudio={generateCaptionsWhenIdle}
           isGeneratingCaptions={status === "captioning"}
           automaticCaptionProgress={status === "captioning" ? progress : 0}
-          avatarPanelOpen={avatarPanelOpen}
           smartMode={smartMode}
           aiMusic={aiMusic}
-          autoEdit={autoEdit}
           silenceRemoval={silenceRemoval}
           roughCut={roughCut}
           smartPipeline={smartPipeline}
@@ -2036,13 +2342,14 @@ export function App({
           setCaptionStyle={setCaptionStyle}
           setCaptionSegments={setCaptionSegments}
           smartFrame={smartFrame}
+          getProjectSnapshot={getProjectSnapshot}
+          onApplyPlan={handleApplyAssistantPlan}
+          visualSegments={visualSegments}
           analyzeCurrentVisual={analyzeCurrentVisual}
           analyzeEffectVisual={analyzeEffectVisual}
           hasVisual={Boolean(previewVisualSrc)}
           visualType={previewVisualType}
           audioDuration={audioDuration}
-          avatarJob={avatarJob}
-          generateAvatarAcceptanceFrame={generateAvatarAcceptanceFrame}
           faceSwap={faceSwap}
           selectedTrack={selectedTrack}
           selectedAudioSegment={selectedAudioSegment}
@@ -2187,8 +2494,6 @@ export function App({
         selectedVisualOverlayId={selectedVisualOverlayId}
         setSelectedVisualOverlayId={setSelectedVisualOverlayId}
         setVisualOverlaySegments={setVisualOverlaySegments}
-        builtInImageCaptionAvailable={autoEdit.support.availability === "available"}
-        generateImageCaption={autoEdit.generateImageCaption}
         extractVideoSourceAudio={extractVideoSourceAudio}
         generateCaptionsFromAudioClip={generateCaptionsWhenIdle}
         separateAudioClipVocals={separateAudioClipVocals}

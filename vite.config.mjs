@@ -12,7 +12,24 @@ const isolationHeaders = {
   Link: agentDiscoveryLinkHeader,
 };
 
-export default defineConfig({
+function stripDevTestBridgePlugin(command) {
+  return {
+    name: "strip-dev-test-bridge",
+    enforce: "pre",
+    resolveId(id) {
+      if (id.includes("devTestBridge") && command === "build") {
+        return "\0virtual:devTestBridge";
+      }
+    },
+    load(id) {
+      if (id === "\0virtual:devTestBridge") {
+        return "export function registerDevTestBridge() { return () => {}; }";
+      }
+    },
+  };
+}
+
+export default defineConfig(({ command }) => ({
   build: {
     rollupOptions: {
       input: {
@@ -51,5 +68,5 @@ export default defineConfig({
   preview: {
     headers: isolationHeaders,
   },
-  plugins: [agentDiscoveryPlugin(), react()],
-});
+  plugins: [stripDevTestBridgePlugin(command), agentDiscoveryPlugin(), react()],
+}));

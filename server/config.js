@@ -46,4 +46,19 @@ export const config = Object.freeze({
       mailboxId: process.env.OLLASTACK_MAILBOX_ID || "",
     }),
   }),
+
+  ollima: Object.freeze({
+    apiKey: process.env.OLLIMA_API_KEY || "",
+    model: process.env.OLLIMA_MODEL || "gemini-3-flash",
+    baseUrl: process.env.OLLIMA_BASE_URL || "https://api.ollima.com/v1",
+    timeoutMs: Number.parseInt(process.env.OLLIMA_TIMEOUT_MS || "60000", 10),
+  }),
+
+  // Fallback alias for backward compatibility
+  openrouter: Object.freeze({
+    apiKey: process.env.OLLIMA_API_KEY || process.env.OPENROUTER_API_KEY || "",
+    model: process.env.OLLIMA_MODEL || process.env.OPENROUTER_MODEL || "gemini-3-flash",
+    baseUrl: process.env.OLLIMA_BASE_URL || process.env.OPENROUTER_BASE_URL || "https://api.ollima.com/v1",
+    timeoutMs: Number.parseInt(process.env.OLLIMA_TIMEOUT_MS || process.env.OPENROUTER_TIMEOUT_MS || "30000", 10),
+  }),
 });

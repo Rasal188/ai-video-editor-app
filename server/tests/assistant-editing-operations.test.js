@@ -1,0 +1,562 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { applyCommandPlan, inspectProject, inspectTrack } from "../../src/lib/projectCommandEngine.js";
+import { validateAndNormalizePlan } from "../services/ai/editingPlanSchema.js";
+import { sanitizeProjectSummary } from "../services/ai/ollimaService.js";
+import { extractMinimalProjectSummary } from "../../src/lib/assistantSummary.js";
+import { classifyUserIntent } from "../../src/lib/intentClassifier.js";
+
+describe("Assistant Editing Operations & Project Command Engine Regressions", () => {
+  const createBaseProject = () => ({
+    commandState: { schemaVersion: 1, revision: 0, appliedOperationIds: [] },
+    ratioId: "16:9",
+    fitMode: "contain",
+    visualSegments: [
+      { id: "vis-1", type: "video", duration: 10, sourceStart: 0, sourceDuration: 10, playbackRate: 1, name: "Intro Video" },
+      { id: "vis-2", type: "image", duration: 5, width: 1920, height: 1080, name: "Slide Image" },
+    ],
+    audioSegments: [
+      { id: "aud-1", name: "Voiceover 1", start: 0, duration: 8, sourceStart: 0, sourceDuration: 8, volume: 1 },
+      { id: "aud-2", name: "Voiceover 2", start: 10, duration: 4, sourceStart: 0, sourceDuration: 4, volume: 0.9 },
+    ],
+    musicSegments: [
+      { id: "mus-1", name: "Background Beats", start: 0, duration: 25, sourceStart: 0, sourceDuration: 25, volume: 0.4 },
+    ],
+    musicName: "Background Beats",
+    musicDuration: 25,
+    musicStart: 0,
+    musicVolume: 0.4,
+    captionSegments: [
+      { id: "cap-1", text: "Welcome to our video", start: 0, end: 5, audioSegmentId: "aud-1" },
+      { id: "cap-2", text: "Here is the second part", start: 10, end: 14, audioSegmentId: "aud-2" },
+    ],
+    timelineMarkers: [
+      { id: "m-1", time: 3.5, title: "Key moment", color: "cyan", type: "marker" },
+    ],
+    script: "Welcome to our video\nHere is the second part",
+    captionsEnabled: true,
+  });
+
+  describe("audio.delete and music.delete operations", () => {
+    it("should delete only the targeted audio clip and unlink associated captions while preserving other tracks", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-del-aud-1", type: "audio.delete", clipId: "aud-1" },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+
+      // Verify audioSegments state
+      assert.equal(result.project.audioSegments.length, 1);
+      assert.equal(result.project.audioSegments[0].id, "aud-2", "Unrelated audio clip aud-2 preserved");
+
+      // Verify associated caption unlinked
+      const cap1 = result.project.captionSegments.find((c) => c.id === "cap-1");
+      assert.equal(cap1.audioSegmentId, "", "cap-1 audioSegmentId should be cleared");
+      const cap2 = result.project.captionSegments.find((c) => c.id === "cap-2");
+      assert.equal(cap2.audioSegmentId, "aud-2", "cap-2 audio link should remain intact");
+
+      // Verify unrelated tracks preserved
+      assert.equal(result.project.visualSegments.length, 2, "Visual clips intact");
+      assert.equal(result.project.musicSegments.length, 1, "Music track intact");
+      assert.equal(result.project.musicSegments[0].id, "mus-1");
+      assert.equal(result.project.timelineMarkers.length, 1, "Markers intact");
+      assert.equal(result.project.captionSegments.length, 2, "Captions intact");
+    });
+
+    it("should resolve single audio clip when clipId is omitted, or fail with CLIP_ID_AMBIGUOUS if multiple exist", () => {
+      const project = createBaseProject();
+
+      // When 2 audio clips exist and clipId is omitted, should throw CLIP_ID_AMBIGUOUS
+      const ambiguousPlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [{ id: "op-ambig", type: "audio.delete", clipId: "" }],
+      };
+      const ambiguousResult = applyCommandPlan(project, ambiguousPlan);
+      assert.equal(ambiguousResult.ok, false);
+      assert.equal(ambiguousResult.code, "CLIP_ID_AMBIGUOUS");
+
+      // With only 1 audio clip, omitting clipId targets it unambiguously
+      const singleAudioProject = {
+        ...createBaseProject(),
+        audioSegments: [{ id: "solo-aud", name: "Solo", start: 0, duration: 5 }],
+      };
+      const soloPlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [{ id: "op-solo", type: "audio.delete", clipId: "" }],
+      };
+      const soloResult = applyCommandPlan(singleAudioProject, soloPlan);
+      assert.equal(soloResult.ok, true);
+      assert.equal(soloResult.project.audioSegments.length, 0);
+    });
+
+    it("should fail with CLIP_NOT_FOUND when audio target does not exist", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [{ id: "op-missing", type: "audio.delete", clipId: "nonexistent-audio" }],
+      };
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, false);
+      assert.equal(result.code, "CLIP_NOT_FOUND");
+    });
+
+    it("should delete background music and reset music project properties when empty", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [{ id: "op-del-mus", type: "music.delete", clipId: "mus-1" }],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+
+      // Verify musicSegments is empty
+      assert.equal(result.project.musicSegments.length, 0);
+
+      // Verify project music properties reset
+      assert.equal(result.project.musicName, "");
+      assert.equal(result.project.musicDuration, 0);
+      assert.equal(result.project.musicStart, 0);
+      assert.equal(result.project.musicVolume, 0);
+
+      // Verify visual and audio tracks remain untouched
+      assert.equal(result.project.visualSegments.length, 2);
+      assert.equal(result.project.audioSegments.length, 2);
+      assert.equal(result.project.captionSegments.length, 2);
+    });
+
+    it("should resolve single music clip when clipId is empty or shorthand 'music'", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [{ id: "op-del-mus-auto", type: "music.delete" }],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.musicSegments.length, 0);
+    });
+  });
+
+  describe("Clip Trimming and Splitting", () => {
+    it("should split a visual clip at specified timestamp and generate valid rightClipId", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-split", type: "visual.split", clipId: "vis-1", at: 4 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+
+      // Visuals count should now be 3 (left, right, and vis-2)
+      assert.equal(result.project.visualSegments.length, 3);
+      const left = result.project.visualSegments[0];
+      const right = result.project.visualSegments[1];
+
+      assert.equal(left.id, "vis-1");
+      assert.equal(left.duration, 4);
+      assert.equal(left.sourceDuration, 4);
+
+      assert.ok(right.id.startsWith("vis-1-split-"));
+      assert.equal(right.duration, 6);
+      assert.equal(right.sourceStart, 4);
+      assert.equal(right.sourceDuration, 6);
+
+      // vis-2 unaffected
+      assert.equal(result.project.visualSegments[2].id, "vis-2");
+      assert.equal(result.project.visualSegments[2].duration, 5);
+    });
+
+    it("should trim visual video clip within source bounds", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-trim-vid", type: "visual.trim", clipId: "vis-1", sourceIn: 2, sourceOut: 7 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      const trimmed = result.project.visualSegments[0];
+      assert.equal(trimmed.id, "vis-1");
+      assert.equal(trimmed.sourceStart, 2);
+      assert.equal(trimmed.sourceDuration, 5);
+      assert.equal(trimmed.duration, 5);
+    });
+
+    it("should trim visual image clip by updating duration", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-trim-img", type: "visual.trim", clipId: "vis-2", sourceIn: 0, sourceOut: 3 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      const trimmedImage = result.project.visualSegments[1];
+      assert.equal(trimmedImage.id, "vis-2");
+      assert.equal(trimmedImage.duration, 3);
+    });
+
+    it("should reject invalid trim ranges (sourceOut <= sourceIn)", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-trim-bad", type: "visual.trim", clipId: "vis-1", sourceIn: 5, sourceOut: 3 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, false);
+      assert.equal(result.code, "INVALID_RANGE");
+    });
+  });
+
+  describe("Clip Muting and Property Adjustments", () => {
+    it("should mute and unmute a video visual clip", () => {
+      const project = createBaseProject();
+      const mutePlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [{ id: "op-mute", type: "clip.set_muted", clipId: "vis-1", muted: true }],
+      };
+
+      const muteResult = applyCommandPlan(project, mutePlan);
+      assert.equal(muteResult.ok, true);
+      assert.equal(muteResult.project.visualSegments[0].muted, true);
+      assert.equal(muteResult.project.visualSegments[0].sourceAudioDisabled, true);
+
+      const unmutePlan = {
+        schemaVersion: 1,
+        baseRevision: 1,
+        operations: [{ id: "op-unmute", type: "clip.set_muted", clipId: "vis-1", muted: false }],
+      };
+      const unmuteResult = applyCommandPlan(muteResult.project, unmutePlan);
+      assert.equal(unmuteResult.ok, true);
+      assert.equal(unmuteResult.project.visualSegments[0].muted, false);
+      assert.equal(unmuteResult.project.visualSegments[0].sourceAudioDisabled, false);
+    });
+
+    it("should adjust audio and music volume via clip.set_property", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-vol-aud", type: "clip.set_property", clipId: "aud-1", property: "volume", value: 1.5 },
+          { id: "op-vol-mus", type: "clip.set_property", clipId: "mus-1", property: "volume", value: 0.2 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.audioSegments[0].volume, 1.5);
+      assert.equal(result.project.musicSegments[0].volume, 0.2);
+      assert.equal(result.project.musicVolume, 0.2, "project.musicVolume synchronized with music clip volume");
+    });
+
+    it("should resolve shorthand 'music' and 'audio' in setClipProperty and setClipMuted", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-shorthand-mus", type: "clip.set_property", clipId: "music", property: "volume", value: 0.6 },
+          { id: "op-shorthand-mute", type: "clip.set_muted", clipId: "music", muted: true },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.musicSegments[0].volume, 0.6);
+      assert.equal(result.project.musicSegments[0].muted, true);
+    });
+  });
+
+  describe("Caption editing and styling", () => {
+    it("should update caption text and recompute project.script", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-upd-cap", type: "caption.update", clipId: "cap-1", text: "Updated line one" },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.captionSegments[0].text, "Updated line one");
+      assert.ok(result.project.script.includes("Updated line one"));
+    });
+
+    it("should update caption style and placement", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-cap-style", type: "caption.set_style", scope: "default", style: { captionSize: 28, effect: "neon" } },
+          { id: "op-cap-pos", type: "caption.set_position", scope: "default", placement: { x: 50, y: 78 } },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.captionSize, 28);
+      assert.equal(result.project.captionStyle.effect, "neon");
+      assert.deepEqual(result.project.captionPlacement, { x: 50, y: 78 });
+    });
+  });
+
+  describe("Schema and Ollima Service Validation", () => {
+    it("should validate and normalize plans containing audio.delete, music.delete, clip.set_muted, clip.set_property", () => {
+      const rawPlan = {
+        schemaVersion: 1,
+        explanation: "Clean up audio and mute intro",
+        actions: [
+          { id: "a1", type: "audio.delete", params: { clipId: "aud-1" } },
+          { id: "a2", type: "music.delete", params: { clipId: "mus-1" } },
+          { id: "a3", type: "clip.set_muted", params: { clipId: "vis-1", muted: true } },
+          { id: "a4", type: "clip.set_property", params: { clipId: "vis-1", property: "volume", value: 0.8 } },
+          { id: "a5", type: "visual.trim", params: { clipId: "vis-1", sourceIn: 1, duration: 4 } },
+        ],
+      };
+
+      const normalized = validateAndNormalizePlan(rawPlan);
+      assert.equal(normalized.actions.length, 5);
+      assert.equal(normalized.actions[0].type, "audio.delete");
+      assert.equal(normalized.actions[1].type, "music.delete");
+      assert.equal(normalized.actions[2].type, "clip.set_muted");
+      assert.equal(normalized.actions[2].params.muted, true);
+      assert.equal(normalized.actions[3].type, "clip.set_property");
+      assert.equal(normalized.actions[3].params.property, "volume");
+      assert.equal(normalized.actions[4].type, "visual.trim");
+      assert.equal(normalized.actions[4].params.sourceIn, 1);
+      assert.equal(normalized.actions[4].params.sourceOut, 5, "duration converted to sourceOut");
+    });
+
+    it("should retain selection and playhead in sanitizeProjectSummary and extractMinimalProjectSummary", () => {
+      const project = createBaseProject();
+      const summary = extractMinimalProjectSummary(project, {
+        currentTime: 7.25,
+        selectedClipId: "vis-1",
+        selectedTrack: "visuals",
+      });
+
+      assert.equal(summary.currentTime, 7.25);
+      assert.equal(summary.selectedClipId, "vis-1");
+      assert.equal(summary.selectedTrack, "visuals");
+
+      const sanitized = sanitizeProjectSummary(summary);
+      assert.equal(sanitized.currentTime, 7.25);
+      assert.equal(sanitized.selectedClipId, "vis-1");
+      assert.equal(sanitized.selectedTrack, "visuals");
+    });
+  });
+
+  describe("Atomic Execution and Undo Safety", () => {
+    it("should atomically roll back when any operation in a multi-action plan fails", () => {
+      const project = createBaseProject();
+      const multiPlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-valid-1", type: "caption.update", clipId: "cap-1", text: "New text" },
+          { id: "op-fail-2", type: "visual.split", clipId: "vis-1", at: 999 }, // Out of range!
+          { id: "op-valid-3", type: "audio.delete", clipId: "aud-1" },
+        ],
+      };
+
+      const result = applyCommandPlan(project, multiPlan);
+      assert.equal(result.ok, false);
+      assert.equal(result.code, "INVALID_RANGE");
+
+      // Verify no partial mutations persisted into original project
+      assert.equal(project.captionSegments[0].text, "Welcome to our video");
+      assert.equal(project.audioSegments.length, 2);
+    });
+
+    it("should accurately recalculate total project duration across tracks after deletion", () => {
+      const project = createBaseProject();
+      const inspectionBefore = inspectProject(project);
+      assert.equal(inspectionBefore.duration, 25, "Music is longest track at 25s");
+
+      // Delete music track
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [{ id: "op-del-mus", type: "music.delete", clipId: "mus-1" }],
+      };
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+
+      const inspectionAfter = inspectProject(result.project);
+      // Now visual track is 10 + 5 = 15s, captions end at 14s, audio ends at 14s
+      assert.equal(inspectionAfter.duration, 15, "New duration reflects remaining longest track");
+    });
+  });
+
+  describe("Intent Classification for Editing vs Generation", () => {
+    it("should classify undo and redo requests cleanly", () => {
+      assert.equal(classifyUserIntent("undo").type, "undo");
+      assert.equal(classifyUserIntent("undo that").type, "undo");
+      assert.equal(classifyUserIntent("undo last edit").type, "undo");
+      assert.equal(classifyUserIntent("redo").type, "redo");
+      assert.equal(classifyUserIntent("redo that").type, "redo");
+    });
+
+    it("should classify audio and music operations as editing", () => {
+      assert.equal(classifyUserIntent("delete voiceover").type, "editing");
+      assert.equal(classifyUserIntent("remove the background music").type, "editing");
+      assert.equal(classifyUserIntent("mute audio").type, "editing");
+      assert.equal(classifyUserIntent("unmute the video clip").type, "editing");
+      assert.equal(classifyUserIntent("turn down the music volume").type, "editing");
+    });
+
+    it("should classify timeline trim and split commands as editing", () => {
+      assert.equal(classifyUserIntent("split clip at playhead").type, "editing");
+      assert.equal(classifyUserIntent("split the first clip at 3 seconds").type, "editing");
+      assert.equal(classifyUserIntent("trim the video to 5 seconds").type, "editing");
+      assert.equal(classifyUserIntent("delete this clip").type, "editing");
+    });
+
+    it("should route new video generation requests to unsupported_creation with guidance", () => {
+      const res = classifyUserIntent("Create a 30-second cinematic travel video about Japan");
+      assert.equal(res.type, "unsupported_creation");
+      assert.ok(res.message);
+    });
+
+    it("should classify transition, speed, duplicate, track control, and tool triggers as editing", () => {
+      assert.equal(classifyUserIntent("add a fade transition").type, "editing");
+      assert.equal(classifyUserIntent("set transition to glitch").type, "editing");
+      assert.equal(classifyUserIntent("speed up the clip to 2x").type, "editing");
+      assert.equal(classifyUserIntent("slow down playback").type, "editing");
+      assert.equal(classifyUserIntent("duplicate this clip").type, "editing");
+      assert.equal(classifyUserIntent("lock the visual track").type, "editing");
+      assert.equal(classifyUserIntent("hide audio track").type, "editing");
+      assert.equal(classifyUserIntent("detect scenes in the video").type, "editing");
+      assert.equal(classifyUserIntent("remove silence and pauses").type, "editing");
+      assert.equal(classifyUserIntent("generate auto captions").type, "editing");
+      assert.equal(classifyUserIntent("toggle smart frame").type, "editing");
+      assert.equal(classifyUserIntent("export video").type, "editing");
+    });
+  });
+
+  describe("Transitions, Speed, Duplication, and Track Controls", () => {
+    it("should duplicate visual clip and insert into timeline", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-dup", type: "visual.duplicate", clipId: "vis-1", atIndex: 1 },
+        ],
+      };
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.visualSegments.length, 3);
+      assert.equal(result.project.visualSegments[1].name, "Intro Video");
+      assert.notEqual(result.project.visualSegments[1].id, "vis-1");
+    });
+
+    it("should set transition on clip", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-trans", type: "transition.set", clipId: "vis-1", transitionId: "fade", duration: 0.8 },
+        ],
+      };
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.visualSegments[0].transition.id, "fade");
+      assert.equal(result.project.visualSegments[0].transition.duration, 0.8);
+    });
+
+    it("should set playback rate and recalculate duration on video clip", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-spd", type: "clip.set_speed", clipId: "vis-1", speed: 2.0 },
+        ],
+      };
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.visualSegments[0].playbackRate, 2.0);
+      assert.equal(result.project.visualSegments[0].duration, 5.0, "10s source / 2x speed = 5s duration");
+    });
+
+    it("should lock and unlock tracks", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-lock", type: "track.set_locked", track: "visuals", locked: true },
+        ],
+      };
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.trackLocks.image, true);
+    });
+
+    it("should set track visibility", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-vis", type: "track.set_visibility", track: "captions", visible: false },
+        ],
+      };
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.trackVisibility.caption, false);
+    });
+
+    it("should validate and normalize integrated AI tool action plans in editingPlanSchema", () => {
+      const toolPlan = {
+        schemaVersion: 1,
+        explanation: "Analyze scenes and remove silence",
+        actions: [
+          { id: "act-1", type: "tool.scene_detection", params: { clipId: "vis-1" } },
+          { id: "act-2", type: "tool.silence_removal", params: {} },
+          { id: "act-3", type: "tool.export", params: {} },
+        ],
+      };
+      const validated = validateAndNormalizePlan(toolPlan);
+      assert.equal(validated.schemaVersion, 1);
+      assert.equal(validated.actions.length, 3);
+      assert.equal(validated.actions[0].type, "tool.scene_detection");
+      assert.equal(validated.actions[1].type, "tool.silence_removal");
+      assert.equal(validated.actions[2].type, "tool.export");
+    });
+  });
+});
+

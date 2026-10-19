@@ -11,12 +11,14 @@ import {
   FileArrowDown,
   FileArrowUp,
   FilePlus,
+  FilmSlate,
   GearSix,
   GithubLogo,
   Pause,
   Play,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkle,
   SquaresFour,
   UserCircle,
   XLogo,
@@ -83,6 +85,8 @@ export function Topbar({
   handleOpenCloudProject,
   handleCloudRender,
   onBackToDashboard,
+  onOpenAiAssistant,
+  isAssistantOpen = false,
 }) {
   const exportAnchorRef = useRef(null);
   const ratioAnchorRef = useRef(null);
@@ -154,21 +158,32 @@ export function Topbar({
     return () => window.cancelAnimationFrame(frame);
   }, [modelCacheInspection.state, showSettings]);
 
+  const handleDashboardClick = () => {
+    if (typeof onBackToDashboard === "function") {
+      onBackToDashboard();
+    } else {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("view");
+      url.searchParams.delete("project");
+      window.history.pushState({}, "", url.pathname + (url.search ? url.search : ""));
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  };
+
   return (
     <header className="topbar">
       <div className="project-cluster">
-        {onBackToDashboard && (
-          <button
-            type="button"
-            className="topbar-dashboard-btn"
-            onClick={onBackToDashboard}
-            title="Return to Dashboard"
-            data-testid="topbar-back-to-dashboard-btn"
-          >
-            <SquaresFour size={16} weight="bold" />
-            <span>Dashboard</span>
-          </button>
-        )}
+        <button
+          type="button"
+          className="topbar-dashboard-btn"
+          onClick={handleDashboardClick}
+          title="Return to Dashboard"
+          aria-label="Return to Dashboard"
+          data-testid="topbar-back-to-dashboard-btn"
+        >
+          <SquaresFour size={16} weight="bold" />
+          <span>Dashboard</span>
+        </button>
         <IconButton label={t("collapseSidebar")} active={compactRail} onClick={() => setCompactRail((v) => !v)}>
           <SlidersHorizontal size={19} />
         </IconButton>
@@ -188,19 +203,18 @@ export function Topbar({
                       <span>{t("projectMenuHeading")}</span>
                       <small>Timeline Studio</small>
                     </div>
-                    {onBackToDashboard && (
-                      <button
-                        className="file-menu-action"
-                        type="button"
-                        onClick={() => {
-                          setShowFileMenu(false);
-                          onBackToDashboard();
-                        }}
-                      >
-                        <span className="file-menu-icon"><SquaresFour size={17} /></span>
-                        <span className="file-menu-copy"><strong>Projects Dashboard</strong><small>Back to dashboard</small></span>
-                      </button>
-                    )}
+                    <button
+                      className="file-menu-action"
+                      type="button"
+                      data-testid="file-menu-dashboard-action"
+                      onClick={() => {
+                        setShowFileMenu(false);
+                        handleDashboardClick();
+                      }}
+                    >
+                      <span className="file-menu-icon"><SquaresFour size={17} /></span>
+                      <span className="file-menu-copy"><strong>Projects Dashboard</strong><small>Back to dashboard</small></span>
+                    </button>
                     <button className="file-menu-action file-menu-new" type="button" onClick={handleNewProject}>
                       <span className="file-menu-icon"><FilePlus size={17} /></span>
                       <span className="file-menu-copy"><strong>{t("newProject")}</strong><small>{t("newProjectHint")}</small></span>
@@ -274,13 +288,13 @@ export function Topbar({
       </div>
 
       <div className="topbar-center">
-        <button className="ghost-action" type="button" title={`${t("undo")} · ${shortcutModifier}+Z`} onClick={(event) => { undo(); releasePointerActivatedFocus(event); }}>
+        <button className="ghost-action topbar-undo-btn" type="button" title={`${t("undo")} · ${shortcutModifier}+Z`} onClick={(event) => { undo(); releasePointerActivatedFocus(event); }}>
           <ArrowCounterClockwise size={16} />
-          {t("undo")}
+          <span className="topbar-undo-redo-text">{t("undo")}</span>
         </button>
-        <button className="ghost-action" type="button" title={`${t("redo")} · ${shortcutModifier}+Shift+Z`} onClick={(event) => { redo(); releasePointerActivatedFocus(event); }}>
+        <button className="ghost-action topbar-redo-btn" type="button" title={`${t("redo")} · ${shortcutModifier}+Shift+Z`} onClick={(event) => { redo(); releasePointerActivatedFocus(event); }}>
           <ArrowClockwise size={16} />
-          {t("redo")}
+          <span className="topbar-undo-redo-text">{t("redo")}</span>
         </button>
         <span className="divider" />
         <div className="menu-anchor" ref={ratioAnchorRef}>
@@ -318,6 +332,20 @@ export function Topbar({
       </div>
 
       <div className="topbar-actions">
+        {onOpenAiAssistant && (
+          <button
+            className={`topbar-ai-btn topbar-ai-assistant-btn ${isAssistantOpen ? "is-active" : ""}`}
+            type="button"
+            onClick={onOpenAiAssistant}
+            title={isAssistantOpen ? "Collapse AI Assistant Panel" : "Open Persistent AI Assistant"}
+            aria-label={isAssistantOpen ? "Collapse AI Assistant Panel" : "Open Persistent AI Assistant"}
+            aria-pressed={isAssistantOpen}
+            data-testid="topbar-ai-assistant-btn"
+          >
+            <Sparkle size={16} weight="fill" color="#818cf8" />
+            <span className="topbar-ai-assistant-text">AI Assistant</span>
+          </button>
+        )}
         <nav className="topbar-community-links" aria-label={t("communityLinks", "社区链接")}>
           <a
             href={COMMUNITY_LINKS.discord}

@@ -18,7 +18,7 @@ export function createRateLimiter({ windowMs = 60 * 1000, max = 10, message = "T
     cleanupInterval.unref();
   }
 
-  return (req, res, next) => {
+  const limiter = (req, res, next) => {
     const ip = req.ip || req.socket?.remoteAddress || "127.0.0.1";
     const now = Date.now();
     let record = hits.get(ip);
@@ -44,4 +44,10 @@ export function createRateLimiter({ windowMs = 60 * 1000, max = 10, message = "T
 
     next();
   };
+
+  limiter.reset = () => {
+    hits.clear();
+  };
+
+  return limiter;
 }
