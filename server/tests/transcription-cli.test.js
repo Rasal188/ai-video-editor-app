@@ -1,10 +1,10 @@
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import {
   parseTranscribeArgs,
@@ -14,7 +14,38 @@ import {
 
 const executeFile = promisify(execFile);
 const cliScript = path.resolve(process.cwd(), "scripts/timeline-command.mjs");
-const validVideoPath = path.resolve(process.cwd(), "test-artifacts/video-3-https.mp4");
+let validVideoPath = [
+  path.resolve(process.cwd(), "test-artifacts/video-3-https.mp4"),
+  path.resolve(process.cwd(), "public/assets/voice-samples/af_heart.mp3"),
+].find((p) => fs.existsSync(p));
+let syntheticMediaDir = null;
+
+before(async () => {
+  if (!validVideoPath || !fs.existsSync(validVideoPath)) {
+    syntheticMediaDir = await mkdtemp(path.join(tmpdir(), "transcribe-cli-fixture-"));
+    const synPath = path.join(syntheticMediaDir, "sample.mp4");
+    try {
+      execFileSync("ffmpeg", [
+        "-y",
+        "-f", "lavfi", "-i", "testsrc=duration=2:size=64x64:rate=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+        "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:a", "aac",
+        "-shortest",
+        synPath,
+      ], { stdio: "ignore" });
+      validVideoPath = synPath;
+    } catch (err) {
+      console.warn("Could not generate synthetic media fixture:", err.message);
+    }
+  }
+});
+
+after(async () => {
+  if (syntheticMediaDir) {
+    await rm(syntheticMediaDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
 
 describe("Headless Transcription CLI Integration", () => {
   describe("parseTranscribeArgs", () => {
@@ -357,7 +388,12 @@ describe("Headless Transcription CLI Integration", () => {
     });
 
     it("should exit with code 1 and NO_AUDIO_STREAM for media with no audio stream", async () => {
-      const imagePath = path.resolve(process.cwd(), "test-artifacts/test-rotate.png");
+      const imageCandidates = [
+        path.resolve(process.cwd(), "test-artifacts/test-rotate.png"),
+        path.resolve(process.cwd(), "public/icons/timeline-studio-icon-192.png"),
+        path.resolve(process.cwd(), "public/assets/sample-portrait.png"),
+      ];
+      const imagePath = imageCandidates.find((p) => fs.existsSync(p));
       const tempDir = await mkdtemp(path.join(tmpdir(), "transcribe-cli-noaudio-"));
       // Copy image to .mp4 container so extension passes validation but probe detects no audio
       const noAudioVideo = path.join(tempDir, "silent-image.mp4");

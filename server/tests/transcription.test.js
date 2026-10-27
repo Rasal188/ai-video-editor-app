@@ -1,9 +1,10 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs";
-import { writeFile, rm } from "node:fs/promises";
+import { writeFile, rm, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   transcribeMedia,
@@ -15,9 +16,37 @@ import {
 
 describe("Headless Transcription Service", () => {
   const rootDir = process.cwd();
-  const realVideoPath = path.join(rootDir, "test-artifacts", "video-3-https.mp4");
+  let realVideoPath = path.join(rootDir, "test-artifacts", "video-3-https.mp4");
   const realAudioPath = path.join(rootDir, "public", "assets", "voice-samples", "af_heart.mp3");
   const iconImagePath = path.join(rootDir, "public", "icons", "timeline-studio-icon-192.png");
+  let syntheticVideoDir = null;
+
+  before(async () => {
+    if (!fs.existsSync(realVideoPath)) {
+      syntheticVideoDir = await mkdtemp(path.join(tmpdir(), "transcribe-fixture-"));
+      const synPath = path.join(syntheticVideoDir, "synthetic-video.mp4");
+      try {
+        execFileSync("ffmpeg", [
+          "-y",
+          "-f", "lavfi", "-i", "testsrc=duration=31:size=64x64:rate=10",
+          "-f", "lavfi", "-i", "sine=frequency=440:duration=31",
+          "-c:v", "libx264", "-preset", "ultrafast",
+          "-c:a", "aac",
+          "-shortest",
+          synPath,
+        ], { stdio: "ignore" });
+        realVideoPath = synPath;
+      } catch (err) {
+        console.warn("Could not generate synthetic video with ffmpeg:", err.message);
+      }
+    }
+  });
+
+  after(async () => {
+    if (syntheticVideoDir) {
+      await rm(syntheticVideoDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 
   beforeEach(() => {
     resetHeadlessTranscriber();

@@ -24,14 +24,24 @@ test("Security Regression: window.__PROJECT_SNAPSHOT__ is absent from all produc
 });
 
 test("Security Regression: _virtual_devTestBridge chunk contains only an inert no-op stub", () => {
-  const files = fs.readdirSync(distAssetsDir).filter((f) => f.includes("devTestBridge") && f.endsWith(".js"));
-  assert.ok(files.length > 0, "Expected _virtual_devTestBridge chunk in dist/assets");
+  assert.ok(fs.existsSync(distAssetsDir), "dist/assets directory must exist (run npm run build first)");
+  const separateFiles = fs.readdirSync(distAssetsDir).filter((f) => f.includes("devTestBridge") && f.endsWith(".js"));
 
-  for (const file of files) {
-    const content = fs.readFileSync(path.join(distAssetsDir, file), "utf8");
-    assert.equal(content.includes("__PROJECT_SNAPSHOT__"), false);
-    assert.equal(content.includes("addEventListener"), false);
-    assert.equal(content.includes("getProjectSnapshot"), false);
+  if (separateFiles.length > 0) {
+    for (const file of separateFiles) {
+      const content = fs.readFileSync(path.join(distAssetsDir, file), "utf8");
+      assert.equal(content.includes("__PROJECT_SNAPSHOT__"), false, "Separate chunk must not expose __PROJECT_SNAPSHOT__");
+      assert.equal(content.includes("addEventListener"), false, "Separate chunk must not contain addEventListener");
+      assert.equal(content.includes("getProjectSnapshot"), false, "Separate chunk must not contain getProjectSnapshot");
+    }
+  } else {
+    // When Rollup inlines the 60-byte virtual stub into main chunks, verify development bridge logic is completely absent
+    const allBundles = fs.readdirSync(distAssetsDir).filter((f) => f.endsWith(".js") || f.endsWith(".mjs"));
+    for (const file of allBundles) {
+      const content = fs.readFileSync(path.join(distAssetsDir, file), "utf8");
+      assert.equal(content.includes("__PROJECT_SNAPSHOT__"), false, `Bundle ${file} must not expose __PROJECT_SNAPSHOT__`);
+      assert.equal(content.includes("getProjectSnapshot"), false, `Bundle ${file} must not expose getProjectSnapshot`);
+    }
   }
 });
 

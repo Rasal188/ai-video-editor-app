@@ -12,12 +12,25 @@ transformersEnv.cacheDir = CACHE_DIR;
 transformersEnv.allowLocalModels = true;
 transformersEnv.useBrowserCache = false;
 
+let customKokoroProvider = null;
 let kokoroModelPromise = null;
+
+export function setKokoroProvider(provider) {
+  customKokoroProvider = provider;
+}
+
+export function resetKokoroProvider() {
+  customKokoroProvider = null;
+  kokoroModelPromise = null;
+}
 
 /**
  * Returns a warm, cached KokoroTTS singleton instance.
  */
 async function getKokoroInstance() {
+  if (customKokoroProvider) {
+    return typeof customKokoroProvider === "function" ? await customKokoroProvider() : customKokoroProvider;
+  }
   if (!kokoroModelPromise) {
     kokoroModelPromise = (async () => {
       try {
@@ -89,89 +102,92 @@ export function float32ToWavBuffer(samples, sampleRate = 24000) {
  * @param {Array<string|object>} [options.scenes] - Optional array of scene narration texts or scene objects
  * @param {string} [options.voiceId="af_heart"] - Kokoro voice identifier
  * @param {number} [options.speed=1] - Playback speed multiplier
+ * @param {object} [options.ttsEngine] - Optional injectable TTS engine
  * @returns {Promise<{ buffer: Buffer, duration: number, sampleRate: number, voiceId: string, sceneTimings?: Array }>}
  */
-export async function synthesizeSpeech({ text, scenes, voiceId = "af_heart", speed = 1 }) {
+export async function synthesizeSpeech({ text, scenes, voiceId = "af_heart", speed = 1, ttsEngine = null }) {
   const cleanVoice = typeof voiceId === "string" && voiceId.trim() ? voiceId.trim() : "af_heart";
   const numSpeed = Number(speed);
   const cleanSpeed = Number.isFinite(numSpeed) && numSpeed >= 0.5 && numSpeed <= 2 ? numSpeed : 1;
 
-  const tts = await getKokoroInstance();
+  // Validate input parameters BEFORE loading the model or making network calls
+  const hasScenes = Array.isArray(scenes) && scenes.length > 0;
+  const cleanScenes = hasScenes
+    ? scenes
+        .map((s) => (typeof s === "string" ? s.trim() : (s?.narration || s?.text || "").trim()))
+        .filter(Boolean)
+    : [];
+
+  const cleanText = typeof text === "string" ? text.trim() : "";
+
+  if (!cleanText && cleanScenes.length === 0) {
+    throw new ApiError(400, "INVALID_TEXT", "Narration text must be a non-empty string or provide non-empty scenes.");
+  }
+
+  const tts = ttsEngine || (await getKokoroInstance());
   const sampleRate = 24000;
 
   // Scene-by-scene audio synthesis: guarantees exact per-scene speech start/end and pause intervals
-  if (Array.isArray(scenes) && scenes.length > 0) {
-    const cleanScenes = scenes
-      .map((s) => (typeof s === "string" ? s.trim() : (s?.narration || s?.text || "").trim()))
-      .filter(Boolean);
+  if (cleanScenes.length > 0) {
+    const pauseSamples = Math.round(sampleRate * 0.35); // 0.35s natural breathing space
+    const pauseBuffer = new Float32Array(pauseSamples);
+    const allSamples = [];
+    const sceneTimings = [];
+    let currentSampleCount = 0;
 
-    if (cleanScenes.length > 0) {
-      const pauseSamples = Math.round(sampleRate * 0.35); // 0.35s natural breathing space
-      const pauseBuffer = new Float32Array(pauseSamples);
-      const allSamples = [];
-      const sceneTimings = [];
-      let currentSampleCount = 0;
+    for (let i = 0; i < cleanScenes.length; i++) {
+      const sceneText = cleanScenes[i];
+      const res = await tts.generate(sceneText, {
+        voice: cleanVoice,
+        speed: cleanSpeed,
+      });
 
-      for (let i = 0; i < cleanScenes.length; i++) {
-        const sceneText = cleanScenes[i];
-        const res = await tts.generate(sceneText, {
-          voice: cleanVoice,
-          speed: cleanSpeed,
-        });
-
-        const sceneSamples = res?.audio;
-        if (!(sceneSamples instanceof Float32Array) || sceneSamples.length === 0) {
-          throw new ApiError(500, "TTS_GENERATION_FAILED", `TTS model returned empty audio for scene ${i + 1}.`);
-        }
-
-        const start = Number((currentSampleCount / sampleRate).toFixed(3));
-        const duration = Number((sceneSamples.length / sampleRate).toFixed(3));
-        const end = Number((start + duration).toFixed(3));
-
-        sceneTimings.push({
-          index: i,
-          text: sceneText,
-          start,
-          end,
-          duration,
-        });
-
-        allSamples.push(sceneSamples);
-        currentSampleCount += sceneSamples.length;
-
-        // Insert pause between scenes (except after last scene)
-        if (i < cleanScenes.length - 1) {
-          allSamples.push(pauseBuffer);
-          currentSampleCount += pauseSamples;
-        }
+      const sceneSamples = res?.audio;
+      if (!(sceneSamples instanceof Float32Array) || sceneSamples.length === 0) {
+        throw new ApiError(500, "TTS_GENERATION_FAILED", `TTS model returned empty audio for scene ${i + 1}.`);
       }
 
-      const totalLength = allSamples.reduce((acc, s) => acc + s.length, 0);
-      const combinedSamples = new Float32Array(totalLength);
-      let offset = 0;
-      for (const s of allSamples) {
-        combinedSamples.set(s, offset);
-        offset += s.length;
+      const start = Number((currentSampleCount / sampleRate).toFixed(3));
+      const duration = Number((sceneSamples.length / sampleRate).toFixed(3));
+      const end = Number((start + duration).toFixed(3));
+
+      sceneTimings.push({
+        index: i,
+        text: sceneText,
+        start,
+        end,
+        duration,
+      });
+
+      allSamples.push(sceneSamples);
+      currentSampleCount += sceneSamples.length;
+
+      // Insert pause between scenes (except after last scene)
+      if (i < cleanScenes.length - 1) {
+        allSamples.push(pauseBuffer);
+        currentSampleCount += pauseSamples;
       }
-
-      const totalDuration = Number((totalLength / sampleRate).toFixed(2));
-      const buffer = float32ToWavBuffer(combinedSamples, sampleRate);
-
-      return {
-        buffer,
-        duration: totalDuration,
-        sampleRate,
-        voiceId: cleanVoice,
-        mimeType: "audio/wav",
-        sceneTimings,
-      };
     }
-  }
 
-  // Unified single-script synthesis fallback
-  const cleanText = typeof text === "string" ? text.trim() : "";
-  if (!cleanText) {
-    throw new ApiError(400, "INVALID_TEXT", "Narration text must be a non-empty string.");
+    const totalLength = allSamples.reduce((acc, s) => acc + s.length, 0);
+    const combinedSamples = new Float32Array(totalLength);
+    let offset = 0;
+    for (const s of allSamples) {
+      combinedSamples.set(s, offset);
+      offset += s.length;
+    }
+
+    const totalDuration = Number((totalLength / sampleRate).toFixed(2));
+    const buffer = float32ToWavBuffer(combinedSamples, sampleRate);
+
+    return {
+      buffer,
+      duration: totalDuration,
+      sampleRate,
+      voiceId: cleanVoice,
+      mimeType: "audio/wav",
+      sceneTimings,
+    };
   }
 
   const result = await tts.generate(cleanText, {

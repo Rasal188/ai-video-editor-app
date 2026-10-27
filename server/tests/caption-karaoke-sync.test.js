@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
@@ -31,12 +31,12 @@ function createOfflineFramePlan(duration, frameRate = 30) {
   }));
 }
 
-const realInference = JSON.parse(
-  readFileSync(
-    resolve(process.cwd(), "test-artifacts", "transcription-e2e", "real-inference-result.json"),
-    "utf-8"
-  )
-);
+const fixturePath = [
+  resolve(process.cwd(), "server", "tests", "fixtures", "real-inference-result.json"),
+  resolve(process.cwd(), "test-artifacts", "transcription-e2e", "real-inference-result.json"),
+].find((p) => existsSync(p));
+
+const realInference = JSON.parse(readFileSync(fixturePath, "utf-8"));
 
 describe("Karaoke Caption Timing / Audio Synchronization Regression Suite", () => {
   // Use real Whisper output words from real-inference-result.json:

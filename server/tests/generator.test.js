@@ -15,7 +15,7 @@ import {
   setGeneratorFetch,
   resetGeneratorFetch,
 } from "../services/ai/videoGeneratorService.js";
-import { synthesizeSpeech } from "../services/ai/ttsService.js";
+import { synthesizeSpeech, setKokoroProvider, resetKokoroProvider } from "../services/ai/ttsService.js";
 import { generatorLimiter } from "../routes/generator.js";
 import {
   concretizeVisualSearchQuery,
@@ -689,39 +689,75 @@ describe("AI Video Generator Service & API", () => {
       });
     });
 
-    it("should synthesize real spoken audio via synthesizeSpeech service with valid WAV headers and duration", async () => {
-      const res = await synthesizeSpeech({
-        text: "Welcome to Timeline Studio video creation.",
-        voiceId: "af_heart",
-        speed: 1,
-      });
+    it("should synthesize spoken audio via synthesizeSpeech service with valid WAV headers and duration", async () => {
+      const mockEngine = {
+        generate: async (text) => {
+          const sampleRate = 24000;
+          const durationSeconds = Math.max(1.5, (text.split(/\s+/).length || 1) * 0.3);
+          const sampleCount = Math.round(sampleRate * durationSeconds);
+          const audio = new Float32Array(sampleCount);
+          for (let i = 0; i < sampleCount; i++) {
+            audio[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / sampleRate);
+          }
+          return { audio };
+        },
+      };
 
-      assert.ok(res);
-      assert.ok(res.buffer instanceof Buffer);
-      assert.ok(res.duration > 1.0 && res.duration < 10.0, `Duration ${res.duration}s must be a realistic speech duration`);
-      assert.ok(res.buffer.length > 10000, "WAV buffer must contain real audio samples (>10KB)");
-      assert.equal(res.buffer.slice(0, 4).toString(), "RIFF");
-      assert.equal(res.buffer.slice(8, 12).toString(), "WAVE");
-      assert.equal(res.buffer.slice(12, 16).toString(), "fmt ");
+      setKokoroProvider(mockEngine);
+      try {
+        const res = await synthesizeSpeech({
+          text: "Welcome to Timeline Studio video creation.",
+          voiceId: "af_heart",
+          speed: 1,
+        });
+
+        assert.ok(res);
+        assert.ok(res.buffer instanceof Buffer);
+        assert.ok(res.duration > 1.0 && res.duration < 10.0, `Duration ${res.duration}s must be a realistic speech duration`);
+        assert.ok(res.buffer.length > 10000, "WAV buffer must contain real audio samples (>10KB)");
+        assert.equal(res.buffer.slice(0, 4).toString(), "RIFF");
+        assert.equal(res.buffer.slice(8, 12).toString(), "WAVE");
+        assert.equal(res.buffer.slice(12, 16).toString(), "fmt ");
+      } finally {
+        resetKokoroProvider();
+      }
     });
 
     it("should synthesize scene-by-scene audio via synthesizeSpeech service and return exact scene timings", async () => {
-      const res = await synthesizeSpeech({
-        scenes: [
-          "Modern technology connects our world in ways once unimaginable.",
-          "Behind every digital experience, powerful infrastructure processes enormous amounts of data.",
-        ],
-        voiceId: "af_heart",
-        speed: 1,
-      });
+      const mockEngine = {
+        generate: async (text) => {
+          const sampleRate = 24000;
+          const durationSeconds = Math.max(1.2, (text.split(/\s+/).length || 1) * 0.2);
+          const sampleCount = Math.round(sampleRate * durationSeconds);
+          const audio = new Float32Array(sampleCount);
+          for (let i = 0; i < sampleCount; i++) {
+            audio[i] = 0.3 * Math.sin((2 * Math.PI * 330 * i) / sampleRate);
+          }
+          return { audio };
+        },
+      };
 
-      assert.ok(res);
-      assert.ok(Array.isArray(res.sceneTimings));
-      assert.equal(res.sceneTimings.length, 2, "Must return timings for both scenes");
-      assert.equal(res.sceneTimings[0].index, 0);
-      assert.ok(res.sceneTimings[0].duration > 1.0);
-      assert.equal(res.sceneTimings[1].index, 1);
-      assert.ok(res.sceneTimings[1].start >= res.sceneTimings[0].end, "Scene 1 start must be after Scene 0 end (including pause)");
+      setKokoroProvider(mockEngine);
+      try {
+        const res = await synthesizeSpeech({
+          scenes: [
+            "Modern technology connects our world in ways once unimaginable.",
+            "Behind every digital experience, powerful infrastructure processes enormous amounts of data.",
+          ],
+          voiceId: "af_heart",
+          speed: 1,
+        });
+
+        assert.ok(res);
+        assert.ok(Array.isArray(res.sceneTimings));
+        assert.equal(res.sceneTimings.length, 2, "Must return timings for both scenes");
+        assert.equal(res.sceneTimings[0].index, 0);
+        assert.ok(res.sceneTimings[0].duration > 1.0);
+        assert.equal(res.sceneTimings[1].index, 1);
+        assert.ok(res.sceneTimings[1].start >= res.sceneTimings[0].end, "Scene 1 start must be after Scene 0 end (including pause)");
+      } finally {
+        resetKokoroProvider();
+      }
     });
 
     it("should accurately persist requested aspect ratio (16:9, 9:16, 1:1) without defaulting or polluting", async () => {

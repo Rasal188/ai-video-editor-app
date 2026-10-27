@@ -39,6 +39,23 @@ describe("Kokoro TTS Speech Synthesis Engine", () => {
     );
   });
 
+  it("rejects whitespace-only text or empty scenes before model initialization", async () => {
+    await assert.rejects(
+      async () => synthesizeSpeech({ text: "   \n\t  " }),
+      (err) => err.statusCode === 400 && err.code === "INVALID_TEXT"
+    );
+
+    await assert.rejects(
+      async () => synthesizeSpeech({ scenes: ["   ", ""] }),
+      (err) => err.statusCode === 400 && err.code === "INVALID_TEXT"
+    );
+
+    await assert.rejects(
+      async () => synthesizeSpeech({}),
+      (err) => err.statusCode === 400 && err.code === "INVALID_TEXT"
+    );
+  });
+
   it("resolves multi-mirror fallback URLs for Kokoro voice binary models", () => {
     const urls = mirroredModelFileUrls({
       repository: "timeline-studio-voice-models",
