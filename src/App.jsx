@@ -18,6 +18,7 @@ import { CloudRenderModal } from "./components/CloudRenderModal.jsx";
 import { TranscriptReviewModal } from "./components/TranscriptReviewModal.jsx";
 import { SmartPipelineModal } from "./components/SmartPipelineModal.jsx";
 import { SceneDetectionModal } from "./components/SceneDetectionModal.jsx";
+import { AiShortsStudioModal } from "./components/AiShortsStudioModal.jsx";
 import { AiAssistantPanel } from "./components/AiAssistantPanel.jsx";
 import {
   canShowFirstVisualGuide,
@@ -45,6 +46,8 @@ import { useSilenceRemoval } from "./hooks/useSilenceRemoval.js";
 import { useRoughCut } from "./hooks/useRoughCut.js";
 import { useSmartPipeline } from "./hooks/useSmartPipeline.js";
 import { useSceneDetection } from "./hooks/useSceneDetection.js";
+import { useShortsStudio } from "./hooks/useShortsStudio.js";
+import { exportShortCandidateVideo } from "./lib/shortsExport.js";
 import { useWebMcpEditor } from "./hooks/useWebMcpEditor.js";
 import { sampleEditorMedia } from "./lib/webMcpMediaSample.js";
 import { browserProjectFingerprint, restoreBrowserProjectMedia } from "./lib/browserEditPlan.js";
@@ -363,25 +366,33 @@ export function App({
     trackVisibility, visionRecords, visualSegments, visualType, visualOverlaySegments,
   });
   const previousTimelineContentDurationRef = useRef(estimatedDuration);
+  const initialDurationSettledRef = useRef(false);
+  const hasPreparingVisual = visualSegments.some((v) => v.preparing);
+
   useEffect(() => {
     const previousDuration = previousTimelineContentDurationRef.current;
     const becameNonEmpty = previousDuration <= 0 && estimatedDuration > 0;
     const becameEmpty = previousDuration > 0 && estimatedDuration <= 0;
 
-    if (becameNonEmpty) {
-      if (timelineImportRestoreRef.current) timelineImportRestoreRef.current = false;
-      else setTimelineZoom(getTimelineInitialContentZoom(estimatedDuration));
-      if (trackScrollRef.current) trackScrollRef.current.scrollLeft = 0;
-    } else if (becameEmpty) {
+    if (becameEmpty) {
       timelineImportRestoreRef.current = false;
+      initialDurationSettledRef.current = false;
       setTimelineHorizon(10);
       setTimelineZoom(getTimelineInitialContentZoom(0));
       setCurrentTime(0);
       if (trackScrollRef.current) trackScrollRef.current.scrollLeft = 0;
+    } else if (becameNonEmpty || (!initialDurationSettledRef.current && estimatedDuration > 0 && !hasPreparingVisual)) {
+      if (timelineImportRestoreRef.current) {
+        timelineImportRestoreRef.current = false;
+      } else if (!hasPreparingVisual) {
+        setTimelineZoom(getTimelineInitialContentZoom(estimatedDuration));
+        initialDurationSettledRef.current = true;
+      }
+      if (trackScrollRef.current) trackScrollRef.current.scrollLeft = 0;
     }
 
     previousTimelineContentDurationRef.current = estimatedDuration;
-  }, [estimatedDuration, setCurrentTime, setTimelineHorizon, setTimelineZoom, trackScrollRef]);
+  }, [estimatedDuration, hasPreparingVisual, setCurrentTime, setTimelineHorizon, setTimelineZoom, trackScrollRef]);
   const previewFrameSize = usePreviewFrameSize(previewShellRef, ratio, compactRail);
   const selectedVisualSegment = visualSegments[selectedVisualSegmentIndex] ?? previewVisualSegment ?? null;
   const selectedVisualOverlay = visualOverlaySegments.find((item) => item.id === selectedVisualOverlayId) ?? null;
@@ -572,6 +583,7 @@ export function App({
     t,
   });
   const setSmartFrameRatio = useCallback((nextRatioId) => {
+    autoRatioSourceKeyRef.current = `locked:${nextRatioId}`;
     setRatioId(nextRatioId);
     if (nextRatioId !== ratioId) setFitMode("contain");
   }, [ratioId, setRatioId, setFitMode]);
@@ -1370,6 +1382,7 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
   }), [currentTime, depthRecords, previewVisualOverlays]);
 
   const { projectImportProgress, getProjectSnapshot, createCurrentArchive, handleExportProject, handleImportProject, handleNewProject, currentCloudProject, savingToCloud, saveProjectToCloud, handleOpenCloudProject } = useProjectFiles({
+    autoRatioSourceKeyRef,
     initialProject: activeProject,
     initialImportFile,
     previewCanvasRef,
@@ -1441,9 +1454,14 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
   const handleCloudRender = useCallback(async (renderOptions = {}) => {
     try {
       let projectToRender = currentCloudProject;
-      if (!projectToRender) {
+      // Ensure the project is saved and has an uploaded .timeline archive before requesting headless rendering
+      if (!projectToRender || !projectToRender.archive_storage_path || Number(projectToRender.current_revision) === 0) {
         notify("正在将工程保存至云端…");
         projectToRender = await saveProjectToCloud();
+      }
+
+      if (!projectToRender?.id || !projectToRender?.archive_storage_path) {
+        throw new Error("工程尚未保存至云端或未生成归档文件，请先点击「保存到云端」");
       }
 
       notify("正在创建云端渲染任务…");
@@ -1465,6 +1483,9 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
       }
 
       const { job } = await res.json();
+      if (job.status === "failed") {
+        throw new Error(job.error_message || "云端渲染启动失败");
+      }
       setCloudRenderJob(job);
       setShowCloudRenderModal(true);
       notify("已提交云端渲染任务，正在执行 CLI FFmpeg 渲染…");
@@ -1876,6 +1897,50 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
     t,
     onApplyCuts: handleApplySceneCuts,
   });
+
+  const handleApplyShortsProject = useCallback((project) => {
+    if (!project) return;
+    checkpointHistory();
+    pauseTimelineMedia();
+    setIsPlaying(false);
+    const targetRatio = project.ratioId || project.aspectRatio || "9:16";
+    autoRatioSourceKeyRef.current = `locked:${targetRatio}`;
+    setRatioId(targetRatio);
+    setFitMode(project.fitMode || "cover");
+    if (project.visualSegments) setVisualSegments(project.visualSegments);
+    if (project.visualOverlaySegments) setVisualOverlaySegments(project.visualOverlaySegments);
+    if (project.captionSegments) setCaptionSegments(project.captionSegments);
+    if (project.audioSegments) setAudioSegments(project.audioSegments);
+    if (project.musicSegments) setMusicSegments(project.musicSegments);
+    if (project.captionStylePresetId) setCaptionStylePresetId(project.captionStylePresetId);
+    if (project.captionStyle) setCaptionStyle(project.captionStyle);
+    if (project.captionSize) setCaptionSize(project.captionSize);
+    if (project.captionsEnabled !== undefined) setCaptionsEnabled(project.captionsEnabled);
+    setCurrentTime(0);
+    notify(t("shortsAppliedToTimeline", "Loaded candidate short into timeline"));
+  }, [checkpointHistory, pauseTimelineMedia, setIsPlaying, setVisualSegments, setVisualOverlaySegments, setCaptionSegments, setAudioSegments, setMusicSegments, setRatioId, setFitMode, setCaptionStylePresetId, setCaptionStyle, setCaptionSize, setCaptionsEnabled, setCurrentTime, notify, t]);
+
+  const shortsStudio = useShortsStudio({
+    visualSegments,
+    userAssets,
+    selectedSegment: selectedVisualSegment,
+    captionSegments,
+    currentTime,
+    setCurrentTime,
+    setIsPlaying,
+    pauseTimelineMedia,
+    onApplyProject: handleApplyShortsProject,
+    onExportShort: async (spec, { candidate, sourceMedia, options, index, signal, onProgress } = {}) => {
+      notify(t("shortsStartingExport", "Starting short video export…"));
+      return exportShortCandidateVideo(sourceMedia, candidate, options, {
+        signal,
+        index,
+        onProgress,
+      });
+    },
+    notify,
+    t,
+  });
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     let cleanup = null;
@@ -1926,7 +1991,16 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
   });
 
   const guardAgentAi = (action) => (...args) => {
-    if (webMcp.isAiRunning()) { notify(webMcp.t("busy")); return; }
+    if (webMcp.isAiRunning()) {
+      notify(webMcp.t("busy"));
+      const options = args[0];
+      if (options && typeof options === "object" && options.throwOnError) {
+        const err = new Error(webMcp.t("busy") || "AI is busy. Please wait for current task to finish.");
+        err.code = "AI_BUSY";
+        throw err;
+      }
+      return;
+    }
     return action(...args);
   };
   const generateVoiceoverWhenIdle = guardAgentAi(generateVoiceover);
@@ -2024,6 +2098,7 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
         showRatioMenu={showRatioMenu}
         setShowRatioMenu={setShowRatioMenu}
         setRatioId={(nextRatioId) => {
+          autoRatioSourceKeyRef.current = `locked:${nextRatioId}`;
           setRatioId(nextRatioId);
           setFitModeFromUser("contain");
         }}
@@ -2062,6 +2137,7 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
         onBackToDashboard={handleSafeBackToDashboard}
         onOpenAiAssistant={() => setIsAssistantExpanded((prev) => !prev)}
         isAssistantOpen={isAssistantExpanded}
+        onOpenShortsStudio={() => shortsStudio.open()}
       />
 
       <WebMcpReview agent={webMcp} language={activeLanguage} />
@@ -2095,6 +2171,11 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
         tool={sceneDetection}
         t={t}
       />
+      <AiShortsStudioModal
+        isOpen={Boolean(shortsStudio.isOpen)}
+        studio={shortsStudio}
+        t={t}
+      />
       <AiAssistantPanel
         isExpanded={isAssistantExpanded}
         onToggleCollapse={() => setIsAssistantExpanded((prev) => !prev)}
@@ -2107,6 +2188,7 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
         onRedo={redo}
         currentTime={currentTime}
         selectedVisualSegmentId={selectedVisualSegment?.id || ""}
+        selectedVisualOverlayId={selectedVisualOverlayId}
         selectedAudioSegmentId={selectedAudioSegmentId}
         selectedSegmentId={selectedSegmentId}
         selectedTrack={selectedTrack}
@@ -2131,7 +2213,7 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
           imageSrc, isDragging, mediaTab, musicBlob, musicDuration, musicName, musicVolume,
           libraryType, libraryQuery, setLibraryQuery, selectLibraryType, libraryStatus, libraryError, libraryProvider,
           assetDownloadStates, prefetchLibraryAsset,
-          notify, openSmartPipeline: () => smartPipeline.open(), openSceneDetection: () => sceneDetection.open(), previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
+          notify, openSmartPipeline: () => smartPipeline.open(), openSceneDetection: () => sceneDetection.open(), openShortsStudio: () => shortsStudio.open(), previewVisionAnalysis, previewVisionKey, smartMode, setSmartMode,
           previewVisionOptions, previewVisualSrc, previewVisualType, progress, script,
           seekTo, segments, selectTool, selectedCaptionSegment, selectedFilterId,
           selectedLibraryAssetId, selectedSegmentId, selectedStickerId, selectedTransitionId,
@@ -2199,6 +2281,7 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
           fitMode={fitMode}
           ratioId={ratioId}
           setRatioId={(nextRatioId) => {
+            autoRatioSourceKeyRef.current = `locked:${nextRatioId}`;
             setRatioId(nextRatioId);
             setFitModeFromUser("contain");
           }}
@@ -2208,7 +2291,12 @@ captionSegments, currentVisualSegment, handleDeleteTrack,
             previewVisionOptions.removeBackground &&
             Boolean(previewVisionAnalysis?.cutoutUrl)
           }
-          smartCropActive={Boolean(previewSmartCropRect)}
+          smartCropActive={Boolean(
+            previewSmartCropRect &&
+            !previewSmartCropRect.isFallback &&
+            previewSmartCropRect.state !== "fallback" &&
+            (previewSmartCropRect.confidence ?? 1) > 0
+          )}
           smartFramePresentation={previewSmartCropRect?.presentation}
           smartFrameBackgroundPosition={previewSmartBackgroundPosition}
           setFitMode={setFitModeFromUser}

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 
 const rootDir = process.cwd();
-const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173";
+const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173/?view=editor";
 const SYNC_FIX_DIR = resolve(rootDir, "artifacts", "karaoke-sync-fix");
 const SOURCE_MEDIA_PATH = resolve(SYNC_FIX_DIR, "source-10s.mp4");
 

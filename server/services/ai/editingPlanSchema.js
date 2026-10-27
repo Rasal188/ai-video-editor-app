@@ -415,7 +415,9 @@ export function validateActionParams(type, rawParams) {
     }
 
     case "clip.set_property": {
-      clean.clipId = params.clipId && typeof params.clipId === "string" ? params.clipId.trim() : "";
+      const scope = params.scope && typeof params.scope === "string" ? params.scope.trim().toLowerCase() : (params.clipId === "all" ? "all" : undefined);
+      if (scope) clean.scope = scope;
+      clean.clipId = params.clipId && typeof params.clipId === "string" ? params.clipId.trim() : (scope === "all" ? "all" : "");
       const property = String(params.property || "").trim();
       if (!property) throw new Error("clip.set_property requires 'property' name.");
       if (!SUPPORTED_NUMERIC_CLIP_PROPERTIES.includes(property)) {

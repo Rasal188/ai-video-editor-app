@@ -346,4 +346,34 @@ describe("Phase 5 Milestone 1: Word-Level Caption Timestamps & Invariance", () =
     // Live timeline remains completely intact
     assert.deepEqual(liveCaptions, initialCaptions);
   });
+
+  it("12. Speech after silence gap is preserved with valid timestamps even if word before gap has null end", () => {
+    // Word 2 has null end timestamp [0.8, null] followed by a 2.0s silence gap before Word 3 at 3.0s
+    const gapChunks = [
+      { text: "First", timestamp: [0.2, 0.5] },
+      { text: " part", timestamp: [0.5, null] },
+      { text: " Second", timestamp: [3.0, 3.4] },
+      { text: " part", timestamp: [3.4, 3.8] },
+    ];
+    const totalDuration = 5.0;
+
+    const segments = captionSegmentsFromWords(gapChunks, totalDuration, {
+      timelineOffset: 0,
+      grouping: "phrases",
+    });
+
+    // Should create 2 distinct segments because of the 2.5s gap (> 0.35s)
+    assert.equal(segments.length, 2, "Should split into two segments across the silence gap");
+
+    // First segment must end near ~0.85s, NOT stretch to 3.0s!
+    assert.ok(segments[0].end < 2.0, `Segment 1 end (${segments[0].end}) should not stretch across silence gap`);
+    assert.equal(segments[0].words.length, 2);
+    assert.ok(segments[0].words[1].end < 2.0, "Word before silence gap should not stretch to 3.0s");
+
+    // Second segment must start at 3.0s, not clamped or corrupted by previousEnd
+    assert.equal(segments[1].start, 3.0, "Segment after silence gap must start at 3.0s");
+    assert.equal(segments[1].words[0].start, 3.0);
+    assert.equal(segments[1].words[0].text, "Second");
+    assert.equal(segments[1].words[1].text, "part");
+  });
 });

@@ -62,6 +62,7 @@ export function Dashboard({
   onOpenProject,
   onCreateProject,
   onImportArchive,
+  onOpenGeneratedProject,
   notify,
 }) {
   const [projects, setProjects] = useState([]);
@@ -358,6 +359,7 @@ export function Dashboard({
             accept=".timeline,.zip"
             onChange={handleFileChange}
           />
+
 
           <button
             type="button"

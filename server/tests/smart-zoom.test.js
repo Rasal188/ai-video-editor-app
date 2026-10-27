@@ -596,4 +596,40 @@ describe("AI Smart Zoom & Automatic Punch-ins — Comprehensive Test Suite", () 
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  // 22. Natural language disambiguation between zoom transitions, punch-in animations, crossfades, and clip playback speed
+  it("22. should accurately disambiguate between zoom transitions, crossfades, clip speed, and punch-ins", () => {
+    const summary = {
+      visualClips: [
+        { id: "clip-1", name: "Intro", start: 0, duration: 5 },
+        { id: "clip-2", name: "Main", start: 5, duration: 8 },
+      ],
+    };
+
+    // Zoom transition slower -> visual.punch_in with transitionDuration: 0.6
+    const p1 = parseNaturalLanguageEditingPlan("Make the zoom transitions slower.", summary);
+    assert.strictEqual(p1.actions[0].type, "visual.punch_in");
+    assert.strictEqual(p1.actions[0].params.transitionDuration, 0.6);
+
+    // Zoom transition faster -> visual.punch_in with transitionDuration: 0.15
+    const p2 = parseNaturalLanguageEditingPlan("Make zoom transitions faster.", summary);
+    assert.strictEqual(p2.actions[0].type, "visual.punch_in");
+    assert.strictEqual(p2.actions[0].params.transitionDuration, 0.15);
+
+    // Punch-in animation slow down -> visual.punch_in with transitionDuration: 0.6 (NOT clip.set_speed)
+    const p3 = parseNaturalLanguageEditingPlan("Slow down the punch-in animation.", summary);
+    assert.strictEqual(p3.actions[0].type, "visual.punch_in");
+    assert.strictEqual(p3.actions[0].params.transitionDuration, 0.6);
+
+    // Crossfade between clips -> transition.set with transitionId: fade
+    const p4 = parseNaturalLanguageEditingPlan("Add a crossfade between clips.", summary);
+    assert.strictEqual(p4.actions[0].type, "transition.set");
+    assert.strictEqual(p4.actions[0].params.transitionId, "fade");
+
+    // Make the zoom stronger -> visual.punch_in with higher scale
+    const p5 = parseNaturalLanguageEditingPlan("Make the zoom stronger.", summary);
+    assert.strictEqual(p5.actions[0].type, "visual.punch_in");
+    assert.ok(p5.actions[0].params.scale > 1.25, "scale should be increased above baseline 1.25");
+  });
 });
+

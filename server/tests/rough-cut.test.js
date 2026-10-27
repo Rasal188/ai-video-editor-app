@@ -73,14 +73,45 @@ describe("AI Rough Cut Core Logic", () => {
       assert.deepStrictEqual(findFillerWordCandidates(chunks, clip), []);
     });
 
-    it("should contract boundaries with keep padding", () => {
-      const chunks = [{ text: "um", timestamp: [1.0, 2.0] }];
+    it("should remove complete filler word intervals to ensure filler words do not remain audible", () => {
+      const chunks = [{ text: "um", timestamp: [1.0, 1.4] }];
       const candidates = findFillerWordCandidates(chunks, clip, { keep: 0.2 });
       assert.strictEqual(candidates.length, 1);
-      // keep = 0.2 -> 0.1 padding on each edge
-      assert.strictEqual(candidates[0].start, 1.1);
-      assert.strictEqual(candidates[0].end, 1.9);
-      assert.strictEqual(Number(candidates[0].duration.toFixed(2)), 0.8);
+      assert.strictEqual(candidates[0].start, 1.0);
+      assert.strictEqual(candidates[0].end, 1.4);
+      assert.strictEqual(Number(candidates[0].duration.toFixed(2)), 0.4);
+    });
+
+    it("should recognize multi-word filler phrases such as 'you know' and 'i mean'", () => {
+      const chunks = [
+        { text: "Well", timestamp: [0.0, 0.4] },
+        { text: "you", timestamp: [0.5, 0.7] },
+        { text: "know", timestamp: [0.7, 1.0] },
+        { text: "actually", timestamp: [1.1, 1.6] },
+        { text: "it works", timestamp: [1.7, 2.5] },
+      ];
+      const candidates = findFillerWordCandidates(chunks, clip);
+      assert.strictEqual(candidates.length, 2);
+      assert.strictEqual(candidates[0].word, "you know");
+      assert.strictEqual(candidates[0].start, 0.5);
+      assert.strictEqual(candidates[0].end, 1.0);
+      assert.strictEqual(candidates[1].word, "actually");
+      assert.strictEqual(candidates[1].start, 1.1);
+      assert.strictEqual(candidates[1].end, 1.6);
+    });
+
+    it("should correctly normalize sourceStart offset if chunks use source-time timestamps", () => {
+      const trimmedClip = { id: "clip-trim", duration: 5, sourceStart: 10 };
+      const chunks = [
+        { text: "Hello", timestamp: [10.0, 10.8] },
+        { text: "um", timestamp: [11.0, 11.4] },
+        { text: "world", timestamp: [11.6, 12.5] },
+      ];
+      const candidates = findFillerWordCandidates(chunks, trimmedClip);
+      assert.strictEqual(candidates.length, 1);
+      assert.strictEqual(candidates[0].word, "um");
+      assert.strictEqual(candidates[0].start, 1.0);
+      assert.strictEqual(candidates[0].end, 1.4);
     });
   });
 

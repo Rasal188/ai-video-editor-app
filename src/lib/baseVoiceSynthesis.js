@@ -27,7 +27,8 @@ export function getVoiceCloneTestSentence(voice) {
   return TEST_SENTENCES[voice?.language] || TEST_SENTENCES.English;
 }
 
-async function runBaseVoiceSynthesis({ voice, text, speed = 1, onProgress, onStatus, notify, t }) {
+async function runBaseVoiceSynthesis(options) {
+  const { voice, text, speed = 1, onProgress, onStatus, notify, t, signal } = options || {};
   const prepared = prepareTextForVoice(text, voice);
   if (prepared.warningKey) notify?.(t?.(prepared.warningKey) || prepared.warningKey);
   let blob;
@@ -69,7 +70,7 @@ async function runBaseVoiceSynthesis({ voice, text, speed = 1, onProgress, onSta
   } else {
     onStatus?.("ttsStatusLoadingKokoro");
     await clearKokoroVoiceCacheIfStorageTight();
-    blob = await predictKokoroVoice({ text: prepared.text, voiceId: voice.id, speed }, (event) => {
+    blob = await predictKokoroVoice({ text: prepared.text, voiceId: voice.id, speed, signal }, (event) => {
       if (event?.backend) onStatus?.("ttsStatusGeneratingWasm");
       if (Number.isFinite(event?.progress)) onProgress?.(event.progress);
     });

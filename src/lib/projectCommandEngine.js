@@ -1,5 +1,5 @@
 import { MAX_TIMELINE_MARKER_SECONDS, TIMELINE_MARKER_COLORS, TIMELINE_MARKER_TYPES, normalizeTimelineMarkers } from "./timelineMarkers.js";
-import { getCaptionTimeline, getTimedSegmentsEnd } from "./timeline.js";
+import { getCaptionTimeline, getTimedSegmentsEnd, hasExplicitCaptionTiming } from "./timeline.js";
 import { CAPTION_FONT_CATALOG, findCaptionFontInCatalog } from "./captionFonts.js";
 import { resolveColorToHex } from "./captionStyles.js";
 import { normalizeColorGrade } from "./colorGrade.js";
@@ -91,8 +91,11 @@ function requireCaptionRange(start, end) {
 
 function resolveProjectCaptions(project) {
   const captions = Array.isArray(project?.captionSegments) ? project.captionSegments : [];
-  const timeline = getCaptionTimeline(captions, getTimedSegmentsEnd(project?.audioSegments || []));
-  return captions.map((caption, index) => ({ ...caption, start: timeline[index].start, end: timeline[index].end }));
+  const voiceDuration = getTimedSegmentsEnd(project?.audioSegments || []);
+  const visualDuration = (project?.visualSegments || []).reduce((sum, clip) => sum + (Number(clip.duration) || 0), 0);
+  const targetDuration = voiceDuration > 0 ? voiceDuration : (visualDuration > 0 ? visualDuration : (Number(project?.duration) || 0));
+  const timeline = getCaptionTimeline(captions, targetDuration);
+  return captions.map((caption, index) => ({ ...caption, start: timeline[index]?.start ?? 0, end: timeline[index]?.end ?? 0 }));
 }
 
 // Caption timing can be implicit in a saved project. Match the editor's
@@ -262,25 +265,60 @@ function splitVisual(project, operation) {
   const segment = visuals[index];
   const at = finitePositive(operation.at, "at");
   const duration = finitePositive(Number(segment.duration), "clip duration");
-  if (at >= duration) throw Object.assign(new Error("at must be inside the visual clip"), { code: "INVALID_RANGE" });
+
+  let targetSegment = segment;
+  let targetIndex = index;
+  let localAt = at;
+
+  if (at >= duration) {
+    // If the target clip was already split in a prior operation within the plan,
+    // the split timestamp (relative to the original clip's start) falls into one of
+    // the subsequent contiguous continuation segments sharing the same archiveMediaId.
+    const archiveMediaId = segment.archiveMediaId || segment.id;
+    let cumulative = duration;
+    let found = false;
+    for (let i = index + 1; i < visuals.length; i++) {
+      const nextSeg = visuals[i];
+      const nextArchiveId = nextSeg.archiveMediaId || nextSeg.id;
+      if (nextArchiveId !== archiveMediaId) break;
+      const nextDur = Number(nextSeg.duration) || 0;
+      if (at < cumulative + nextDur - 0.000001) {
+        targetSegment = nextSeg;
+        targetIndex = i;
+        localAt = Number((at - cumulative).toFixed(6));
+        found = true;
+        break;
+      }
+      cumulative += nextDur;
+    }
+    if (!found) {
+      throw Object.assign(new Error("at must be inside the visual clip"), { code: "INVALID_RANGE" });
+    }
+  }
+
+  const targetDuration = Number(targetSegment.duration);
+  if (localAt <= 0.0001 || localAt >= targetDuration - 0.0001) {
+    throw Object.assign(new Error("at must be inside the visual clip"), { code: "INVALID_RANGE" });
+  }
+
   const rightClipId = (typeof operation.rightClipId === "string" && operation.rightClipId.trim())
     ? operation.rightClipId.trim()
     : `${operation.clipId}-split-${Date.now()}`;
   requireNewClipId(project, rightClipId);
-  const rate = segment.type === "video" ? visualPlaybackRate(segment) : 1;
-  const archiveMediaId = segment.archiveMediaId || segment.id;
-  const left = { ...segment, archiveMediaId, duration: at };
-  const right = { ...segment, id: rightClipId, archiveMediaId, duration: duration - at };
-  if (segment.type === "video") {
-    left.sourceDuration = at * rate;
-    right.sourceStart = Math.max(0, Number(segment.sourceStart) || 0) + at * rate;
-    right.sourceDuration = (duration - at) * rate;
+  const rate = targetSegment.type === "video" ? visualPlaybackRate(targetSegment) : 1;
+  const archiveMediaId = targetSegment.archiveMediaId || targetSegment.id;
+  const left = { ...targetSegment, archiveMediaId, duration: localAt };
+  const right = { ...targetSegment, id: rightClipId, archiveMediaId, duration: Number((targetDuration - localAt).toFixed(6)) };
+  if (targetSegment.type === "video") {
+    left.sourceDuration = localAt * rate;
+    right.sourceStart = Math.max(0, Number(targetSegment.sourceStart) || 0) + localAt * rate;
+    right.sourceDuration = (targetDuration - localAt) * rate;
   }
-  if (Array.isArray(segment.keyframes)) {
-    left.keyframes = remapKeyframes(segment.keyframes, 0, at);
-    right.keyframes = remapKeyframes(segment.keyframes, at, duration);
+  if (Array.isArray(targetSegment.keyframes)) {
+    left.keyframes = remapKeyframes(targetSegment.keyframes, 0, localAt);
+    right.keyframes = remapKeyframes(targetSegment.keyframes, localAt, targetDuration);
   }
-  project.visualSegments = [...visuals.slice(0, index), left, right, ...visuals.slice(index + 1)];
+  project.visualSegments = [...visuals.slice(0, targetIndex), left, right, ...visuals.slice(targetIndex + 1)];
 }
 
 function reorderVisual(project, operation) {
@@ -515,6 +553,16 @@ function setTransition(project, operation) {
   if (operation.transitionId !== "none" && index >= visuals.length - 1) {
     throw Object.assign(new Error("A transition requires a following visual clip"), { code: "INVALID_TRANSITION_TARGET" });
   }
+  if (operation.transitionId !== "none" && index < visuals.length - 1) {
+    const curr = visuals[index];
+    const next = visuals[index + 1];
+    if (Number.isFinite(curr.start) && Number.isFinite(next.start)) {
+      const currEnd = curr.start + (Number(curr.duration) || 0);
+      if (next.start > currEnd + 0.05) {
+        throw Object.assign(new Error("A transition requires adjacent contiguous clips without gaps"), { code: "INVALID_TRANSITION_GAP" });
+      }
+    }
+  }
   const maximum = index < visuals.length - 1
     ? Math.max(0.1, Math.min(2, Number(visuals[index].duration) / 2, Number(visuals[index + 1].duration) / 2))
     : 0.5;
@@ -537,9 +585,14 @@ function updateCaption(project, operation) {
 }
 
 function addCaption(project, operation) {
-  project.captionSegments = materializeProjectCaptionTimings(project).captionSegments;
+  const existingCaptions = Array.isArray(project.captionSegments) ? project.captionSegments : [];
+  if (existingCaptions.some(hasExplicitCaptionTiming)) {
+    project.captionSegments = materializeProjectCaptionTimings(project).captionSegments;
+  } else {
+    project.captionSegments = [];
+  }
   const id = requireNewClipId(project, operation.clipId);
-  const captions = Array.isArray(project.captionSegments) ? project.captionSegments : [];
+  const captions = project.captionSegments;
   if (captions.some((caption) => caption.id === id)) {
     throw Object.assign(new Error(`Caption clip already exists: ${id}`), { code: "CLIP_ALREADY_EXISTS" });
   }
@@ -844,13 +897,16 @@ function setCaptionStyle(project, operation) {
     }
   }
 
-  // Normalize activeWordColor and other color properties if named color
+  // Normalize activeWordColor and other color properties if named color or shorthand hex
   const colorKeys = ["textColor", "backgroundColor", "borderColor", "textStrokeColor", "activeWordColor"];
   for (const cKey of colorKeys) {
     if (Object.hasOwn(style, cKey) && typeof style[cKey] === "string") {
-      const hex = resolveColorToHex(style[cKey]);
-      if (hex) {
-        style[cKey] = hex;
+      const val = style[cKey].trim();
+      if (!/^#[0-9a-fA-F]{6}$/.test(val)) {
+        const hex = resolveColorToHex(val);
+        if (hex) {
+          style[cKey] = hex;
+        }
       }
     }
   }
@@ -996,6 +1052,16 @@ function setClipProperty(project, operation) {
     throw Object.assign(new Error(`${operation.property} must be between ${limits.min} and ${limits.max}`), { code: "INVALID_ARGUMENT" });
   }
   clip[operation.property] = value;
+  if (["scale", "x", "y", "rotation", "opacity"].includes(operation.property) && (track === "visuals" || track === "overlays" || track === "stickers")) {
+    const defaultTransform = track === "overlays"
+      ? { x: 27, y: -24, scale: 0.34, rotation: 0, opacity: 1 }
+      : { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+    clip.baseTransform = {
+      ...defaultTransform,
+      ...(clip.baseTransform || {}),
+      [operation.property]: value,
+    };
+  }
   if (operation.property === "volume" && project.musicSegments?.some((m) => m.id === clip.id)) {
     project.musicVolume = value;
   }

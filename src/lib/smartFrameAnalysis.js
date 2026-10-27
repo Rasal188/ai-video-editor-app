@@ -154,17 +154,44 @@ async function detectNativeFace(source, width, height, subjectBox = null) {
       const centerX = (normalized.xMin + normalized.xMax) / 2;
       const centerY = (normalized.yMin + normalized.yMax) / 2;
       const insideSubject = subjectBox
-        ? centerX >= Number(subjectBox.xmin ?? subjectBox.xMin)
-          && centerX <= Number(subjectBox.xmax ?? subjectBox.xMax)
+        ? centerX >= Number(subjectBox.xmin ?? subjectBox.xMin) - 0.05
+          && centerX <= Number(subjectBox.xmax ?? subjectBox.xMax) + 0.05
           && centerY >= Number(subjectBox.ymin ?? subjectBox.yMin) - 0.15
-          && centerY <= Number(subjectBox.ymax ?? subjectBox.yMax)
+          && centerY <= Number(subjectBox.ymax ?? subjectBox.yMax) + 0.05
         : true;
       const area = (normalized.xMax - normalized.xMin) * (normalized.yMax - normalized.yMin);
-      return insideSubject ? { box: normalized, rank: area - Math.hypot(centerX - 0.5, centerY - 0.35) * 0.02 } : null;
-    }).filter(Boolean).sort((left, right) => right.rank - left.rank);
-    return candidates[0]?.box || null;
+      return { box: normalized, insideSubject, area, rank: area - Math.hypot(centerX - 0.5, centerY - 0.35) * 0.02 };
+    }).filter(Boolean);
+
+    // Prefer face inside subjectBox, but fallback to highest rank if not found
+    const inside = candidates.filter((c) => c.insideSubject).sort((a, b) => b.rank - a.rank);
+    if (inside.length > 0) return inside[0].box;
+    const allSorted = [...candidates].sort((a, b) => b.rank - a.rank);
+    return allSorted[0]?.box || null;
   } catch {
     return null;
+  }
+}
+
+async function detectAllNativeFaces(source, width, height) {
+  const detector = getNativeFaceDetector();
+  if (!detector || !source) return [];
+  try {
+    const faces = await detector.detect(source);
+    return faces.map((face) => {
+      const box = face.boundingBox;
+      if (!box) return null;
+      return {
+        xMin: Math.max(0, box.x / Math.max(1, width)),
+        yMin: Math.max(0, box.y / Math.max(1, height)),
+        xMax: Math.min(1, (box.x + box.width) / Math.max(1, width)),
+        yMax: Math.min(1, (box.y + box.height) / Math.max(1, height)),
+        label: "face",
+        confidence: 0.9,
+      };
+    }).filter(Boolean);
+  } catch {
+    return [];
   }
 }
 
@@ -279,10 +306,11 @@ async function analyzeVideo(segment, signal, onProgress, onSample) {
           });
         });
         if (detected?.box) {
+          const allFaces = await detectAllNativeFaces(canvas, width, height);
           const face = String(detected.label || "").toLowerCase() === "person"
             ? await detectNativeFace(canvas, width, height, detected.box)
             : null;
-          trackedSubject = { ...detected, face };
+          trackedSubject = { ...detected, face, faces: allFaces };
         }
         else if (sceneCut) trackedSubject = null;
         source = "detector";
@@ -296,6 +324,7 @@ async function analyzeVideo(segment, signal, onProgress, onSample) {
       const sample = {
         time,
         subject: trackedSubject?.box ? trackedSubject : null,
+        faces: trackedSubject?.faces || (trackedSubject?.face ? [trackedSubject.face] : []),
         source,
         state: trackedSubject?.box ? "tracked" : "lost",
       };

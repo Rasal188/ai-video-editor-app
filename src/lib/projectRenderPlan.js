@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { buildSmartZoomCropFilter } from "./smartZoom.js";
+import { buildReframingFFmpegCropFilter } from "./shortsReframing.js";
 
 const RATIO_SIZES = Object.freeze({
   "16:9": { width: 1280, height: 720 },
@@ -178,7 +179,7 @@ function assertSupportedProject(project) {
       }
     }
   });
-  if ((project.visualSegments || []).some((item) => item.keyframes?.length || item.mask?.type || item.filter || item.effects?.length || item.vision || item.speedCurve?.enabled)) unsupported.push("visual effects");
+  if ((project.visualSegments || []).some((item) => (item.keyframes?.length && !item.punchIns?.length) || item.mask?.type || item.filter || item.effects?.length || item.vision || item.speedCurve?.enabled)) unsupported.push("visual effects");
   if (unsupported.length) {
     throw renderError("UNSUPPORTED_RENDER_FEATURE", `Headless render does not yet support: ${[...new Set(unsupported)].join(", ")}`);
   }
@@ -345,8 +346,14 @@ export function buildFfmpegRenderPlan({ project, media = {}, extractedFiles, med
     const rate = Math.max(0.25, Math.min(4, Number(segment.playbackRate) || 1));
     const trim = segment.type === "video" ? `trim=start=${sourceStart}:duration=${clipDuration * rate},setpts=(PTS-STARTPTS)/${rate},` : "";
     const fitMode = segment.fitMode || project.fitMode || "contain";
+    const cropX = Number.isFinite(segment.cropX) ? Math.max(0, Math.min(1, segment.cropX)) : 0.5;
+    const cropY = Number.isFinite(segment.cropY) ? Math.max(0, Math.min(1, segment.cropY)) : 0.5;
+    const cropOffset = Math.abs(cropX - 0.5) < 0.001 && Math.abs(cropY - 0.5) < 0.001
+      ? ""
+      : `:(in_w-out_w)*${cropX.toFixed(3)}:(in_h-out_h)*${cropY.toFixed(3)}`;
+    const reframingFilter = segment.smartFrame ? buildReframingFFmpegCropFilter(segment.smartFrame, width, height, clipDuration) : "";
     const scaleFilter = fitMode === "cover"
-      ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},`
+      ? (reframingFilter ? `scale=${width}:${height}:force_original_aspect_ratio=increase,${reframingFilter}` : `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}${cropOffset},`)
       : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,`;
     const zoomFilter = buildSmartZoomCropFilter(segment.punchIns, width, height, clipDuration);
     filters.push(`[${inputIndex}:v]${trim}${scaleFilter}${zoomFilter}fps=${frameRate},settb=1/${frameRate},setsar=1,format=yuv420p[v${index}]`);

@@ -69,9 +69,11 @@ export function resolveCaptionMetrics({
   const paddingX = toPositiveNumber(captionStyle.paddingX, CAPTION_PADDING_X) * scale;
   const paddingY = toPositiveNumber(captionStyle.paddingY, CAPTION_PADDING_Y) * scale;
   const minWidth = frame.width * CAPTION_MIN_WIDTH_RATIO;
+  const isPortrait = frame.height > frame.width;
+  const maxRatio = isPortrait ? 0.86 : CAPTION_MAX_WIDTH_RATIO;
   const maxWidth = Math.max(
     minWidth,
-    Math.min(frame.width * CAPTION_MAX_WIDTH_RATIO, CAPTION_MAX_WIDTH * scale),
+    Math.min(frame.width * maxRatio, CAPTION_MAX_WIDTH * scale),
   );
   const fontId = captionStyle.fontId || DEFAULT_CAPTION_FONT_ID;
   const fontFamily = resolveCaptionFontFamily(fontId);

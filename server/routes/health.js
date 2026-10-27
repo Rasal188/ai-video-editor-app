@@ -11,6 +11,7 @@ router.get("/health", async (_req, res) => {
     status: isHealthy ? "ok" : "degraded",
     service: "ai-video-editor-backend",
     version: "1.0.0",
+    syncMode: "live-automated",
     timestamp: new Date().toISOString(),
     database: dbHealth,
   };

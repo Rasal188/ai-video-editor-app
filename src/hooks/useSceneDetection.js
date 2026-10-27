@@ -25,6 +25,22 @@ export function canDetectScenes(segment) {
 }
 
 /**
+ * Calculates absolute timeline position for a boundary within a clip given all visual track segments.
+ *
+ * @param {Array<Object>} visualSegments
+ * @param {string|number} segmentId
+ * @param {number} boundaryTime
+ * @returns {number}
+ */
+export function calculateBoundaryTimelineOffset(visualSegments = [], segmentId, boundaryTime = 0) {
+  const clipIndex = visualSegments.findIndex((c) => c?.id === segmentId);
+  const clipStart = clipIndex >= 0
+    ? visualSegments.slice(0, clipIndex).reduce((sum, c) => sum + (Number(c?.duration) || 0), 0)
+    : 0;
+  return Number((clipStart + Math.max(0, Number(boundaryTime) || 0)).toFixed(3));
+}
+
+/**
  * Toggles a boundary timestamp in the selected boundaries array.
  * Returns a new sorted array.
  *
@@ -103,6 +119,10 @@ export function useSceneDetection(options = {}) {
     projectVersion,
     locked = false,
     seekTo,
+    handlePlayToggle,
+    pauseTimelineMedia,
+    setIsPlaying,
+    isPlaying = false,
     notify,
     t = (k, fb) => fb || k,
     onApplyApproved,
@@ -120,11 +140,26 @@ export function useSceneDetection(options = {}) {
   const [currentSceneIndex, setCurrentSceneIndex] = useState(0);
   const [job, setJob] = useState({ running: false, progress: 0, phase: "" });
   const [error, setError] = useState("");
+  const [previewingTime, setPreviewingTime] = useState(null);
 
   const abortRef = useRef(null);
+  const previewTimerRef = useRef(null);
 
-  // Clean up any ongoing analysis if unmounted
-  useEffect(() => () => abortRef.current?.abort(), []);
+  const stopPreview = () => {
+    if (previewTimerRef.current) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    pauseTimelineMedia?.();
+    setIsPlaying?.(false);
+    setPreviewingTime(null);
+  };
+
+  // Clean up any ongoing analysis or preview playback if unmounted
+  useEffect(() => () => {
+    stopPreview();
+    abortRef.current?.abort();
+  }, []);
 
   const supported = canDetectScenes(segment);
   const stale = Boolean(draft && (draft.clipId !== segment?.id || draft.version !== projectVersion));
@@ -140,6 +175,7 @@ export function useSceneDetection(options = {}) {
   };
 
   const close = () => {
+    stopPreview();
     if (job.running) cancel();
     setIsOpen(false);
   };
@@ -149,6 +185,7 @@ export function useSceneDetection(options = {}) {
   };
 
   const cancel = () => {
+    stopPreview();
     abortRef.current?.abort();
     abortRef.current = null;
     setJob({ running: false, progress: 0, phase: "" });
@@ -247,9 +284,43 @@ export function useSceneDetection(options = {}) {
     }
   };
 
-  const previewTime = (time) => {
-    if (typeof seekTo === "function" && Number.isFinite(time)) {
-      seekTo(time);
+  const previewTime = (time, duration = 2.5) => {
+    if (!Number.isFinite(time)) return;
+
+    // Toggle off if already previewing this boundary
+    if (previewingTime !== null && Math.abs(previewingTime - time) < 0.01) {
+      stopPreview();
+      return;
+    }
+
+    if (previewTimerRef.current) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+
+    try {
+      const targetTimelineTime = calculateBoundaryTimelineOffset(visualSegments, segment?.id, time);
+
+      if (typeof seekTo === "function") {
+        seekTo(targetTimelineTime, { immediate: true, play: true });
+      }
+
+      if (!isPlaying) {
+        handlePlayToggle?.();
+      } else {
+        setIsPlaying?.(true);
+      }
+
+      setPreviewingTime(time);
+
+      // Auto-stop preview after duration
+      previewTimerRef.current = setTimeout(() => {
+        stopPreview();
+      }, Math.max(500, Math.round(duration * 1000)));
+    } catch (err) {
+      console.warn("Scene boundary preview failed:", err);
+      stopPreview();
+      notify?.(t("sceneDetectPreviewFailed", "Unable to preview scene boundary frame."));
     }
   };
 
@@ -259,7 +330,7 @@ export function useSceneDetection(options = {}) {
     setCurrentSceneIndex(clamped);
     const scene = draft.scenes[clamped];
     if (scene) {
-      previewTime(scene.start);
+      previewTime(scene.start, scene.duration || 2.5);
     }
   };
 
@@ -337,6 +408,8 @@ export function useSceneDetection(options = {}) {
     draft,
     selectedBoundaries,
     currentSceneIndex,
+    previewingTime,
+    stopPreview,
     run,
     cancel,
     toggleBoundary,

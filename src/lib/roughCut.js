@@ -1,4 +1,3 @@
-import { browserProjectFingerprint } from "./browserEditPlan.js";
 import { MIN_VISUAL_SEGMENT_SECONDS } from "../config/editor.js";
 import {
   canRemovePauses,
@@ -15,7 +14,9 @@ export { canRemovePauses, retainedRanges, collapseTime };
 export const DEFAULT_FILLER_WORDS = Object.freeze(new Set([
   "um", "uh", "er", "ah", "umm", "uhh", "hmm", "hm",
   "uh-huh", "um-hum",
-  "嗯", "啊", "呃", "额",
+  "like", "you know", "i mean", "sort of", "kind of",
+  "basically", "actually",
+  "嗯", "啊", "呃", "额", "那个", "就是",
 ]));
 
 /**
@@ -48,16 +49,16 @@ export function isFillerWord(text, fillerWords = DEFAULT_FILLER_WORDS) {
  * Only words explicitly recognized with usable timestamps are included.
  *
  * @param {Array<{ text: string, timestamp?: [number, number] }>} chunks
- * @param {{ duration: number }} clip
+ * @param {{ duration: number, sourceStart?: number }} clip
  * @param {Object} [options]
  * @param {number} [options.keep=0]
- * @param {number} [options.minDuration=0.15]
+ * @param {number} [options.minDuration=0.08]
  * @param {Set<string>} [options.fillerWords=DEFAULT_FILLER_WORDS]
  * @returns {Array<Object>}
  */
 export function findFillerWordCandidates(chunks, clip, {
-  keep = 0,
-  minDuration = 0.15,
+  keep: _keep = 0,
+  minDuration = 0.08,
   fillerWords = DEFAULT_FILLER_WORDS,
 } = {}) {
   const duration = Number(clip?.duration);
@@ -65,35 +66,76 @@ export function findFillerWordCandidates(chunks, clip, {
     return [];
   }
 
-  const safeKeep = Math.max(0, Math.min(1, Number(keep) || 0));
-  const safeMinDuration = Math.max(0.1, Number(minDuration) || 0.15);
+  const safeMinDuration = Math.max(0.05, Number(minDuration) || 0.08);
+  const sourceStart = Number(clip?.sourceStart) || 0;
   const candidates = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    if (!chunk || !isFillerWord(chunk.text, fillerWords)) continue;
+    if (!chunk) continue;
 
-    const rawStart = Number(chunk.timestamp?.[0]);
-    const rawEnd = Number(chunk.timestamp?.[1]);
-    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd) || rawEnd <= rawStart) continue;
+    const nextChunk = i + 1 < chunks.length ? chunks[i + 1] : null;
+    let matchedWord = null;
+    let rawStart = null;
+    let rawEnd = null;
+    let advance = 0;
 
-    // Apply keep padding so we don't clip adjacent legitimate speech.
-    // Padding contracts the cut interval inward by safeKeep / 2 from each edge.
-    const start = Math.max(0, rawStart + (safeKeep > 0 ? safeKeep / 2 : 0));
-    const end = Math.min(duration, rawEnd - (safeKeep > 0 ? safeKeep / 2 : 0));
+    // Check 2-word phrase first (e.g., "you know", "i mean", "sort of")
+    if (nextChunk) {
+      const phrase = `${normalizeWord(chunk.text)} ${normalizeWord(nextChunk.text)}`.trim();
+      if (fillerWords.has(phrase)) {
+        const s = Number(chunk.timestamp?.[0]);
+        const e = Number(nextChunk.timestamp?.[1]);
+        if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+          matchedWord = phrase;
+          rawStart = s;
+          rawEnd = e;
+          advance = 1;
+        }
+      }
+    }
+
+    // Check single-word filler
+    if (!matchedWord) {
+      const single = normalizeWord(chunk.text);
+      if (fillerWords.has(single)) {
+        const s = Number(chunk.timestamp?.[0]);
+        const e = Number(chunk.timestamp?.[1]);
+        if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+          matchedWord = single;
+          rawStart = s;
+          rawEnd = e;
+        }
+      }
+    }
+
+    if (!matchedWord) continue;
+
+    // Normalize clip-relative offset if Whisper chunks used un-sliced source time
+    if (sourceStart > 0 && rawStart >= sourceStart - EPS) {
+      rawStart = Math.max(0, Number((rawStart - sourceStart).toFixed(4)));
+      rawEnd = Math.max(rawStart + 0.05, Number((rawEnd - sourceStart).toFixed(4)));
+    }
+
+    // Cut interval covers the full filler word to ensure it is completely removed
+    const start = Math.max(0, Math.min(duration, Number(rawStart.toFixed(4))));
+    const end = Math.max(start, Math.min(duration, Number(rawEnd.toFixed(4))));
 
     if (end - start >= safeMinDuration) {
-      const clean = normalizeWord(chunk.text);
       candidates.push({
         id: `filler-${candidates.length}`,
         start,
         end,
-        duration: end - start,
+        duration: Number((end - start).toFixed(4)),
         type: "filler",
-        word: clean,
-        reason: `Filler: "${clean}"`,
+        word: matchedWord,
+        reason: `Filler: "${matchedWord}"`,
         enabled: true,
       });
+    }
+
+    if (advance > 0) {
+      i += advance;
     }
   }
 

@@ -20,6 +20,7 @@ export function AuthGate() {
   });
   const [activeProject, setActiveProject] = useState(null);
   const [initialImportFile, setInitialImportFile] = useState(null);
+  const [initialGeneratedProject, setInitialGeneratedProject] = useState(null);
   const { notify, toast } = useToast(3000, "en");
 
   // Check URL on load if a project ID is present
@@ -95,6 +96,7 @@ export function AuthGate() {
     setCurrentUser(null);
     setAuthState("unauthenticated");
     setActiveProject(null);
+    setInitialGeneratedProject(null);
     setCurrentView("dashboard");
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
@@ -107,6 +109,7 @@ export function AuthGate() {
   const handleOpenProject = useCallback((project) => {
     setActiveProject(project);
     setInitialImportFile(null);
+    setInitialGeneratedProject(null);
     setCurrentView("editor");
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
@@ -121,6 +124,20 @@ export function AuthGate() {
   const handleImportArchive = useCallback((file) => {
     setActiveProject(null);
     setInitialImportFile(file);
+    setInitialGeneratedProject(null);
+    setCurrentView("editor");
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("view", "editor");
+      url.searchParams.delete("project");
+      window.history.pushState({}, "", url);
+    }
+  }, []);
+
+  const handleOpenGeneratedProject = useCallback((project) => {
+    setActiveProject(null);
+    setInitialImportFile(null);
+    setInitialGeneratedProject(project);
     setCurrentView("editor");
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
@@ -133,6 +150,7 @@ export function AuthGate() {
   const handleBackToDashboard = useCallback(() => {
     setActiveProject(null);
     setInitialImportFile(null);
+    setInitialGeneratedProject(null);
     setCurrentView("dashboard");
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
@@ -170,6 +188,7 @@ export function AuthGate() {
           onLogout={handleLogout}
           onOpenProject={handleOpenProject}
           onImportArchive={handleImportArchive}
+          onOpenGeneratedProject={handleOpenGeneratedProject}
           notify={notify}
         />
       ) : (
@@ -178,6 +197,7 @@ export function AuthGate() {
           onLogout={handleLogout}
           activeProject={activeProject}
           initialImportFile={initialImportFile}
+          initialGeneratedProject={initialGeneratedProject}
           onBackToDashboard={handleBackToDashboard}
         />
       )}

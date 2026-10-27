@@ -36,7 +36,7 @@ export function useSmartFrame({
     abortRef.current = null;
     selectedIdRef.current = id;
     startingRatioRef.current = ratioId || "16:9";
-    const applied = normalizeSmartFrame(selectedSegment?.smartFrame);
+    const applied = normalizeSmartFrame(selectedSegment?.smartFrame || selectedSegment?.visualEffects?.smartFrame);
     setBaseline(applied);
     setDraft(applied);
     setAnalysisTrack(applied?.analysisTrack || null);
@@ -44,7 +44,7 @@ export function useSmartFrame({
     setTargetRatioId(applied?.targetRatio || ratioId || "16:9");
     setCompareMode(applied ? "after" : "original");
     setJob({ running: false, stage: "idle", progress: 0, phase: "" });
-  }, [ratioId, selectedSegment?.id, selectedSegment?.smartFrame]);
+  }, [ratioId, selectedSegment?.id, selectedSegment?.smartFrame, selectedSegment?.visualEffects?.smartFrame]);
 
   const rebuildDraft = useCallback((track, nextRatioId, nextSettings) => {
     if (!track || !selectedSegment) return null;
@@ -150,8 +150,12 @@ export function useSmartFrame({
     if (!selectedSegment?.id || trackLocked) return;
     setVisualSegments((segments) => segments.map((segment) => {
       if (segment.id !== selectedSegment.id) return segment;
-      const { smartFrame: _smartFrame, ...rest } = segment;
-      return rest;
+      const { smartFrame: _smartFrame, visualEffects, ...rest } = segment;
+      const cleanVisualEffects = visualEffects?.smartFrame ? { ...visualEffects } : visualEffects;
+      if (cleanVisualEffects && "smartFrame" in cleanVisualEffects) {
+        delete cleanVisualEffects.smartFrame;
+      }
+      return cleanVisualEffects !== undefined ? { ...rest, visualEffects: cleanVisualEffects } : rest;
     }));
     setBaseline(null);
     setDraft(null);

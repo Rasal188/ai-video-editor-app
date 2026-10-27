@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { unzipSync, strFromU8 } from "fflate";
 
-const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173";
+const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173/?view=editor";
 const ARTIFACTS_DIR = resolve("test-artifacts/playwright/scene-detection");
 const TEST_VIDEO_PATH = resolve("test-artifacts/everyday-tech-quiz-short.mp4");
 const NO_AUDIO_VIDEO_PATH = resolve("test-artifacts/no-audio-sample.mp4");
@@ -348,6 +348,33 @@ async function runSceneDetectionE2E() {
     await page.waitForTimeout(300);
     const prevBadgeText = await currentBadge.innerText();
     console.log(`After prev: "${prevBadgeText}" (back to initial)`);
+
+    // Test Boundary Preview Buttons (BUG-SD-001 Verification)
+    console.log("Verifying boundary preview buttons (scene-boundary-preview-)...");
+    for (let bIndex = 0; bIndex < Math.min(3, detectedBoundariesCount); bIndex++) {
+      const previewBtn = page.locator(`[data-testid="scene-boundary-preview-${bIndex}"]`);
+      await previewBtn.waitFor({ state: "visible", timeout: 3000 });
+
+      // Click preview button to start preview playback
+      await previewBtn.click();
+      await page.waitForTimeout(400);
+
+      // Verify button has active/playing state
+      const isPlayingClass = await previewBtn.evaluate((el) => el.classList.contains("is-playing"));
+      console.log(`✔ Boundary preview button ${bIndex} playing state active: ${isPlayingClass ? "YES" : "NO"}`);
+      if (!isPlayingClass) {
+        throw new Error(`Expected scene-boundary-preview-${bIndex} to have 'is-playing' class while playing`);
+      }
+
+      // Verify clicking again toggles off
+      await previewBtn.click();
+      await page.waitForTimeout(300);
+      const isPlayingAfterToggle = await previewBtn.evaluate((el) => el.classList.contains("is-playing"));
+      console.log(`✔ Boundary preview button ${bIndex} stopped after toggle click: ${!isPlayingAfterToggle ? "YES" : "NO"}`);
+      if (isPlayingAfterToggle) {
+        throw new Error(`Expected scene-boundary-preview-${bIndex} to stop playing on second click`);
+      }
+    }
 
     // Test Boundary Toggle (Deselect / Select individual)
     const toggle0 = page.locator('[data-testid="scene-boundary-toggle-0"]');

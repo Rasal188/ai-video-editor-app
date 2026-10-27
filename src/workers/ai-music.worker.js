@@ -8,7 +8,7 @@ import { fetchFirstAvailableModel, mirroredModelFileUrls } from "../lib/modelSou
 const MODEL_REVISION = "0b8a05e0bc3511e674b4cb3413d3ef6c48880cdb";
 const LEGACY_BASE = "https://huggingface.co/lsb/stable-audio-3-small-music-onnx/resolve/main";
 const SAMPLE_RATE = 44100;
-const MODEL_CACHE_NAME = "timeline-studio-model-cache-v4";
+const MODEL_CACHE_NAME = "timeline-studio-model-cache-v5";
 const MODEL_CACHE_PREFIX = `${self.location.origin}/__model-cache__/haixin/stable-audio-3-small-music-onnx/${MODEL_REVISION}/`;
 const MODEL_CACHE_READY_KEY = `${MODEL_CACHE_PREFIX}__complete__`;
 const MODEL_CACHE_LOCK_PREFIX = `timeline-studio-ai-music-${MODEL_REVISION}`;

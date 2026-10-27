@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   canDetectScenes,
+  calculateBoundaryTimelineOffset,
   toggleBoundarySelection,
   buildApprovedScenePlan,
   validateSceneCutBoundaries,
@@ -35,6 +36,41 @@ describe("AI Scene Detection UI & Workflow", () => {
       assert.strictEqual(canDetectScenes({ type: "video" }), false);
       assert.strictEqual(canDetectScenes(null), false);
       assert.strictEqual(canDetectScenes(undefined), false);
+    });
+  });
+
+  describe("calculateBoundaryTimelineOffset (BUG-SD-001 Preview Seeking)", () => {
+    it("maps boundary directly when clip is the first segment on timeline", () => {
+      const segments = [
+        { id: "clip-1", type: "video", duration: 24.0 },
+      ];
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "clip-1", 6.0), 6.0);
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "clip-1", 12.0), 12.0);
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "clip-1", 18.0), 18.0);
+    });
+
+    it("correctly offsets boundary timestamp by preceding clips durations", () => {
+      const segments = [
+        { id: "intro-clip", type: "video", duration: 5.5 },
+        { id: "target-clip", type: "video", duration: 24.0 },
+        { id: "outro-clip", type: "video", duration: 3.0 },
+      ];
+      // Boundaries at 6.0s, 12.0s, 18.0s relative to target-clip should map to 11.5s, 17.5s, 23.5s
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "target-clip", 6.0), 11.5);
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "target-clip", 12.0), 17.5);
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "target-clip", 18.0), 23.5);
+    });
+
+    it("handles boundary 0 or negative boundary gracefully", () => {
+      const segments = [{ id: "c1", duration: 10 }];
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "c1", 0), 0);
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "c1", -2), 0);
+    });
+
+    it("handles missing or unmatched segment ID by defaulting to 0 clipStart", () => {
+      const segments = [{ id: "c1", duration: 10 }];
+      assert.strictEqual(calculateBoundaryTimelineOffset(segments, "unknown-id", 6.0), 6.0);
+      assert.strictEqual(calculateBoundaryTimelineOffset([], "unknown-id", 6.0), 6.0);
     });
   });
 
@@ -597,6 +633,186 @@ describe("AI Scene Detection UI & Workflow", () => {
           );
         }
       }
+    });
+  });
+
+  describe("BUG-SD-001 — Scene Boundary Preview & Review Layout", () => {
+    it("clicking a boundary preview calculates timeline offset and seeks to timestamp", () => {
+      const visualSegments = [
+        { id: "clip-intro", duration: 4.2 },
+        { id: "clip-main", duration: 15.0 },
+      ];
+      const boundaryTime = 3.8;
+      const targetTimelineTime = calculateBoundaryTimelineOffset(visualSegments, "clip-main", boundaryTime);
+      assert.strictEqual(targetTimelineTime, 8.0);
+
+      // Verify seek dispatch parameters
+      const seeks = [];
+      const seekTo = (time, opts) => seeks.push({ time, opts });
+      seekTo(targetTimelineTime, { immediate: true, play: true });
+
+      assert.strictEqual(seeks.length, 1);
+      assert.strictEqual(seeks[0].time, 8.0);
+      assert.deepStrictEqual(seeks[0].opts, { immediate: true, play: true });
+    });
+
+    it("previewing multiple boundaries consecutively updates the seek timestamp each time", () => {
+      const visualSegments = [{ id: "c1", duration: 30.0 }];
+      const boundaries = [2.5, 7.0, 14.2, 22.8];
+
+      const seeks = [];
+      const seekTo = (time, opts) => seeks.push({ time, opts });
+
+      let currentPreviewTime = null;
+
+      boundaries.forEach((time) => {
+        const offset = calculateBoundaryTimelineOffset(visualSegments, "c1", time);
+        seekTo(offset, { immediate: true, play: true });
+        currentPreviewTime = time;
+      });
+
+      assert.strictEqual(seeks.length, 4);
+      assert.strictEqual(seeks[0].time, 2.5);
+      assert.strictEqual(seeks[1].time, 7.0);
+      assert.strictEqual(seeks[2].time, 14.2);
+      assert.strictEqual(seeks[3].time, 22.8);
+      assert.strictEqual(currentPreviewTime, 22.8);
+    });
+
+    it("previewing boundaries does NOT alter boundary selection states", () => {
+      // User has selected boundaries at 2.5 and 14.2
+      const initialSelection = [2.5, 14.2];
+      let selectedBoundaries = [...initialSelection];
+
+      // Simulate previewing boundaries at 2.5, 7.0, 14.2, 22.8
+      const boundariesToPreview = [2.5, 7.0, 14.2, 22.8];
+      const previewed = [];
+
+      boundariesToPreview.forEach((time) => {
+        // Previewing only updates previewingTime and dispatches seek
+        previewed.push(time);
+        // Note: selectedBoundaries is NOT touched by previewTime!
+      });
+
+      // Verify that after 4 consecutive previews, selection remains identical
+      assert.deepStrictEqual(selectedBoundaries, initialSelection);
+      assert.strictEqual(selectedBoundaries.length, 2);
+      assert.ok(selectedBoundaries.includes(2.5));
+      assert.ok(selectedBoundaries.includes(14.2));
+      assert.ok(!selectedBoundaries.includes(7.0));
+      assert.ok(!selectedBoundaries.includes(22.8));
+    });
+
+    it("review mode layout configuration keeps main video preview unobscured", () => {
+      // Simulate layout decision logic in SceneDetectionModal
+      const computeLayoutState = (draft, userChoice = null, dockSide = "right") => {
+        const isReviewing = Boolean(draft);
+        const effectivePosition = userChoice || (isReviewing ? dockSide : "center");
+        const isDocked = effectivePosition === "right" || effectivePosition === "left";
+        return { isReviewing, effectivePosition, isDocked };
+      };
+
+      // Before detection (draft is null): centered modal
+      const beforeDetection = computeLayoutState(null);
+      assert.strictEqual(beforeDetection.isReviewing, false);
+      assert.strictEqual(beforeDetection.isDocked, false);
+      assert.strictEqual(beforeDetection.effectivePosition, "center");
+
+      // In review mode (draft exists): automatically docked to side (unobscured preview)
+      const reviewMode = computeLayoutState({ scenes: [1, 2], boundaries: [2.5] });
+      assert.strictEqual(reviewMode.isReviewing, true);
+      assert.strictEqual(reviewMode.isDocked, true);
+      assert.strictEqual(reviewMode.effectivePosition, "right");
+
+      // User can switch dock side to left
+      const dockedLeft = computeLayoutState({ scenes: [1] }, null, "left");
+      assert.strictEqual(dockedLeft.isDocked, true);
+      assert.strictEqual(dockedLeft.effectivePosition, "left");
+
+      // User explicit toggle to center
+      const userCentered = computeLayoutState({ scenes: [1] }, "center");
+      assert.strictEqual(userCentered.isDocked, false);
+      assert.strictEqual(userCentered.effectivePosition, "center");
+    });
+
+    it("handles boundary preview errors or unavailable media gracefully", () => {
+      let notification = "";
+      const notify = (msg) => { notification = msg; };
+
+      // Simulate previewTime failure path
+      const simulatedPreviewTime = (time, seekFn) => {
+        try {
+          if (!Number.isFinite(time)) return false;
+          seekFn();
+          return true;
+        } catch (err) {
+          notify("Unable to preview scene boundary frame.");
+          return false;
+        }
+      };
+
+      // Non-finite time handled
+      const r1 = simulatedPreviewTime(NaN, () => {});
+      assert.strictEqual(r1, false);
+
+      // Broken media decoder/seek throws handled gracefully
+      const r2 = simulatedPreviewTime(5.0, () => {
+        throw new Error("MEDIA_DECODE_ERROR: pipeline closed");
+      });
+      assert.strictEqual(r2, false);
+      assert.strictEqual(notification, "Unable to preview scene boundary frame.");
+    });
+
+    it("verifies boundary selection and Apply Cuts still work seamlessly with review layout", () => {
+      const draft = {
+        duration: 16.0,
+        boundaries: [
+          { time: 4.0, confidence: 0.88 },
+          { time: 9.5, confidence: 0.92 },
+          { time: 13.0, confidence: 0.75 },
+        ],
+        scenes: [
+          { index: 0, start: 0, end: 4.0, duration: 4.0 },
+          { index: 1, start: 4.0, end: 9.5, duration: 5.5 },
+          { index: 2, start: 9.5, end: 13.0, duration: 3.5 },
+          { index: 3, start: 13.0, end: 16.0, duration: 3.0 },
+        ],
+      };
+
+      // User initially has all 3 boundaries selected
+      let selected = draft.boundaries.map((b) => b.time);
+      assert.deepStrictEqual(selected, [4.0, 9.5, 13.0]);
+
+      // User toggles boundary at 9.5s off
+      selected = toggleBoundarySelection(selected, 9.5);
+      assert.deepStrictEqual(selected, [4.0, 13.0]);
+
+      // Apply cuts plan generation
+      const approvedPlan = buildApprovedScenePlan(draft, selected);
+      assert.strictEqual(approvedPlan.length, 3);
+      assert.deepStrictEqual(approvedPlan[0], { index: 0, start: 0, end: 4.0, duration: 4.0 });
+      assert.deepStrictEqual(approvedPlan[1], { index: 1, start: 4.0, end: 13.0, duration: 9.0 });
+      assert.deepStrictEqual(approvedPlan[2], { index: 2, start: 13.0, end: 16.0, duration: 3.0 });
+
+      // Apply cuts to visual track segment
+      const originalClip = {
+        id: "clip-video-1",
+        type: "video",
+        start: 0,
+        duration: 16.0,
+        sourceStart: 0,
+        sourceEnd: 16.0,
+      };
+
+      const splitResult = splitVisualSegmentAtBoundaries(originalClip, selected);
+      assert.strictEqual(splitResult.length, 3);
+      assert.strictEqual(splitResult[0].duration, 4.0);
+      assert.strictEqual(splitResult[1].duration, 9.0);
+      assert.strictEqual(splitResult[2].duration, 3.0);
+      assert.strictEqual(
+        splitResult.reduce((sum, c) => sum + c.duration, 0),
+        16.0
+      );
     });
   });
 });

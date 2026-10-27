@@ -1,13 +1,17 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowsLeftRight,
   CaretLeft,
   CaretRight,
   Check,
   CircleNotch,
+  CornersOut,
+  Pause,
   Play,
   Scan,
   Scissors,
+  SidebarSimple,
   X,
 } from "@phosphor-icons/react";
 import "./SceneDetectionModal.css";
@@ -42,12 +46,16 @@ export function SceneDetectionModal({
     toggleBoundary,
     toggleAll,
     previewTime,
+    previewingTime,
     navigateToScene,
     prevScene,
     nextScene,
     apply,
     applyCuts,
   } = tool;
+
+  const [dockSide, setDockSide] = useState("right");
+  const [userLayoutChoice, setUserLayoutChoice] = useState(null);
 
   // Keyboard shortcut: Escape closes or cancels
   useEffect(() => {
@@ -71,6 +79,10 @@ export function SceneDetectionModal({
   const boundaries = draft?.boundaries || [];
   const currentScene = scenes[currentSceneIndex] || scenes[0] || null;
 
+  const isReviewing = Boolean(draft);
+  const effectivePosition = userLayoutChoice || (isReviewing ? dockSide : "center");
+  const isDocked = effectivePosition === "right" || effectivePosition === "left";
+
   const getErrorText = (code) => {
     if (!code) return "";
     if (code === "sceneDetectUnsupported") return t("sceneDetectUnsupported", "The selected video format or properties are not supported.");
@@ -80,13 +92,15 @@ export function SceneDetectionModal({
 
   const modalContent = (
     <div
-      className="scene-detection-backdrop"
+      className={`scene-detection-backdrop ${isReviewing ? "is-reviewing" : ""} ${isDocked ? "is-docked" : "is-centered"} is-docked-${effectivePosition}`}
       role="dialog"
-      aria-modal="true"
+      aria-modal={!isDocked}
       aria-labelledby="scene-detection-title"
       data-testid="scene-detection-modal"
+      data-layout-mode={effectivePosition}
+      data-is-reviewing={isReviewing ? "true" : "false"}
     >
-      <div className="scene-detection-container">
+      <div className={`scene-detection-container ${isDocked ? "is-docked" : "is-centered"} is-docked-${effectivePosition}`}>
         {/* Header */}
         <header className="scene-detection-header">
           <div className="scene-detection-title-group">
@@ -98,15 +112,46 @@ export function SceneDetectionModal({
               {t("sceneDetectHint", "Detect visual cuts and scene boundaries")}
             </p>
           </div>
-          <button
-            type="button"
-            className="scene-detection-close-btn"
-            onClick={close}
-            aria-label={t("sceneDetectDismiss", "Close")}
-            data-testid="scene-detect-close-btn"
-          >
-            <X size={18} />
-          </button>
+          <div className="scene-detection-header-controls">
+            {isDocked ? (
+              <button
+                type="button"
+                className="scene-detection-layout-btn"
+                data-testid="scene-detect-side-toggle-btn"
+                aria-label={effectivePosition === "right" ? t("sceneDetectDockLeft", "Dock to left") : t("sceneDetectDockRight", "Dock to right")}
+                title={effectivePosition === "right" ? t("sceneDetectDockLeft", "Dock to left side") : t("sceneDetectDockRight", "Dock to right side")}
+                onClick={() => {
+                  const nextSide = effectivePosition === "right" ? "left" : "right";
+                  setDockSide(nextSide);
+                  setUserLayoutChoice(nextSide);
+                }}
+              >
+                <ArrowsLeftRight size={17} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="scene-detection-layout-btn"
+              data-testid="scene-detect-dock-toggle-btn"
+              aria-label={isDocked ? t("sceneDetectCenterModal", "Center modal") : t("sceneDetectDockSide", "Dock to side to view preview")}
+              title={isDocked ? t("sceneDetectCenterModal", "Center modal") : t("sceneDetectDockSide", "Dock to side to view preview")}
+              onClick={() => {
+                const nextMode = isDocked ? "center" : (dockSide || "right");
+                setUserLayoutChoice(nextMode);
+              }}
+            >
+              {isDocked ? <CornersOut size={17} /> : <SidebarSimple size={17} />}
+            </button>
+            <button
+              type="button"
+              className="scene-detection-close-btn"
+              onClick={close}
+              aria-label={t("sceneDetectDismiss", "Close")}
+              data-testid="scene-detect-close-btn"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
         {/* Body */}
@@ -271,6 +316,22 @@ export function SceneDetectionModal({
                 ) : null}
               </div>
 
+              {/* Live canvas preview indicator */}
+              {previewingTime !== null ? (
+                <div className="scene-detection-active-preview-bar" data-testid="scene-detect-active-preview-bar">
+                  <span className="scene-detection-pulse-dot" />
+                  <span>
+                    {t("sceneDetectInspectingFrame", "Inspecting frame on canvas: {time}")
+                      .replace("{time}", formatTime(previewingTime))}
+                  </span>
+                </div>
+              ) : (
+                <div className="scene-detection-canvas-preview-tip" data-testid="scene-detect-preview-tip">
+                  <span className="scene-detection-tip-icon">👁</span>
+                  <span>{t("sceneDetectPreviewTip", "Click preview button on any boundary to inspect the video frame on the canvas.")}</span>
+                </div>
+              )}
+
               {/* Scene Navigator */}
               {scenes.length > 0 && currentScene ? (
                 <div className="scene-detection-navigator" data-testid="scene-detect-navigator">
@@ -299,12 +360,16 @@ export function SceneDetectionModal({
                   <div style={{ display: "flex", gap: "8px" }}>
                     <button
                       type="button"
-                      className="scene-detection-nav-btn"
-                      title={t("sceneDetectPreview", "Preview location")}
+                      className={`scene-detection-nav-btn ${previewingTime !== null && Math.abs(previewingTime - currentScene.start) < 0.01 ? "is-playing" : ""}`}
+                      title={previewingTime !== null && Math.abs(previewingTime - currentScene.start) < 0.01 ? t("pause", "Pause") : t("sceneDetectPreview", "Preview location")}
                       data-testid="scene-detect-preview-scene-btn"
-                      onClick={() => previewTime(currentScene.start)}
+                      onClick={() => previewTime(currentScene.start, currentScene.duration || 2.5)}
                     >
-                      <Play size={14} weight="fill" />
+                      {previewingTime !== null && Math.abs(previewingTime - currentScene.start) < 0.01 ? (
+                        <Pause size={14} weight="fill" />
+                      ) : (
+                        <Play size={14} weight="fill" />
+                      )}
                     </button>
                     <button
                       type="button"
@@ -331,10 +396,11 @@ export function SceneDetectionModal({
                     const isSelected = selectedBoundaries.some(
                       (tVal) => Math.abs(tVal - b.time) < 0.005,
                     );
+                    const isPreviewing = previewingTime !== null && Math.abs(previewingTime - b.time) < 0.01;
                     return (
                       <li
                         key={idx}
-                        className={`scene-detection-boundary-item ${isSelected ? "is-selected" : ""}`}
+                        className={`scene-detection-boundary-item ${isSelected ? "is-selected" : ""} ${isPreviewing ? "is-previewing" : ""}`}
                         data-testid={`scene-boundary-item-${idx}`}
                       >
                         <label className="scene-detection-boundary-left">
@@ -347,6 +413,11 @@ export function SceneDetectionModal({
                           <span className="scene-detection-boundary-time">
                             {formatTime(b.time)}
                           </span>
+                          {isPreviewing ? (
+                            <span className="scene-detection-boundary-previewing-badge" data-testid={`scene-boundary-previewing-badge-${idx}`}>
+                              {t("sceneDetectActiveFrame", "Inspecting")}
+                            </span>
+                          ) : null}
                         </label>
 
                         <div className="scene-detection-boundary-meta">
@@ -355,12 +426,16 @@ export function SceneDetectionModal({
                           </span>
                           <button
                             type="button"
-                            className="scene-detection-preview-btn"
-                            title={t("sceneDetectPreview", "Preview location")}
+                            className={`scene-detection-preview-btn ${isPreviewing ? "is-playing" : ""}`}
+                            title={isPreviewing ? t("pause", "Pause") : t("sceneDetectPreview", "Preview location")}
                             data-testid={`scene-boundary-preview-${idx}`}
                             onClick={() => previewTime(b.time)}
                           >
-                            <Play size={13} weight="fill" />
+                            {isPreviewing ? (
+                              <Pause size={13} weight="fill" />
+                            ) : (
+                              <Play size={13} weight="fill" />
+                            )}
                           </button>
                         </div>
                       </li>

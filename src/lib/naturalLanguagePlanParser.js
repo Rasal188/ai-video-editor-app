@@ -110,7 +110,7 @@ export function resolveOrdinalIndex(text, totalCount = 1) {
  * Resolves clip target ID from text reference and project summary.
  */
 export function resolveClipTargetFromText(text, projectSummary, defaultId = "") {
-  const visuals = projectSummary?.visualClips || projectSummary?.visuals || [];
+  const visuals = projectSummary?.visualSegments || projectSummary?.visualClips || projectSummary?.visuals || [];
   if (!visuals.length) return defaultId;
 
   const str = String(text || "").toLowerCase();
@@ -426,37 +426,136 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
   }
 
   // 4. Transitions
-  // Matches e.g. "add a fade transition", "add a smooth transition between these clips", "make the transition smoother", "remove the transition", "make the transition shorter"
-  const isTransitionRequest = /\b(?:transition|transitions)\b/i.test(text) && !/\b(?:zoom|punch[- ]in)\s+transition/i.test(text);
+  // Matches e.g. "add a fade transition", "add a smooth transition between these clips", "make the transition smoother", "remove the transition", "make the transition shorter", "add smooth fade in transition between the cuts"
+  const isTransitionRequest = /\b(?:transition|transitions|crossfade|cross-fade)\b/i.test(text)
+    && !/\bpunch[- ]in\s+transition/i.test(text)
+    && !/\b(?:make\s+(?:the\s+)?zoom\s+transitions?|zoom\s+transitions?\s+(?:slower|faster)|(?:slower|faster)\s+zoom\s+transitions?)\b/i.test(text);
   if (isTransitionRequest) {
     const isRemove = /\b(?:remove|delete|clear|none)\b/i.test(text);
     const isShorter = /\b(?:shorter|faster|quick(?:er)?)\b/i.test(text);
     const isSmoother = /\b(?:smooth(?:er)?|soft(?:er)?)\b/i.test(text);
-    const transMatch = text.match(/\b(fade|zoom|flash|wipe-left|wipe-up|blur|split|glitch)\b/i);
-    const transType = isRemove ? "none" : (transMatch ? transMatch[1].toLowerCase() : "fade");
-    const duration = isRemove ? 0 : (isShorter ? 0.3 : (isSmoother ? 1.0 : 0.5));
-    const clipId = resolveClipTargetFromText(text, projectSummary, visuals[0]?.id || "");
-    if (clipId) {
+    const transMatch = text.match(/\b(fade|crossfade|cross-fade|zoom|flash|wipe-left|wipe-up|blur|split|glitch)\b/i);
+    const matchedType = transMatch ? transMatch[1].toLowerCase() : "fade";
+    const transType = isRemove ? "none" : (matchedType.startsWith("cross") ? "fade" : matchedType);
+    const reqDuration = isRemove ? 0 : (isShorter ? 0.3 : (isSmoother ? 1.0 : 0.5));
+    const isMultiCut = /\b(?:between\s+(?:the\s+)?(?:cuts|clips)|all\s+cuts|every\s+cut|all\s+clips|each\s+cut|across\s+(?:the\s+)?cuts)\b/i.test(text);
+
+    if (isMultiCut) {
+      if (visuals.length < 2) {
+        warnings.push("Transitions require at least two adjacent visual clips on the timeline.");
+      } else {
+        // Apply transitions only to valid adjacent boundaries (index 0 through visuals.length - 2). Never target the final clip.
+        let addedCount = 0;
+        for (let i = 0; i < visuals.length - 1; i++) {
+          const curr = visuals[i];
+          const next = visuals[i + 1];
+          // Check for timeline gaps if explicit starts exist
+          if (Number.isFinite(curr.start) && Number.isFinite(next.start)) {
+            const currEnd = curr.start + (Number(curr.duration) || 0);
+            if (next.start > currEnd + 0.05) {
+              warnings.push(`Skipped transition between clip ${curr.id} and ${next.id} due to a timeline gap.`);
+              continue;
+            }
+          }
+          const maxDur = Math.max(0.1, Math.min(2, (Number(curr.duration) || 1) / 2, (Number(next.duration) || 1) / 2));
+          const effDur = isRemove ? 0 : Math.min(reqDuration, Number(maxDur.toFixed(2)));
+          actions.push({
+            id: nextId(),
+            type: "transition.set",
+            description: isRemove
+              ? `Remove transition between ${curr.name || curr.id} and ${next.name || next.id}`
+              : `Apply ${transType} transition (${effDur}s) between ${curr.name || curr.id} and ${next.name || next.id}`,
+            params: {
+              clipId: curr.id,
+              transitionId: transType,
+              duration: effDur,
+            },
+          });
+          addedCount++;
+        }
+        if (addedCount > 0) {
+          descriptions.push(isRemove ? `Remove transitions from ${addedCount} cut(s)` : `Add ${transType} transitions across ${addedCount} cut(s)`);
+        }
+      }
+    } else {
+      const clipId = resolveClipTargetFromText(text, projectSummary, visuals[0]?.id || "");
+      if (clipId) {
+        const targetIdx = visuals.findIndex((c) => c.id === clipId);
+        if (targetIdx >= visuals.length - 1 && !isRemove) {
+          warnings.push(`Cannot apply a transition to the final clip (${clipId}) because a transition requires a following visual clip.`);
+        } else {
+          const next = visuals[targetIdx + 1];
+          const maxDur = next ? Math.max(0.1, Math.min(2, (Number(visuals[targetIdx].duration) || 1) / 2, (Number(next.duration) || 1) / 2)) : 0.5;
+          const effDur = isRemove ? 0 : Math.min(reqDuration, Number(maxDur.toFixed(2)));
+          actions.push({
+            id: nextId(),
+            type: "transition.set",
+            description: isRemove ? `Remove transition from clip ${clipId}` : `Apply ${transType} transition (${effDur}s) to clip ${clipId}`,
+            params: {
+              clipId,
+              transitionId: transType,
+              duration: effDur,
+            },
+          });
+          descriptions.push(isRemove ? "Remove transition" : `Add ${transType} transition (${effDur}s)`);
+        }
+      } else {
+        warnings.push("No visual clip found to attach transition to.");
+      }
+    }
+  }
+
+  // 4b. Intra-clip Visual Fades (Fade In / Fade Out)
+  // Distinguish intra-clip entry/exit fade from cross-clip transitions
+  const isClipFadeRequest = /\b(?:fade\s*in|fade\s*out)\b/i.test(text) &&
+    !isTransitionRequest &&
+    !/\b(?:between\s+(?:the\s+)?(?:cuts|clips))\b/i.test(text) &&
+    !/\b(?:music|song|soundtrack|audio|dialogue|voiceover)\b/i.test(text);
+
+  if (isClipFadeRequest) {
+    const isOut = /\bfade\s*out\b/i.test(text);
+    const isAllClips = /\b(?:each\s+clip|all\s+clips|every\s+clip|all\s+visuals|whole\s+video|entire\s+video)\b/i.test(text);
+    const durMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:s|sec|second(?:s)?)?\b/i);
+    const fadeDuration = durMatch ? Math.min(10, Math.max(0.1, parseFloat(durMatch[1]))) : 0.5;
+
+    if (isAllClips) {
       actions.push({
         id: nextId(),
-        type: "transition.set",
-        description: isRemove ? `Remove transition from clip ${clipId}` : `Apply ${transType} transition (${duration}s) to clip ${clipId}`,
+        type: "clip.set_property",
+        description: `Apply visual ${isOut ? "fade out" : "fade in"} (${fadeDuration}s) to all visual clips`,
         params: {
-          clipId,
-          transitionId: transType,
-          duration,
+          scope: "all",
+          property: isOut ? "fadeOut" : "fadeIn",
+          value: fadeDuration,
         },
       });
-      descriptions.push(isRemove ? "Remove transition" : `Add ${transType} transition (${duration}s)`);
+      descriptions.push(`Visual ${isOut ? "fade out" : "fade in"} across all clips`);
     } else {
-      warnings.push("No visual clip found to attach transition to.");
+      const clipId = resolveClipTargetFromText(text, projectSummary, visuals[0]?.id || "");
+      if (clipId) {
+        actions.push({
+          id: nextId(),
+          type: "clip.set_property",
+          description: `Apply visual ${isOut ? "fade out" : "fade in"} (${fadeDuration}s) to clip ${clipId}`,
+          params: {
+            clipId,
+            property: isOut ? "fadeOut" : "fadeIn",
+            value: fadeDuration,
+          },
+        });
+        descriptions.push(`Visual ${isOut ? "fade out" : "fade in"} on clip ${clipId}`);
+      } else {
+        warnings.push("No visual clip found to apply fade to.");
+      }
     }
   }
 
   // 5. Clip Speed (Relative & Explicit, Whole-project vs Selected vs Single Clip, Audio Pitch Preservation)
   // Matches: "make this video a little faster", "speed this up", "double the speed", "slow this down to half speed",
   // "set the selected clip to 1.5x", "speed up the whole video", "apply the same speed to all selected clips", "preserve audio pitch"
-  const isSpeedPrompt = /\b(?:speed\s*up|slow\s*down|change\s+speed|set\s+speed|faster|slower|double\s+the\s+speed|twice\s+as\s+fast|half\s+speed|playback\s+rate|\d+(?:\.\d+)?x\s+speed)\b/i.test(text) && !/\b(?:transition|transitions)\b/i.test(text);
+  const isSpeedPrompt = /\b(?:speed\s*up|slow\s*down|change\s+speed|set\s+speed|faster|slower|double\s+the\s+speed|twice\s+as\s+fast|half\s+speed|playback\s+rate|\d+(?:\.\d+)?x\s+speed)\b/i.test(text)
+    && !/\b(?:transition|transitions)\b/i.test(text)
+    && !/\b(?:punch[- ]in|zoom\s+animation|zoom\s+transition)\b/i.test(text);
   if (isSpeedPrompt) {
     let speed = 1.25; // Default sensible increment
     if (/\b(?:double\s+the\s+speed|twice\s+as\s+fast|2x\s+speed|to\s+2x)\b/i.test(text)) {
@@ -1039,9 +1138,9 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
     descriptions.push(targetTimestamp !== null ? `Remove punch-in at ${targetTimestamp}s` : "Remove punch-in");
   }
 
-  // 12b.4 Zoom intensity adjustment follow-up ("Make all zooms 30% less intense", "Make zoom more intense")
-  const isLessIntense = /\b(?:make\s+(?:all\s+)?zooms?\s+(?:(\d+)%?\s*)?less\s+intense|less\s+intense\s+zoom)\b/i.test(text);
-  const isMoreIntense = /\b(?:make\s+(?:all\s+)?zooms?\s+(?:(\d+)%?\s*)?more\s+intense|more\s+intense\s+zoom)\b/i.test(text);
+  // 12b.4 Zoom intensity adjustment follow-up ("Make all zooms 30% less intense", "Make zoom more intense", "Make the zoom stronger")
+  const isLessIntense = /\b(?:make\s+(?:all\s+)?(?:the\s+)?zooms?\s+(?:(\d+)%?\s*)?(?:less\s+intense|weaker|subtler|gentler)|(?:less\s+intense|weaker|subtler|gentler)\s+zoom)\b/i.test(text);
+  const isMoreIntense = /\b(?:make\s+(?:all\s+)?(?:the\s+)?zooms?\s+(?:(\d+)%?\s*)?(?:more\s+intense|stronger|deeper|bigger)|(?:more\s+intense|stronger|deeper|bigger)\s+zoom)\b/i.test(text);
   if ((isLessIntense || isMoreIntense) && !isResetZoom && !removePunchInMatch) {
     const pctMatch = text.match(/(\d+)%/);
     const pct = pctMatch ? parseInt(pctMatch[1], 10) : 30;
@@ -1063,10 +1162,10 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
     descriptions.push(`Adjust zoom intensity to ${nextScale}x`);
   }
 
-  // 12b.5 Transition style follow-up ("Use a smooth push-in instead of jump cuts", "Make the zoom transitions slower")
+  // 12b.5 Transition style follow-up ("Use a smooth push-in instead of jump cuts", "Make the zoom transitions slower", "Slow down the punch-in animation")
   const isSmoothFollowup = /\b(?:use\s+a\s+smooth\s+push[- ]in(?:\s+instead\s+of\s+jump\s+cuts?)?|smooth\s+push[- ]in\s+instead|make\s+(?:it\s+)?smooth\s+zooms?)\b/i.test(text);
-  const isSlowerTransition = /\b(?:make\s+(?:the\s+)?zoom\s+transitions?\s+slower|slower\s+zoom\s+transitions?)\b/i.test(text);
-  const isFasterTransition = /\b(?:make\s+(?:the\s+)?zoom\s+transitions?\s+faster|faster\s+zoom\s+transitions?)\b/i.test(text);
+  const isSlowerTransition = /\b(?:make\s+(?:the\s+)?(?:zoom\s+transitions?|punch[- ]in(?:\s+animations?|\s+transitions?)?)\s+slower|slower\s+(?:zoom\s+transitions?|punch[- ]ins?)|slow\s*down\s+(?:the\s+)?(?:punch[- ]in(?:\s+animations?|\s+transitions?)?|zoom\s+transitions?))\b/i.test(text);
+  const isFasterTransition = /\b(?:make\s+(?:the\s+)?(?:zoom\s+transitions?|punch[- ]in(?:\s+animations?|\s+transitions?)?)\s+faster|faster\s+(?:zoom\s+transitions?|punch[- ]ins?)|speed\s*up\s+(?:the\s+)?(?:punch[- ]in(?:\s+animations?|\s+transitions?)?|zoom\s+transitions?))\b/i.test(text);
   const isFaceCenteringFollowup = /\b(?:keep\s+(?:the\s+)?speaker\s+centered(?:\s+during\s+each\s+punch[- ]in)?|center\s+speaker\s+during\s+zooms?|face\s+anchored\s+zoom)\b/i.test(text);
 
   if ((isSmoothFollowup || isSlowerTransition || isFasterTransition || isFaceCenteringFollowup) && !isResetZoom && !removePunchInMatch && !isLessIntense && !isMoreIntense) {

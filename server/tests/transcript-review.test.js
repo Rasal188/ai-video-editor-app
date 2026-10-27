@@ -289,4 +289,74 @@ describe("Transcript Review Workflow & Validation", () => {
       assert.equal(timelineCaptions.length, 0);
     });
   });
+
+  describe("Caption Audition Playback Lifecycle", () => {
+    it("should handle start, pause toggle, switching captions, and cleanup on close", () => {
+      let isPlaying = false;
+      let currentTime = 0;
+      let auditioningCaptionId = null;
+      let auditionTimer = null;
+
+      const stopAudition = () => {
+        if (auditionTimer) {
+          clearTimeout(auditionTimer);
+          auditionTimer = null;
+        }
+        isPlaying = false;
+        auditioningCaptionId = null;
+      };
+
+      const previewCaption = (seg) => {
+        const targetId = seg.id;
+        if (auditioningCaptionId === targetId) {
+          stopAudition();
+          return;
+        }
+        if (auditionTimer) {
+          clearTimeout(auditionTimer);
+          auditionTimer = null;
+        }
+        currentTime = seg.start;
+        isPlaying = true;
+        auditioningCaptionId = targetId;
+
+        const durationMs = Math.max(250, (seg.end - seg.start) * 1000);
+        auditionTimer = setTimeout(() => {
+          isPlaying = false;
+          auditioningCaptionId = null;
+          auditionTimer = null;
+        }, durationMs);
+      };
+
+      const seg1 = { id: "cap-1", start: 1.0, end: 2.0, text: "Hello" };
+      const seg2 = { id: "cap-2", start: 3.5, end: 4.5, text: "World" };
+
+      // 1. Start auditioning seg1
+      previewCaption(seg1);
+      assert.equal(isPlaying, true, "Playback should start");
+      assert.equal(currentTime, 1.0, "Timeline should seek to seg1.start");
+      assert.equal(auditioningCaptionId, "cap-1", "Active auditioning caption ID should be cap-1");
+      assert.ok(auditionTimer !== null, "Audition timer should be active");
+
+      // 2. Toggle pause on seg1
+      previewCaption(seg1);
+      assert.equal(isPlaying, false, "Playback should pause when clicked again");
+      assert.equal(auditioningCaptionId, null, "auditioningCaptionId should reset to null");
+      assert.equal(auditionTimer, null, "Audition timer should be cleared");
+
+      // 3. Switch to seg2
+      previewCaption(seg1);
+      assert.equal(auditioningCaptionId, "cap-1");
+      previewCaption(seg2);
+      assert.equal(auditioningCaptionId, "cap-2", "Should switch active auditioning caption to cap-2");
+      assert.equal(currentTime, 3.5, "Timeline should seek to seg2.start");
+      assert.equal(isPlaying, true, "Playback should remain active for seg2");
+
+      // 4. Modal close cleanup
+      stopAudition();
+      assert.equal(isPlaying, false, "Close should pause playback");
+      assert.equal(auditioningCaptionId, null, "Close should clear audition ID");
+      assert.equal(auditionTimer, null, "Close should clear timer");
+    });
+  });
 });

@@ -105,7 +105,7 @@ export function isKaraokeEnabled(captionStyle = {}, segment = null) {
   if (segment?.styleOverrides?.karaoke !== undefined) {
     return Boolean(segment.styleOverrides.karaoke);
   }
-  if (segment?.animation === "karaoke") {
+  if (segment?.animation === "karaoke" || (segment?.isKinetic && segment?.animation !== "none")) {
     return true;
   }
   return Boolean(captionStyle?.karaoke);

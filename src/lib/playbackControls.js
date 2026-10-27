@@ -60,7 +60,8 @@ export function createPlaybackControls(deps) {
   };
   const seekTo = (time, options = {}) => {
     const clamped = Math.max(0, Math.min(deps.timelineDurationRef.current || MAX_TIMELINE_DURATION_SECONDS, time));
-    const shouldPlay = deps.isPlaying && !options.pause;
+    const shouldPlay = options.play !== undefined ? Boolean(options.play) : (deps.isPlaying && !options.pause);
+    if (options.play && !deps.isPlaying) deps.setIsPlaying(true);
     deps.currentTimeRef.current = clamped; deps.setCurrentTime(clamped);
     // Seeking while playback is active must also move the fallback timeline
     // clock. This matters after trimming: the video element can briefly be

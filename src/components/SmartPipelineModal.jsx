@@ -6,6 +6,8 @@ import {
   Check,
   CheckCircle,
   ClosedCaptioning,
+  Minus,
+  Pause,
   Play,
   Scissors,
   Sparkle,
@@ -70,6 +72,9 @@ export function SmartPipelineModal({
     plan,
     close,
     cancel,
+    isMinimized,
+    minimize,
+    restore,
     startAnalysis,
     toggleCut,
     toggleAllCuts,
@@ -102,6 +107,84 @@ export function SmartPipelineModal({
   const getStageIndex = (s) => STAGES.findIndex((item) => item.id === s);
   const currentStageIdx = getStageIndex(stage);
 
+  // Minimized Background Mode
+  if (isMinimized) {
+    const isJobActive = job.running;
+    return createPortal(
+      <aside
+        className="smart-pipeline-minimized-floating-banner"
+        role="status"
+        aria-live="polite"
+        data-testid="smart-pipeline-minimized-banner"
+      >
+        <div
+          className="smart-pipeline-minimized-info"
+          onClick={restore}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              restore();
+            }
+          }}
+          title={t("smartPipelineRestoreTooltip", "Restore Smart Editing Pipeline modal")}
+        >
+          {isJobActive && <div className="smart-pipeline-mini-spinner" />}
+          <div className="smart-pipeline-minimized-text">
+            <strong>
+              {job.running
+                ? t("smartPipelineStepAnalyze", "Smart Editing Pipeline — Analyzing")
+                : plan
+                  ? t("smartPipelineReadyMini", "Smart Editing Pipeline")
+                  : t("smartPipelineTitle", "Smart Editing Pipeline")}
+            </strong>
+            <span className="smart-pipeline-minimized-phase">
+              {job.running
+                ? `${t(job.phase || "smartPipelineStepAnalyze", job.phase || "Analyzing footage…")} (${Math.round(job.progress)}%)`
+                : plan
+                  ? t("smartPipelineCandidatesReady", `${candidates.length} candidates ready • ${captionSegments.length} captions`)
+                  : error
+                    ? t(error, error)
+                    : t("smartPipelineComplete", "Analysis complete")}
+            </span>
+          </div>
+        </div>
+        <div className="smart-pipeline-minimized-actions">
+          <button
+            type="button"
+            className="smart-pipeline-mini-btn smart-pipeline-mini-btn-primary"
+            onClick={restore}
+            data-testid="smart-pipeline-restore-btn"
+            title={t("smartPipelineRestoreTooltip", "Restore Smart Editing Pipeline modal")}
+          >
+            {isJobActive ? t("smartPipelineViewProgress", "View Progress") : t("smartPipelineReview", "Review")}
+          </button>
+          {isJobActive ? (
+            <button
+              type="button"
+              className="smart-pipeline-mini-btn smart-pipeline-mini-btn-danger"
+              onClick={cancel}
+              data-testid="smart-pipeline-minimized-cancel-btn"
+            >
+              {t("smartPipelineCancel", "Cancel")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="smart-pipeline-mini-btn smart-pipeline-mini-btn-ghost"
+              onClick={close}
+              data-testid="smart-pipeline-minimized-close-btn"
+            >
+              {t("smartPipelineClose", "Close")}
+            </button>
+          )}
+        </div>
+      </aside>,
+      document.body
+    );
+  }
+
   return createPortal(
     <div
       className="smart-pipeline-backdrop"
@@ -122,15 +205,27 @@ export function SmartPipelineModal({
               {t("smartPipelineHint", "Guided end-to-end AI speech, pauses, cuts, and captions")}
             </p>
           </div>
-          <button
-            type="button"
-            className="smart-pipeline-close-btn"
-            onClick={close}
-            aria-label={t("smartPipelineClose", "Close")}
-            data-testid="smart-pipeline-close-btn"
-          >
-            <X size={18} />
-          </button>
+          <div className="smart-pipeline-header-actions">
+            <button
+              type="button"
+              className="smart-pipeline-header-btn smart-pipeline-minimize-btn"
+              onClick={minimize}
+              aria-label={t("smartPipelineMinimize", "Minimize")}
+              title={t("smartPipelineRestoreTooltip", "Minimize pipeline (continues processing in background)")}
+              data-testid="smart-pipeline-minimize-btn"
+            >
+              <Minus size={18} />
+            </button>
+            <button
+              type="button"
+              className="smart-pipeline-close-btn"
+              onClick={close}
+              aria-label={t("smartPipelineClose", "Close")}
+              data-testid="smart-pipeline-close-btn"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
         {/* Stepper Navigation */}
@@ -197,7 +292,9 @@ export function SmartPipelineModal({
                     <span>{formatTime(activeClip?.duration || 0)}</span>
                     {!isSupported && (
                       <span className="smart-pipeline-unsupported-tag">
-                        {t("smartPipelineClipUnsupported", "Not Trimmable")}
+                        {activeClip?.type !== "video"
+                          ? t("smartPipelineRequiresVideo", "Requires Video Clip")
+                          : t("smartPipelineClipUnsupported", "Not Trimmable")}
                       </span>
                     )}
                   </div>
@@ -316,16 +413,30 @@ export function SmartPipelineModal({
                 </div>
                 <span className="smart-pipeline-progress-pct">{job.progress}%</span>
                 <p className="smart-pipeline-progress-hint">
-                  Running local Silero VAD pause analysis & Whisper speech recognition.
+                  {t(
+                    "smartPipelineAnalyzingHint",
+                    "Running local Silero VAD pause analysis & Whisper speech recognition."
+                  )}
                 </p>
-                <button
-                  type="button"
-                  className="smart-pipeline-cancel-btn"
-                  onClick={cancel}
-                  data-testid="smart-pipeline-cancel-btn"
-                >
-                  {t("smartPipelineCancel", "Cancel Analysis")}
-                </button>
+                <div className="smart-pipeline-analyzing-actions">
+                  <button
+                    type="button"
+                    className="smart-pipeline-minimize-action-btn"
+                    onClick={minimize}
+                    data-testid="smart-pipeline-analyzing-minimize-btn"
+                  >
+                    <Minus size={14} />
+                    {t("smartPipelineMinimize", "Minimize to Background")}
+                  </button>
+                  <button
+                    type="button"
+                    className="smart-pipeline-cancel-btn"
+                    onClick={cancel}
+                    data-testid="smart-pipeline-cancel-btn"
+                  >
+                    {t("smartPipelineCancel", "Cancel Analysis")}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -380,30 +491,35 @@ export function SmartPipelineModal({
                     <p>{t("smartPipelineEmptyCaptions", "No spoken words transcribed.")}</p>
                   </div>
                 ) : (
-                  captionSegments.map((seg, idx) => (
-                    <div key={seg.id || idx} className="smart-pipeline-caption-row">
-                      <div className="smart-pipeline-time-badge">
-                        <span>{formatTime(seg.start)}</span>
-                        <span>→</span>
-                        <span>{formatTime(seg.end)}</span>
+                  captionSegments.map((seg, idx) => {
+                    const segKey = seg.id || `${seg.start}-${seg.end}`;
+                    const isAuditioning = pipeline.auditioningCaptionId === segKey || pipeline.auditioningCaptionId === seg.id;
+                    return (
+                      <div key={seg.id || idx} className="smart-pipeline-caption-row">
+                        <div className="smart-pipeline-time-badge">
+                          <span>{formatTime(seg.start)}</span>
+                          <span>→</span>
+                          <span>{formatTime(seg.end)}</span>
+                        </div>
+                        <input
+                          type="text"
+                          className="smart-pipeline-caption-input"
+                          value={seg.text || ""}
+                          onChange={(e) => updateCaptionSegment(seg.id, { text: e.target.value })}
+                          data-testid={`smart-pipeline-caption-text-${idx}`}
+                        />
+                        <button
+                          type="button"
+                          className={`smart-pipeline-icon-btn ${isAuditioning ? "is-playing" : ""}`}
+                          onClick={() => previewCaption(seg)}
+                          title={isAuditioning ? t("smartPipelinePause", "Pause") : t("smartPipelinePreview", "Preview")}
+                          data-testid={`smart-pipeline-caption-preview-${idx}`}
+                        >
+                          {isAuditioning ? <Pause size={14} weight="fill" /> : <Play size={14} weight="fill" />}
+                        </button>
                       </div>
-                      <input
-                        type="text"
-                        className="smart-pipeline-caption-input"
-                        value={seg.text || ""}
-                        onChange={(e) => updateCaptionSegment(seg.id, { text: e.target.value })}
-                        data-testid={`smart-pipeline-caption-text-${idx}`}
-                      />
-                      <button
-                        type="button"
-                        className="smart-pipeline-icon-btn"
-                        onClick={() => previewCaption(seg)}
-                        title={t("smartPipelinePreview", "Preview")}
-                      >
-                        <Play size={14} weight="fill" />
-                      </button>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>

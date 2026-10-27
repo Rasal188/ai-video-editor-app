@@ -22,6 +22,7 @@ import {
   drawPreviewFrame,
   loadImage,
   loadVideo,
+  loadExportVisualSource,
   seekVideoFrame,
 } from "./media.js";
 import {
@@ -84,9 +85,11 @@ async function prepareComposition(options) {
   const timeline = getVisualSegmentTimeline(segments);
   const items = await Promise.all(segments.map(async (segment, index) => {
     throwIfExportAborted(options.signal);
-    const visual = segment.type === "video"
-      ? await loadVideo(segment.src)
-      : await loadImage(getVectorRenderSource(segment, { targetWidth, targetHeight }));
+    const visual = await loadExportVisualSource(segment, {
+      targetWidth,
+      targetHeight,
+      signal: options.signal,
+    });
     throwIfExportAborted(options.signal);
     const subjectMaskNeeded = hasSubjectEffect(segment.subjectEffect);
     const cutoutVisual = segment.type === "image"
@@ -156,9 +159,11 @@ async function prepareComposition(options) {
     if (depthUrls[0]) await depthCache.prepare(depthUrls[0]);
     return {
       segment,
-      visual: segment.type === "video"
-        ? await loadVideo(segment.src)
-        : await loadImage(getVectorRenderSource(segment, { targetWidth, targetHeight })),
+      visual: await loadExportVisualSource(segment, {
+        targetWidth,
+        targetHeight,
+        signal: options.signal,
+      }),
       temporalMaskCache,
       depthCache,
     };

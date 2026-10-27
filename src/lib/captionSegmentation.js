@@ -1,5 +1,61 @@
 import { makeId } from "./timeline.js";
 
+// Sanitize word timestamps emitted by chunked ASR (e.g. Whisper ONNX DTW).
+// When an audio chunk has speech at its beginning followed by long silence/music,
+// DTW can stretch the leading tokens to the end of the chunk window, producing
+// a backward jump when the next speech chunk begins at its actual acoustic onset.
+export function sanitizeAsrWordTimestamps(chunks) {
+  if (!Array.isArray(chunks) || chunks.length <= 1) {
+    return chunks;
+  }
+  const result = chunks.map((c) => ({
+    ...c,
+    timestamp: Array.isArray(c?.timestamp) ? [...c.timestamp] : c?.timestamp,
+  }));
+
+  for (let i = 1; i < result.length; i++) {
+    const prev = result[i - 1];
+    const curr = result[i];
+    const prevEnd = Number(prev?.timestamp?.[1] ?? prev?.timestamp?.[0]);
+    const currStart = Number(curr?.timestamp?.[0]);
+
+    if (Number.isFinite(prevEnd) && Number.isFinite(currStart) && currStart < prevEnd) {
+      let runStart = i - 1;
+      while (
+        runStart > 0 &&
+        Number(result[runStart - 1]?.timestamp?.[1] ?? result[runStart - 1]?.timestamp?.[0]) <=
+          Number(result[runStart]?.timestamp?.[0])
+      ) {
+        runStart--;
+      }
+      const targetStart =
+        runStart === 0
+          ? 0
+          : Number(result[runStart - 1]?.timestamp?.[1] ?? result[runStart - 1]?.timestamp?.[0] ?? 0);
+      const runStartVal = Number(result[runStart]?.timestamp?.[0] ?? 0);
+      const shift = runStartVal - targetStart;
+
+      if (shift > 0) {
+        for (let j = runStart; j < i; j++) {
+          const rawS = Number(result[j]?.timestamp?.[0]);
+          const rawE = Number(result[j]?.timestamp?.[1]);
+          if (Number.isFinite(rawS)) {
+            result[j].timestamp[0] = Math.max(0, Number((rawS - shift).toFixed(2)));
+          }
+          if (Number.isFinite(rawE)) {
+            result[j].timestamp[1] = Math.max(
+              result[j].timestamp[0],
+              Number((rawE - shift).toFixed(2)),
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 // Use recognizer word boundaries, never a character-weighted estimate of speech.
 // Ordinary caption clips keep all preview/export/SRT and editing paths identical.
 export function captionSegmentsFromWords(chunks, duration, {
@@ -7,7 +63,8 @@ export function captionSegmentsFromWords(chunks, duration, {
 } = {}) {
   const timingError = () => new Error("ASR_WORD_TIMING_UNAVAILABLE");
   if (!Array.isArray(chunks) || !chunks.length || !(duration > 0)) throw timingError();
-  const words = chunks.filter((chunk) => String(chunk?.text ?? "").trim());
+  const sanitizedChunks = sanitizeAsrWordTimestamps(chunks);
+  const words = sanitizedChunks.filter((chunk) => String(chunk?.text ?? "").trim());
   const transcript = words.map((word) => String(word.text)).join("");
   const boundaries = typeof Intl.Segmenter === "function"
     ? new Set(Array.from(new Intl.Segmenter(undefined, { granularity: "word" }).segment(transcript), (part) => part.index))
@@ -25,8 +82,9 @@ export function captionSegmentsFromWords(chunks, duration, {
     if (!group.length) return;
     const rawText = join(group);
     const start = group[0].start;
-    const end = group.at(-1).end;
-    if (end <= start) return; // Keep zero-length tokens with the next timed word.
+    const rawEnd = group.at(-1).end;
+    if (rawEnd <= start) return; // Keep zero-length tokens with the next timed word.
+    const end = Math.min(duration, Math.max(start + 0.2, rawEnd));
     const text = normalizeText(rawText);
     const segStart = offset + start;
     const segEnd = offset + end;
@@ -55,17 +113,21 @@ export function captionSegmentsFromWords(chunks, duration, {
     const rawEnd = timestamp(word.timestamp?.[1]);
     if (rawStart === null) throw timingError();
     const nextStart = timestamp(words[index + 1]?.timestamp?.[0]);
-    const start = Math.min(duration, Math.max(previousEnd, rawStart, 0));
-    const end = Math.max(start, Math.min(duration, rawEnd ?? nextStart ?? duration,
-      nextStart !== null && nextStart >= start ? nextStart : duration));
+    const effectivePrev = rawStart < previousEnd - 0.25 ? rawStart : previousEnd;
+    const start = Math.min(duration, Math.max(effectivePrev, rawStart, 0));
+    const fallbackEnd = nextStart !== null && nextStart >= start
+      ? Math.min(start + 0.35, nextStart)
+      : Math.min(duration, start + 0.35);
+    const boundedRawEnd = rawEnd !== null ? (nextStart !== null && nextStart >= start ? Math.min(rawEnd, nextStart) : rawEnd) : null;
+    const end = Math.max(start, Math.min(duration, boundedRawEnd ?? fallbackEnd));
     const item = { text: String(word.text), start, end };
     // Whisper emits individual characters for Chinese/Japanese. A four-token
     // limit intended for spaced languages would fragment these into tiny clips.
     const maxTokens = /[\u3040-\u30ff\u3400-\u9fff]/u.test(join([...group, item])) ? 12 : 4;
-    const canBreak = !boundaries || boundaries.has(textOffset);
-    if (group.length && canBreak && (grouping === "words" || (group.length >= maxTokens
-      || width(join([...group, item])) > 28 || end - group[0].start > 2.5
-      || start - group.at(-1).end > 0.35))) flush();
+    const isSilenceGap = group.length > 0 && (start - group.at(-1).end > 0.35);
+    const canBreak = !boundaries || boundaries.has(textOffset) || isSilenceGap;
+    if (group.length && canBreak && (grouping === "words" || isSilenceGap || (group.length >= maxTokens
+      || width(join([...group, item])) > 28 || end - group[0].start > 2.5))) flush();
     textOffset += item.text.length;
     group.push(item);
     previousEnd = end;

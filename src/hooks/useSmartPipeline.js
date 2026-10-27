@@ -9,9 +9,11 @@ import {
 import { analyzeVideoPauses } from "../lib/sileroVad.js";
 import { transcribeAudioToCaptionSegments } from "../lib/asr.js";
 import { regroupReviewSegments } from "../lib/transcriptReview.js";
+import { sliceAudioBlob } from "../lib/media.js";
 
 export function useSmartPipeline(options) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
   const [stage, setStage] = useState("select"); // "select" | "analyzing" | "captions" | "cuts" | "review" | "applied"
   const [selectedClipId, setSelectedClipId] = useState("");
   const [settings, setSettings] = useState({
@@ -30,17 +32,31 @@ export function useSmartPipeline(options) {
   const [job, setJob] = useState({ running: false, progress: 0, phase: "" });
   const [error, setError] = useState("");
   const [plan, setPlan] = useState(null);
+  const [auditioningCaptionId, setAuditioningCaptionId] = useState(null);
 
   const abortRef = useRef(null);
+  const auditionTimerRef = useRef(null);
+  const isMinimizedRef = useRef(false);
+  isMinimizedRef.current = isMinimized;
   const latest = useRef(options);
   latest.current = options;
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      if (auditionTimerRef.current) {
+        clearTimeout(auditionTimerRef.current);
+      }
+    };
+  }, []);
 
   const visualSegments = options.visualSegments || [];
-  const activeClip = visualSegments.find((clip) => clip.id === selectedClipId)
-    || visualSegments.find((clip) => clip.id === options.selectedSegment?.id)
-    || visualSegments.find((clip) => clip.type === "video")
+  const isVideo = (clip) => clip?.type === "video";
+  const explicitClip = selectedClipId ? visualSegments.find((clip) => clip.id === selectedClipId) : null;
+  const activeClip = explicitClip
+    || (isVideo(options.selectedSegment) ? options.selectedSegment : null)
+    || visualSegments.find(isVideo)
+    || (options.selectedSegment ? visualSegments.find((clip) => clip.id === options.selectedSegment.id) : null)
     || visualSegments[0]
     || null;
 
@@ -50,8 +66,29 @@ export function useSmartPipeline(options) {
     canRemovePauses(activeClip, visualSegments[clipIndex - 1])
   );
 
+  const stopAudition = () => {
+    if (auditionTimerRef.current) {
+      clearTimeout(auditionTimerRef.current);
+      auditionTimerRef.current = null;
+    }
+    options.pauseTimelineMedia?.();
+    options.setIsPlaying?.(false);
+    setAuditioningCaptionId(null);
+  };
+
   const open = (clipId, initialPlan) => {
-    const targetId = clipId || activeClip?.id;
+    setIsMinimized(false);
+    setIsOpen(true);
+    // If analysis is already running or a plan is already active, keep existing session and progress
+    if (job.running || plan) {
+      return;
+    }
+    const defaultClip = (isVideo(options.selectedSegment) ? options.selectedSegment : null)
+      || visualSegments.find(isVideo)
+      || options.selectedSegment
+      || visualSegments[0]
+      || null;
+    const targetId = clipId || defaultClip?.id;
     if (targetId) setSelectedClipId(targetId);
     setError("");
     if (initialPlan) {
@@ -73,25 +110,37 @@ export function useSmartPipeline(options) {
     } else {
       setStage("select");
     }
-    setIsOpen(true);
   };
 
   const close = () => {
+    stopAudition();
     if (job.running) {
       abortRef.current?.abort();
       abortRef.current = null;
       setJob({ running: false, progress: 0, phase: "" });
     }
+    setIsMinimized(false);
     setIsOpen(false);
     setError("");
   };
 
+  const minimize = () => {
+    setIsMinimized(true);
+  };
+
+  const restore = () => {
+    setIsMinimized(false);
+    setIsOpen(true);
+  };
+
   const cancel = () => {
+    stopAudition();
     abortRef.current?.abort();
     abortRef.current = null;
     setJob({ running: false, progress: 0, phase: "" });
     setError("");
     setStage("select");
+    setIsMinimized(false);
   };
 
   const updateSettings = (patch) => {
@@ -100,13 +149,27 @@ export function useSmartPipeline(options) {
   };
 
   const startAnalysis = async () => {
-    if (abortRef.current || !activeClip || !isSupported || options.locked) return;
+    if (abortRef.current || job.running || !activeClip || !isSupported || options.locked) return;
+
+    const snapshot = options.getSnapshot();
+    const runtime = options.getRuntime();
+
+    if (snapshot.trackLocks?.image) {
+      setError("smartPipelineLocked");
+      return;
+    }
+    if (settings.generateCaptions && snapshot.trackLocks?.caption) {
+      setError("smartPipelineLocked");
+      return;
+    }
+    if (settings.removeFillerWords && snapshot.trackLocks?.source && snapshot.sourceAudioLinked !== false && runtime.sourceAudioBlob) {
+      setError("smartPipelineLocked");
+      return;
+    }
 
     const controller = new AbortController();
     abortRef.current = controller;
     const capturedClip = { ...activeClip };
-    const snapshot = options.getSnapshot();
-    const runtime = options.getRuntime();
     const fingerprint = browserProjectFingerprint(snapshot, false, runtime.visualSegments, runtime);
 
     setError("");
@@ -150,7 +213,14 @@ export function useSmartPipeline(options) {
                 : null
             );
             if (mediaBlob) {
-              transcriptResult = await transcribeAudioToCaptionSegments(mediaBlob, {
+              const clipSourceStart = Number.isFinite(capturedClip.sourceStart) ? Math.max(0, capturedClip.sourceStart) : 0;
+              const clipDuration = Number.isFinite(capturedClip.duration) ? Math.max(0, capturedClip.duration) : undefined;
+              const playbackRate = Math.max(0.01, Number(capturedClip.playbackRate) || 1);
+              const sourceDuration = clipDuration ? clipDuration * playbackRate : undefined;
+              const clipBlob = (clipSourceStart > 0.001 || (Number.isFinite(sourceDuration) && sourceDuration > 0)) && typeof sliceAudioBlob === "function"
+                ? await sliceAudioBlob(mediaBlob, clipSourceStart, sourceDuration)
+                : mediaBlob;
+              transcriptResult = await transcribeAudioToCaptionSegments(clipBlob, {
                 preferredLanguage: settings.language || options.language,
                 signal: controller.signal,
                 onProgress: ({ progress, phase }) => {
@@ -195,10 +265,22 @@ export function useSmartPipeline(options) {
       } else {
         setStage("cuts");
       }
+
+      if (isMinimizedRef.current) {
+        const notifyMsg = options.t?.("smartPipelineComplete", "Smart Editing analysis complete! Click to review.")
+          || "Smart Editing analysis complete!";
+        options.notify?.(notifyMsg);
+      }
     } catch (failure) {
       if (!controller.signal.aborted) {
-        setError(failure.code || "smartPipelineFailed");
+        const errKey = failure.code || "smartPipelineFailed";
+        setError(errKey);
         setStage("select");
+        if (isMinimizedRef.current) {
+          const errMsg = options.t?.(errKey, failure.message || "Smart Editing analysis failed.")
+            || failure.message || "Smart Editing analysis failed.";
+          options.notify?.(errMsg);
+        }
       }
     } finally {
       if (abortRef.current === controller) {
@@ -266,9 +348,37 @@ export function useSmartPipeline(options) {
       grouping: newGrouping,
     });
     if (regrouped.length) {
+      const sanitized = regrouped.map((seg, idx) => {
+        const rawStart = Number(seg.start);
+        const start = Math.max(0, Number.isFinite(rawStart) ? rawStart : 0);
+        const rawEnd = Number(seg.end);
+        let end = Number.isFinite(rawEnd) ? Math.max(start + 0.2, rawEnd) : start + 0.2;
+        if (end - start < 0.2) {
+          end = start + 0.2;
+        }
+        return {
+          ...seg,
+          id: seg.id || `pipeline-cap-${idx}`,
+          start,
+          end,
+          ...(Array.isArray(seg.words) ? {
+            words: seg.words.map((w) => {
+              const ws = Number(w.start);
+              const we = Number(w.end);
+              const validWs = Number.isFinite(ws) ? Math.max(start, ws) : start;
+              const validWe = Number.isFinite(we) ? Math.max(validWs, Math.min(end, we)) : end;
+              return {
+                ...w,
+                start: validWs,
+                end: validWe,
+              };
+            }),
+          } : {}),
+        };
+      });
       setPlan({
         ...plan,
-        captionSegments: regrouped,
+        captionSegments: sanitized,
       });
     }
   };
@@ -282,11 +392,36 @@ export function useSmartPipeline(options) {
   };
 
   const previewCaption = (seg) => {
-    if (!plan || !activeClip) return;
+    if (!plan || !activeClip || !seg) return;
+    const targetId = seg.id || `${seg.start}-${seg.end}`;
+    if (auditioningCaptionId === targetId) {
+      stopAudition();
+      return;
+    }
+    if (auditionTimerRef.current) {
+      clearTimeout(auditionTimerRef.current);
+      auditionTimerRef.current = null;
+    }
     const clipStart = visualSegments
       .slice(0, clipIndex)
       .reduce((sum, c) => sum + c.duration, 0);
-    options.seekTo?.(clipStart + Math.max(0, seg.start));
+    const startSec = Math.max(0, Number(seg.start) || 0);
+    const endSec = Math.max(startSec + 0.1, Number(seg.end) || startSec + 0.5);
+    const startTime = clipStart + startSec;
+    const durationMs = Math.max(250, (endSec - startSec) * 1000);
+
+    options.seekTo?.(startTime);
+    if (!options.isPlaying) {
+      options.handlePlayToggle?.();
+    }
+    setAuditioningCaptionId(targetId);
+
+    auditionTimerRef.current = setTimeout(() => {
+      options.pauseTimelineMedia?.();
+      options.setIsPlaying?.(false);
+      setAuditioningCaptionId(null);
+      auditionTimerRef.current = null;
+    }, durationMs);
   };
 
   const apply = () => {
@@ -304,6 +439,19 @@ export function useSmartPipeline(options) {
 
     if (currentFingerprint !== plan.fingerprint) {
       setError("smartPipelineStale");
+      return;
+    }
+
+    if (snapshot.trackLocks?.image) {
+      setError("smartPipelineLocked");
+      return;
+    }
+    if (includeCaptions && snapshot.trackLocks?.caption) {
+      setError("smartPipelineLocked");
+      return;
+    }
+    if (includeCuts && snapshot.sourceAudioLinked !== false && runtime.sourceAudioBlob && snapshot.trackLocks?.source) {
+      setError("smartPipelineLocked");
       return;
     }
 
@@ -329,11 +477,36 @@ export function useSmartPipeline(options) {
       setError("");
     } catch (failure) {
       console.error("[SmartPipeline] apply failed code:", failure?.code, "message:", failure?.message, failure);
-      setError(
-        failure.code?.startsWith("pipeline") || failure.code?.startsWith("smart")
-          ? failure.code
-          : "smartPipelineFailed"
-      );
+      if (failure.code === "BROWSER_EDIT_STALE_PLAN" || failure.code === "pipelineStale") {
+        setError("smartPipelineStale");
+      } else if (
+        failure.code === "pipelineLocked" ||
+        failure.code === "roughCutLocked" ||
+        failure.code === "pauseLocked"
+      ) {
+        setError("smartPipelineLocked");
+      } else if (
+        failure.code === "pipelineTooShort" ||
+        failure.code === "roughCutTooShort" ||
+        failure.code === "pauseTooShort"
+      ) {
+        setError("smartPipelineTooShort");
+      } else if (
+        failure.code === "pipelineNoSelection" ||
+        failure.code === "roughCutNoSelection" ||
+        failure.code === "pauseNoSelection"
+      ) {
+        setError("smartPipelineNoSelection");
+      } else if (failure.code === "pipelineClipUnsupported") {
+        setError("smartPipelineClipUnsupported");
+      } else if (failure.code?.startsWith("smartPipeline")) {
+        setError(failure.code);
+      } else if (failure.code?.startsWith("pipeline")) {
+        const mapped = "smart" + failure.code.charAt(0).toUpperCase() + failure.code.slice(1);
+        setError(mapped);
+      } else {
+        setError("smartPipelineFailed");
+      }
     }
   };
 
@@ -359,12 +532,17 @@ export function useSmartPipeline(options) {
     open,
     close,
     cancel,
+    isMinimized,
+    minimize,
+    restore,
     startAnalysis,
     toggleCut,
     toggleAllCuts,
     updateCaptionSegment,
     previewCut,
     previewCaption,
+    auditioningCaptionId,
+    stopAudition,
     apply,
     rippleEditing: options.rippleEditing,
     setRippleEditing: options.setRippleEditing,

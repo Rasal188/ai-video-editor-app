@@ -656,12 +656,80 @@ export function downloadBlob(blob, filename) {
 
 export function loadImage(src) {
   return new Promise((resolve, reject) => {
+    if (!src || typeof src !== "string") {
+      reject(new Error("Image source URL is empty or invalid"));
+      return;
+    }
     const image = new Image();
     image.crossOrigin = "anonymous";
     image.onload = () => resolve(image);
-    image.onerror = reject;
+    image.onerror = () => {
+      reject(new Error(`Failed to load image from "${src.slice(0, 120)}"`));
+    };
     image.src = src;
   });
+}
+
+export async function loadExportVisualSource(segment, options = {}) {
+  const { targetWidth, targetHeight, signal } = options;
+  throwIfExportAborted(signal);
+
+  if (!segment) {
+    throw new Error("Visual segment is missing or undefined");
+  }
+
+  let source = getVectorRenderSource(segment, { targetWidth, targetHeight });
+
+  // If source is missing or is a blob: URL and segment.blob exists, verify or refresh
+  if ((!source || (typeof source === "string" && source.startsWith("blob:"))) && segment.blob instanceof Blob) {
+    if (source) {
+      try {
+        if (segment.type === "video") {
+          return await loadVideo(source);
+        } else {
+          return await loadImage(source);
+        }
+      } catch {
+        // Blob URL may have been revoked; recreate fresh object URL from segment.blob!
+        const freshUrl = URL.createObjectURL(segment.blob);
+        segment.src = freshUrl;
+        source = freshUrl;
+      }
+    } else {
+      const freshUrl = URL.createObjectURL(segment.blob);
+      segment.src = freshUrl;
+      source = freshUrl;
+    }
+  }
+
+  if (!source || typeof source !== "string") {
+    throw new Error(`Visual segment "${segment.name || segment.id}" has no readable source or media`);
+  }
+
+  if (segment.type === "video") {
+    return await loadVideo(source);
+  }
+
+  try {
+    return await loadImage(source);
+  } catch (err) {
+    // If CORS or network error on remote URL, try to fetch as blob with fallback
+    if (source.startsWith("http://") || source.startsWith("https://")) {
+      try {
+        const fetchRes = await fetch(source, { mode: "cors", signal });
+        if (fetchRes.ok) {
+          const blob = await fetchRes.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          segment.blob = blob;
+          segment.src = blobUrl;
+          return await loadImage(blobUrl);
+        }
+      } catch {
+        /* fallback to throwing original error */
+      }
+    }
+    throw err;
+  }
 }
 
 export function createTemporalMaskCache(urls, maxEntries = 8) {
@@ -756,13 +824,22 @@ export function createTemporalMaskCache(urls, maxEntries = 8) {
 
 export function loadVideo(src) {
   return new Promise((resolve, reject) => {
+    if (!src || typeof src !== "string") {
+      reject(new Error("Video source URL is empty or invalid"));
+      return;
+    }
     const video = document.createElement("video");
     video.crossOrigin = "anonymous";
     video.muted = true;
     video.playsInline = true;
     video.preload = "auto";
     video.onloadedmetadata = () => resolve(video);
-    video.onerror = reject;
+    video.onerror = () => {
+      const code = video.error?.code;
+      const message = video.error?.message;
+      const detail = code ? `code ${code}${message ? `: ${message}` : ""}` : "media decode error";
+      reject(new Error(`Failed to load video from "${src.slice(0, 120)}" (${detail})`));
+    };
     video.src = src;
   });
 }
@@ -1242,7 +1319,8 @@ export function drawPreviewFrame(context, visual, canvas, options) {
       };
     }
     const smartFrameSourceTime = getVisualSourceTime(visualEffects, visualTime);
-    const smartFrameCrop = resolveSmartFrameCropAtTime(visualEffects?.smartFrame, smartFrameSourceTime);
+    const smartFrameRecord = visualEffects?.smartFrame || visualEffects?.visualEffects?.smartFrame;
+    const smartFrameCrop = resolveSmartFrameCropAtTime(smartFrameRecord, smartFrameSourceTime);
     return drawFittedVisual(targetContext, visual, targetCanvas, fitMode, primaryFilter, vision, visualEffects?.subjectEffect, smartFrameCrop);
   };
   if (usesAlphaMask) {
@@ -1304,7 +1382,8 @@ export function drawPreviewFrame(context, visual, canvas, options) {
     );
     const nextFilter = transitionId === "blur" ? `${nextBaseFilter === "none" ? "" : nextBaseFilter} blur(${Math.max(0, (1 - amount) * 14)}px)`.trim() : nextBaseFilter;
     const nextSourceTime = getVisualSourceTime(transitionNext.visualEffects, transitionNext.visualTime || 0);
-    const nextSmartFrameCrop = resolveSmartFrameCropAtTime(transitionNext.visualEffects?.smartFrame, nextSourceTime);
+    const nextSmartFrameRecord = transitionNext.visualEffects?.smartFrame || transitionNext.visualEffects?.visualEffects?.smartFrame;
+    const nextSmartFrameCrop = resolveSmartFrameCropAtTime(nextSmartFrameRecord, nextSourceTime);
     drawFittedVisual(context, transitionNext.visual, canvas, fitMode, nextFilter, transitionNext.vision || null, null, nextSmartFrameCrop);
     context.restore();
     if (transitionId === "flash") {
@@ -1432,7 +1511,10 @@ export function drawPreviewFrame(context, visual, canvas, options) {
     const activeWordIndex = isKaraoke
       ? getActiveWordIndex(captionSegment?.words, currentTime, captionSegment)
       : -1;
-    const activeWordColor = resolveActiveWordColor(captionStyle, captionSegment);
+    const activeWordColor =
+      (activeWordIndex >= 0 && captionSegment?.words?.[activeWordIndex]?.color)
+        ? captionSegment.words[activeWordIndex].color
+        : resolveActiveWordColor(captionStyle, captionSegment);
 
     const captionLayout = getCaptionTextLayout({
       context,
@@ -1606,11 +1688,11 @@ export async function exportBrowserVideo({
   const exportHeight = Math.max(2, Math.round(Number(exportSettings.height) || ratio.height));
   const visualItems = await Promise.all(
     exportVisualSegments.map(async (segment) => {
-      const visualSource = getVectorRenderSource(segment, {
+      const visual = await loadExportVisualSource(segment, {
         targetWidth: exportWidth,
         targetHeight: exportHeight,
+        signal,
       });
-      const visual = segment.type === "video" ? await loadVideo(segment.src) : await loadImage(visualSource);
       if (segment.type === "video") {
         await seekVideoFrame(
           visual,
@@ -1689,12 +1771,11 @@ export async function exportBrowserVideo({
       if (depthUrls[0]) await depthCache.prepare(depthUrls[0]);
       return {
         segment,
-        visual: segment.type === "video"
-          ? await loadVideo(segment.src)
-          : await loadImage(getVectorRenderSource(segment, {
-              targetWidth: exportWidth,
-              targetHeight: exportHeight,
-            })),
+        visual: await loadExportVisualSource(segment, {
+          targetWidth: exportWidth,
+          targetHeight: exportHeight,
+          signal,
+        }),
         temporalMaskCache,
         depthCache,
       };

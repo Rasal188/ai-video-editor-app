@@ -28,7 +28,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173";
+const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173/?view=editor";
 const ARTIFACTS_DIR = resolve("test-artifacts/playwright/audit-complete");
 const SAMPLE_MEDIA_PATH = resolve("test-artifacts/silence-test-sample.mp4");
 

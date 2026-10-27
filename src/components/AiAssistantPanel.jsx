@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import {
   Sparkle,
+  Minus,
   X,
   CaretRight,
   CaretLeft,
@@ -248,6 +249,7 @@ export function AiAssistantPanel({
   onRedo,
   currentTime = 0,
   selectedVisualSegmentId = "",
+  selectedVisualOverlayId = "",
   selectedAudioSegmentId = "",
   selectedSegmentId = "",
   selectedTrack = "",
@@ -889,6 +891,7 @@ export function AiAssistantPanel({
       const timelineActions = rawActions.filter((a) => !a.type?.startsWith("tool."));
 
       // 1. If the plan includes auto-captions generation, invoke the workflow first and await it
+      let generatedCaptions = null;
       const captionGenAction = rawActions.find((a) => a.type === "tool.generate_captions");
       if (captionGenAction) {
         if (typeof onGenerateCaptions !== "function") {
@@ -899,10 +902,16 @@ export function AiAssistantPanel({
         if (!asrResult?.segments?.length) {
           throw new Error("No speech detected in audio. Caption generation could not produce any captions.");
         }
+        generatedCaptions = asrResult.segments;
       }
 
       // Obtain fresh snapshot after any preceding tool actions (e.g. caption generation) have updated state
       const snapshot = getProjectSnapshot();
+      if (generatedCaptions) {
+        snapshot.captionSegments = generatedCaptions;
+        snapshot.captionsEnabled = true;
+        snapshot.script = generatedCaptions.map((c) => c.text).join("\n");
+      }
 
       if (timelineActions.length > 0) {
         const mediaOrigins = {};
@@ -949,8 +958,13 @@ export function AiAssistantPanel({
                 ? (selectedAudioSegmentId || snapshot.audioSegments?.[0]?.id || "")
                 : (selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id || "");
             op.clipId = resolveTargetClipId(op.clipId, snapshot, defaultId, targetTrack);
-          } else if (action.type === "overlay.set_transform" && (!op.clipId || op.clipId === "selected")) {
-            op.clipId = snapshot.visualOverlaySegments?.[0]?.id || "";
+          } else if (action.type === "overlay.set_transform" && (!op.clipId || op.clipId === "selected" || op.clipId === "this" || op.clipId === "current")) {
+            const overlayTarget =
+              (selectedTrack === "overlay" && selectedVisualOverlayId)
+                ? selectedVisualOverlayId
+                : (snapshot.visualOverlaySegments?.some((o) => o.id === selectedVisualOverlayId) ? selectedVisualOverlayId : "")
+                || (snapshot.visualOverlaySegments?.length === 1 ? snapshot.visualOverlaySegments[0].id : snapshot.visualOverlaySegments?.[0]?.id || "");
+            op.clipId = overlayTarget;
           }
 
           if (action.type === "visual.duplicate") {
@@ -969,19 +983,22 @@ export function AiAssistantPanel({
             if (op.rightClipId && op.clipId) {
               mediaOrigins[op.rightClipId] = { kind: "clip", id: op.clipId };
             }
-            // If 'at' is not positive finite, calculate relative playhead offset within target clip
-            if (!Number.isFinite(op.at) || op.at <= 0) {
-              const visuals = Array.isArray(snapshot.visualSegments) ? snapshot.visualSegments : [];
-              const clipIndex = visuals.findIndex((c) => c.id === op.clipId);
-              if (clipIndex >= 0) {
-                const targetClip = visuals[clipIndex];
-                const clipStart = visuals.slice(0, clipIndex).reduce((sum, c) => sum + (Number(c.duration) || 0), 0);
-                const clipDur = Number(targetClip.duration) || 0;
+            const visuals = Array.isArray(snapshot.visualSegments) ? snapshot.visualSegments : [];
+            const clipIndex = visuals.findIndex((c) => c.id === op.clipId);
+            if (clipIndex >= 0) {
+              const targetClip = visuals[clipIndex];
+              const clipStart = visuals.slice(0, clipIndex).reduce((sum, c) => sum + (Number(c.duration) || 0), 0);
+              const clipDur = Number(targetClip.duration) || 0;
+              // If 'at' is not positive finite, calculate relative playhead offset within target clip
+              if (!Number.isFinite(op.at) || op.at <= 0) {
                 if (Number.isFinite(currentTime) && currentTime > clipStart && currentTime < clipStart + clipDur) {
                   op.at = Number((currentTime - clipStart).toFixed(3));
                 } else {
                   op.at = Number((clipDur / 2).toFixed(3));
                 }
+              } else if (clipStart > 0 && op.at >= clipStart && op.at < clipStart + clipDur && op.at >= clipDur) {
+                // op.at was expressed in project/timeline coordinates (between clipStart and clipStart + clipDur)
+                op.at = Number((op.at - clipStart).toFixed(3));
               }
             }
           }
@@ -1050,10 +1067,80 @@ export function AiAssistantPanel({
           return op;
         });
 
+        // Robust batch validation for transitions: skip final clips, gaps, and duplicate transitions safely
+        const skippedTransitionNotes = [];
+        let appliedTransitionsCount = 0;
+        const validOperations = [];
+
+        for (const op of operations) {
+          if (op.type === "transition.set") {
+            const visuals = Array.isArray(snapshot.visualSegments) ? snapshot.visualSegments : [];
+            if (!visuals.length) {
+              skippedTransitionNotes.push("No visual clips on timeline");
+              continue;
+            }
+            const clipIndex = visuals.findIndex((c) => c.id === op.clipId);
+            if (clipIndex < 0) {
+              skippedTransitionNotes.push(`Clip "${op.clipId}" was not found or was removed`);
+              continue;
+            }
+            if (op.transitionId !== "none" && clipIndex >= visuals.length - 1) {
+              const clipLabel = visuals[clipIndex].name || visuals[clipIndex].id;
+              skippedTransitionNotes.push(`Skipped transition on final clip "${clipLabel}" (transitions require a following clip)`);
+              continue;
+            }
+            if (op.transitionId !== "none" && clipIndex < visuals.length - 1) {
+              const curr = visuals[clipIndex];
+              const next = visuals[clipIndex + 1];
+              if (Number.isFinite(curr.start) && Number.isFinite(next.start)) {
+                const currEnd = curr.start + (Number(curr.duration) || 0);
+                if (next.start > currEnd + 0.05) {
+                  skippedTransitionNotes.push(`Skipped transition between "${curr.name || curr.id}" and "${next.name || next.id}" due to timeline gap`);
+                  continue;
+                }
+              }
+              // Prevent duplicate transitions on repeated requests
+              if (curr.transition?.id === op.transitionId && (!op.duration || Math.abs((Number(curr.transition.duration) || 0.5) - Number(op.duration)) < 0.01)) {
+                skippedTransitionNotes.push(`Skipped duplicate ${op.transitionId} transition on "${curr.name || curr.id}"`);
+                continue;
+              }
+              // Clamp duration to valid maximum so range validation never fails
+              const maxDur = Math.max(0.1, Math.min(2, (Number(curr.duration) || 1) / 2, (Number(next.duration) || 1) / 2));
+              if (Number.isFinite(op.duration)) {
+                op.duration = Number(Math.min(Number(op.duration), maxDur).toFixed(2));
+              } else {
+                op.duration = Number(Math.min(0.5, maxDur).toFixed(2));
+              }
+            }
+            appliedTransitionsCount++;
+            validOperations.push(op);
+          } else {
+            validOperations.push(op);
+          }
+        }
+
+        if (operations.length > 0 && validOperations.length === 0) {
+          const feedbackMsg = skippedTransitionNotes.length
+            ? `No transitions applied: ${skippedTransitionNotes.join("; ")}`
+            : "No valid actions could be applied to the timeline.";
+          notify?.(feedbackMsg);
+          setMessages((prev) => [
+            ...prev.map((m) => (m.id === msgId ? { ...m, status: "applied" } : m)),
+            {
+              id: `asst-note-${Date.now()}`,
+              role: "assistant",
+              text: feedbackMsg,
+              status: "applied",
+              timestamp: new Date(),
+            },
+          ]);
+          return;
+        }
+
         const commandPlan = {
           schemaVersion: 1,
           baseRevision: plan.baseRevision !== undefined ? plan.baseRevision : (snapshot.commandState?.revision || 0),
-          operations,
+          operations: validOperations,
         };
 
         const testRun = applyCommandPlan(snapshot, commandPlan);
@@ -1074,6 +1161,19 @@ export function AiAssistantPanel({
         }
 
         await onApplyPlan(testRun.project, { ...plan, mediaOrigins }, mediaOrigins);
+
+        if (skippedTransitionNotes.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `asst-trans-note-${Date.now()}`,
+              role: "assistant",
+              text: `Applied ${appliedTransitionsCount} transition(s). Notice: ${skippedTransitionNotes.join("; ")}`,
+              status: "applied",
+              timestamp: new Date(),
+            },
+          ]);
+        }
       }
 
       // Execute any integrated AI tool triggers (except generate_captions which was already awaited)
@@ -1155,6 +1255,12 @@ export function AiAssistantPanel({
       aria-label="Natural-Language AI Assistant Workspace"
       aria-hidden={!isExpanded}
       data-testid="ai-assistant-panel"
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && isExpanded) {
+          e.stopPropagation();
+          onToggleCollapse?.();
+        }
+      }}
     >
       {/* Compatibility container for modal queries */}
       <div
@@ -1189,13 +1295,19 @@ export function AiAssistantPanel({
 
             <button
               type="button"
-              className="ai-assistant-panel-collapse-btn"
+              className="ai-assistant-panel-collapse-btn ai-assistant-panel-minimize-btn"
               onClick={onToggleCollapse}
-              aria-label={isExpanded ? "Collapse AI Assistant" : "Expand AI Assistant"}
-              title={isExpanded ? "Collapse panel" : "Expand panel"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggleCollapse?.();
+                }
+              }}
+              aria-label={isExpanded ? "Minimize AI Assistant" : "Expand AI Assistant"}
+              title={isExpanded ? "Minimize AI Assistant (Esc or Click)" : "Expand AI Assistant"}
               data-testid="ai-assistant-collapse-btn"
             >
-              {isExpanded ? <CaretRight size={16} weight="bold" /> : <CaretLeft size={16} weight="bold" />}
+              {isExpanded ? <Minus size={16} weight="bold" /> : <CaretLeft size={16} weight="bold" />}
             </button>
           </div>
         </div>

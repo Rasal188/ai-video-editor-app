@@ -22,22 +22,68 @@ export function localizeAutoCaptionPhase(phase, t) {
   return text;
 }
 
+import { resolveCaptionSourceMedia } from "../lib/captionSourceResolver.js";
+export { resolveCaptionSourceMedia };
+
 export function useAutoCaptions(d) {
   return useCallback(async (options = {}) => {
-    const inputBlob = options.blob ?? d.sourceAudioBlob;
-    const timelineOffset = Number.isFinite(options.start) ? options.start : d.sourceAudioStart;
-    if (d.status === "generating" || d.status === "captioning") return;
-    if (d.trackLocks.caption) return void d.notify(d.t("captionTrackLocked"));
-    if (!inputBlob) return void d.notify(d.t("autoCaptionsNeedsSource"));
+    if (d.status === "generating" || d.status === "captioning") {
+      const busyMsg = typeof d.t === "function" ? d.t("captionGeneratorBusy", "Caption generator is busy. Please wait for the current task to finish.") : "Caption generator is busy.";
+      d.notify?.(busyMsg);
+      if (options.throwOnError) {
+        const err = new Error(busyMsg);
+        err.code = "CAPTION_GENERATOR_BUSY";
+        throw err;
+      }
+      return null;
+    }
+    if (d.trackLocks?.caption || d.trackLocks?.captions) {
+      const lockMsg = typeof d.t === "function" ? d.t("captionTrackLocked", "Caption track is locked.") : "Caption track is locked.";
+      d.notify?.(lockMsg);
+      if (options.throwOnError) {
+        const err = new Error(lockMsg);
+        err.code = "CAPTION_TRACK_LOCKED";
+        throw err;
+      }
+      return null;
+    }
+
+    const resolvedSource = await resolveCaptionSourceMedia(d, options);
+    if (!resolvedSource?.blob) {
+      const needsSourceMsg = typeof d.t === "function" ? d.t("autoCaptionsNeedsSource", "Upload video or drop audio on the source track first") : "Upload video or drop audio on the source track first";
+      d.notify?.(needsSourceMsg);
+      if (options.throwOnError) {
+        const err = new Error(needsSourceMsg);
+        err.code = "CAPTION_SOURCE_MISSING";
+        throw err;
+      }
+      return null;
+    }
+
+    const inputBlob = resolvedSource.blob;
+    const timelineOffset = resolvedSource.start;
+    const clipDuration = Number.isFinite(options.duration) ? options.duration : resolvedSource.duration;
+    const clipSourceStart = Number.isFinite(options.sourceStart) ? options.sourceStart : resolvedSource.sourceStart;
+
     d.setStatus("captioning"); d.setStatusText(d.t("autoCaptionsPreparing")); d.setProgress(4); d.setActiveTool("audio");
     try {
-      const clipBlob = Number.isFinite(options.duration)
-        ? await sliceAudioBlob(inputBlob, options.sourceStart || 0, options.duration)
+      const clipBlob = Number.isFinite(clipDuration) && clipDuration > 0
+        ? await sliceAudioBlob(inputBlob, clipSourceStart || 0, clipDuration)
         : inputBlob;
       const result = await transcribeAudioToCaptionSegments(clipBlob, {
         preferredLanguage: d.uiLanguage, timelineOffset, grouping: options.grouping,
         onProgress: ({ progress, phase }) => { d.setProgress((current) => Math.max(current, progress)); d.setStatusText(localizeAutoCaptionPhase(phase, d.t)); },
       });
+      if (!result?.segments?.length) {
+        const noSpeechMsg = typeof d.t === "function" ? d.t("noSpeechDetected", "No speech detected in audio.") : "No speech detected in audio.";
+        d.notify?.(noSpeechMsg);
+        if (options.throwOnError) {
+          const err = new Error(noSpeechMsg);
+          err.code = "NO_SPEECH_DETECTED";
+          throw err;
+        }
+        return null;
+      }
       if (typeof d.setTranscriptReview === "function" && !options.skipReview) {
         d.setTranscriptReview({
           isOpen: true,
@@ -55,7 +101,7 @@ export function useAutoCaptions(d) {
         d.setStatusText(readyMsg);
         d.setProgress(100);
         d.notify(readyMsg);
-        return;
+        return result;
       }
 
       d.setCaptionSegments((segments) => {
@@ -73,10 +119,18 @@ export function useAutoCaptions(d) {
       const complete = d.t("autoCaptionsComplete").replace("{count}", result.segments.length);
       d.setStatus("done"); d.setStatusText(complete); d.setProgress(100);
       d.seekTo(result.segments[0]?.start ?? timelineOffset); d.notify(complete);
+      return result;
     } catch (error) {
       console.error(error); d.setStatus("error"); d.setStatusText(/ASR_WORD_TIMING_UNAVAILABLE|alignment_heads|attentions|token-level timestamps/i.test(error?.message || "")
         ? d.t("captionTimingUnavailable") : d.t("autoCaptionsFailed"));
       d.setProgress(0); d.notify(d.t("autoCaptionsFailedHint"));
+      if (options.throwOnError) {
+        if (!error.code) {
+          error.code = "CAPTION_GENERATION_FAILED";
+        }
+        throw error;
+      }
+      return null;
     }
   }, [d]);
 }

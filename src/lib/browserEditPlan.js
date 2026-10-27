@@ -604,7 +604,24 @@ export function buildBrowserOperationReview(inputProject, response, options = {}
       if (hasTransition(beforeVisuals[sourceIndex - 1])) reject("BROWSER_EDIT_COMPLEX_TIMING");
       if (operation.type === "visual.split") {
         validTime(operation.at, MIN_VISUAL_SEGMENT_SECONDS);
-        if (clip.duration - operation.at < MIN_VISUAL_SEGMENT_SECONDS) reject("BROWSER_EDIT_INVALID_PLAN");
+        const archiveMediaId = clip.archiveMediaId || clip.id;
+        let cumulative = Number(clip.duration) || 0;
+        let localDur = cumulative;
+        let localAt = operation.at;
+        if (operation.at >= cumulative) {
+          for (let i = sourceIndex + 1; i < beforeVisuals.length; i++) {
+            const nextSeg = beforeVisuals[i];
+            if ((nextSeg.archiveMediaId || nextSeg.id) !== archiveMediaId) break;
+            const nextDur = Number(nextSeg.duration) || 0;
+            if (operation.at < cumulative + nextDur - 0.000001) {
+              localAt = operation.at - cumulative;
+              localDur = nextDur;
+              break;
+            }
+            cumulative += nextDur;
+          }
+        }
+        if (localDur - localAt < MIN_VISUAL_SEGMENT_SECONDS || localAt < MIN_VISUAL_SEGMENT_SECONDS) reject("BROWSER_EDIT_INVALID_PLAN");
         reserve(operation.rightClipId); inherit(operation.rightClipId, operation.clipId);
         focusTime = clipStart + operation.at;
       } else {
@@ -745,15 +762,28 @@ export function restoreBrowserSegmentMedia(segments = [], originals = [], origin
   const sourceById = indexedSegments(originals);
   const nextById = indexedSegments(segments);
   const assetsById = assetMap(assets);
+  const sourceByArchiveId = new Map();
+  for (const orig of originals) {
+    if (orig.archiveMediaId && !sourceByArchiveId.has(orig.archiveMediaId)) {
+      sourceByArchiveId.set(orig.archiveMediaId, orig);
+    }
+    if (orig.id && !sourceByArchiveId.has(orig.id)) {
+      sourceByArchiveId.set(orig.id, orig);
+    }
+  }
   if (origins === undefined && (sourceById.size !== nextById.size || segments.some((clip) => !sourceById.has(clip.id)))) reject("BROWSER_EDIT_STALE_PLAN");
   return segments.map((clip) => {
     const existing = sourceById.get(clip.id);
     const origin = origins && Object.hasOwn(origins, clip.id) ? origins[clip.id] : null;
-    if (existing && origin) reject("BROWSER_EDIT_STALE_PLAN");
-    const original = existing || (origin?.kind === "clip" ? sourceById.get(origin.id) : origin?.kind === "asset" ? assetsById.get(origin.id) : null);
+    const derivedOriginal =
+      !existing && !origin
+        ? (clip.archiveMediaId && sourceByArchiveId.get(clip.archiveMediaId)) ||
+          (clip.parentClipId && (sourceById.get(clip.parentClipId) || sourceByArchiveId.get(clip.parentClipId)))
+        : null;
+    const original = existing || (origin?.kind === "clip" ? sourceById.get(origin.id) : origin?.kind === "asset" ? assetsById.get(origin.id) : null) || derivedOriginal;
     if (!original) reject("BROWSER_EDIT_STALE_PLAN");
     if (existing && clip.assetId !== undefined && clip.assetId !== existing.assetId) reject("BROWSER_EDIT_STALE_PLAN");
-    const restored = { ...(existing || (origin?.kind === "clip" ? original : {})), ...clip };
+    const restored = { ...(existing || (origin?.kind === "clip" ? original : derivedOriginal ? original : {})), ...clip };
     for (const key of MEDIA_FIELDS) {
       if (Object.hasOwn(original, key)) restored[key] = original[key];
       else delete restored[key];
@@ -772,8 +802,8 @@ export function restoreBrowserSegmentMedia(segments = [], originals = [], origin
       restored.peaks = original.peaks.slice(from, to);
     }
     if (!existing) {
-      restored.assetId = original.assetId || (origin.kind === "asset" ? origin.id : "");
-      restored.archiveMediaId = origin.kind === "asset" ? clip.id : original.archiveMediaId || original.id;
+      restored.assetId = original.assetId || (origin?.kind === "asset" ? origin.id : "");
+      restored.archiveMediaId = origin?.kind === "asset" ? clip.id : original.archiveMediaId || original.id;
       if (!restored.url && original.src && original.type === "audio") restored.url = original.src;
       if (!restored.src && original.url && original.type !== "audio") restored.src = original.url;
     }

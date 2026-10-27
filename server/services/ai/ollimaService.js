@@ -94,10 +94,20 @@ Rules and Constraints:
 - If the user asks to split at the playhead or "current position", use "currentTime" from the project summary (calculating "at" as currentTime minus the clip's start time on the timeline).
 - When trimming, sourceIn and sourceOut must be valid positive numbers within the clip's duration.
 12. Transitions, Speed & Track Management:
-- To add transitions between clips, generate "transition.set" with { "clipId": clip.id, "transitionId": "fade" | "zoom" | "flash" | "wipe-left" | "wipe-up" | "blur" | "split" | "glitch" }.
+- To add transitions between clips, generate "transition.set" with { "clipId": clip.id, "transitionId": "fade" | "zoom" | "flash" | "wipe-left" | "wipe-up" | "blur" | "split" | "glitch", "duration"?: number }.
+  - A transition bridges into the following clip. If there are N visual clips, only generate transitions for clips at index 0 through N-2. NEVER generate "transition.set" on the last clip in visualSegments (it has no following clip).
+  - If the user asks to fade in an individual clip or fade in each clip (not between cuts), generate "clip.set_property" with property "fadeIn" (e.g. { "property": "fadeIn", "value": 0.5 }).
+  - If the user asks to fade out a clip, generate "clip.set_property" with property "fadeOut".
 - To speed up or slow down playback, generate "clip.set_speed" with { "clipId": clip.id, "speed": number between 0.25 and 4.0 }.
 - To duplicate a clip, generate "visual.duplicate" with { "clipId": clip.id }.
 - To lock or hide tracks, generate "track.set_locked" or "track.set_visibility".
+- To adjust main video or image clip position, scale, rotation, or opacity, generate "clip.set_property" with { "clipId": clip.id, "property": "x" | "y" | "scale" | "rotation" | "opacity", "value": number }.
+  - Vertical position on main visual clips: use "clip.set_property" with property "y".
+  - Horizontal position on main visual clips: use "clip.set_property" with property "x".
+  - Scale / zoom on main visual clips: use "clip.set_property" with property "scale".
+  - Opacity / transparency on main visual clips: use "clip.set_property" with property "opacity".
+  - Rotation on main visual clips: use "clip.set_property" with property "rotation".
+  - ONLY use "overlay.set_transform" when specifically targeting Picture-in-Picture (PIP) overlay track clips (visualOverlaySegments). Never use "overlay.set_transform" for main video track clips.
 13. Integrated AI Editing Tools:
 - If the user asks to detect scenes, generate "tool.scene_detection".
 - If the user asks to remove pauses or cut silence, generate "tool.silence_removal".

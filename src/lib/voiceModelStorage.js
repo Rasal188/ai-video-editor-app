@@ -1,4 +1,4 @@
-const SHARED_MODEL_CACHE = "timeline-studio-model-cache-v4";
+const SHARED_MODEL_CACHE = "timeline-studio-model-cache-v5";
 const KOKORO_VOICE_CACHE = "kokoro-voices";
 const VOICE_REPOSITORY_MARKER = "timeline-studio-voice-models";
 

@@ -9,7 +9,7 @@ const MODEL_CACHE_KEY =
 const MODEL_BYTES = 24_743_604;
 const MODEL_SIZE = 256;
 const CACHE_NAME = "timeline-studio-migan-generator-256-webgpu-v1";
-const SHARED_MODEL_CACHE_NAME = "timeline-studio-model-cache-v4";
+const SHARED_MODEL_CACHE_NAME = "timeline-studio-model-cache-v5";
 const MODEL_READ_STALL_TIMEOUT_MS = 20_000;
 
 configureOrtWebGpu(ort);

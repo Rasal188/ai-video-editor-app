@@ -246,9 +246,13 @@ export function useProjectFiles(deps) {
       const restoredVisuals = Array.isArray(data.visualSegments) ? data.visualSegments.map((segment) => {
         const restored = restoreVisualMedia(segment);
         if (!restored) return null;
-        const smartFrame = normalizeSmartFrame(restored.smartFrame);
+        const smartFrame = normalizeSmartFrame(restored.smartFrame || restored.visualEffects?.smartFrame);
         if (!smartFrame) {
-          const { smartFrame: _smartFrame, ...withoutSmartFrame } = restored;
+          const { smartFrame: _smartFrame, visualEffects, ...withoutSmartFrame } = restored;
+          if (visualEffects?.smartFrame) {
+            const { smartFrame: _vSmartFrame, ...restVisualEffects } = visualEffects;
+            return { ...withoutSmartFrame, visualEffects: restVisualEffects };
+          }
           return withoutSmartFrame;
         }
         return { ...restored, smartFrame };
@@ -336,7 +340,10 @@ export function useProjectFiles(deps) {
       deps.setSpeed(Number.isFinite(Number(data.speed)) && Number(data.speed) > 0
         ? Number(data.speed)
         : importedVoice.defaultSpeed ?? 1);
-      deps.setVolume(Number(data.volume) || 1); deps.setRatioId(RATIO_OPTIONS.some((option) => option.id === data.ratioId) ? data.ratioId : "16:9");
+      deps.setVolume(Number(data.volume) || 1);
+      const importedRatio = RATIO_OPTIONS.some((option) => option.id === data.ratioId) ? data.ratioId : "16:9";
+      if (deps.autoRatioSourceKeyRef) deps.autoRatioSourceKeyRef.current = `locked:${importedRatio}`;
+      deps.setRatioId(importedRatio);
       deps.setFitMode(data.fitMode || "contain"); deps.setCaptionPosition(data.captionPosition || "bottom");
       deps.setCaptionPlacement(data.captionPlacement || { x: 50, y: 78 }); deps.setCaptionSize(Number(data.captionSize) || 14);
       deps.setCaptionStyle(data.captionStyle || deps.captionStyle);

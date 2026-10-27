@@ -1,5 +1,11 @@
 import { makeId } from "./timeline.js";
-import { createChromeBuiltInSession } from "./chromeBuiltInAi.js";
+import { regroupReviewSegments } from "./transcriptReview.js";
+import { canRemovePauses } from "./silenceRemoval.js";
+import { findRoughCutCandidates, buildRoughCutReview, mergeCutCandidates } from "./roughCut.js";
+import { detectVideoScenes } from "./sceneDetection.js";
+import { analyzeVideoPauses } from "./sileroVad.js";
+import { transcribeAudioToCaptionSegments } from "./asr.js";
+import { browserProjectFingerprint } from "./browserEditPlan.js";
 
 const AUTO_EDIT_LANGUAGE_TAGS = {
   zh: "zh-CN",
@@ -16,132 +22,393 @@ const AUTO_EDIT_LANGUAGE_TAGS = {
   id: "id",
 };
 
-const AUTO_EDIT_LANGUAGE_NAMES = {
-  "zh-CN": "Simplified Chinese",
-  en: "English",
-  ja: "Japanese",
-  ko: "Korean",
-  es: "Spanish",
-  fr: "French",
-  de: "German",
-  "pt-BR": "Brazilian Portuguese",
-  th: "Thai",
-  vi: "Vietnamese",
-  ru: "Russian",
-  it: "Italian",
-  id: "Indonesian",
-};
-
-const PROMPT_API_LANGUAGES = new Set(["en", "ja", "es", "de", "fr"]);
-
 export function getAutoEditLanguage(language = "en") {
   return AUTO_EDIT_LANGUAGE_TAGS[language] || language || "en";
 }
 
 export function getAutoEditPromptLanguage(language = "en") {
-  const outputLanguage = getAutoEditLanguage(language);
-  return PROMPT_API_LANGUAGES.has(outputLanguage) ? outputLanguage : "en";
+  return getAutoEditLanguage(language);
 }
 
-function getTranslatorLanguage(language) {
-  return getAutoEditLanguage(language).split("-")[0];
-}
-
-function getAutoEditLanguageName(language) {
-  return AUTO_EDIT_LANGUAGE_NAMES[language] || language;
-}
-
-function combineAvailability(...values) {
-  if (values.includes("unavailable")) return "unavailable";
-  if (values.includes("downloading")) return "downloading";
-  if (values.includes("downloadable")) return "downloadable";
-  return values.every((value) => value === "available") ? "available" : "unavailable";
-}
-
+/**
+ * Backward compatibility probe for existing test scripts and capability checks.
+ * Returns immediate local availability without requiring Chrome experimental AI flags.
+ */
 export async function probeBuiltInAI(language = "en") {
-  if (typeof window === "undefined" || !window.LanguageModel) {
-    return { availability: "unavailable", reason: "api-missing", language: getAutoEditLanguage(language) };
-  }
-  const outputLanguage = getAutoEditLanguage(language);
-  const promptLanguage = getAutoEditPromptLanguage(language);
-  const needsTranslation = promptLanguage !== outputLanguage;
-  try {
-    const promptAvailability = await window.LanguageModel.availability({
-      expectedInputs: [{ type: "text", languages: ["en"] }, { type: "image" }],
-      expectedOutputs: [{ type: "text", languages: [promptLanguage] }],
-    });
-    if (!needsTranslation) return { availability: promptAvailability, reason: "", language: outputLanguage, promptLanguage };
-    if (!window.Translator) return { availability: "unavailable", reason: "translator-api-missing", language: outputLanguage, promptLanguage };
-    const translationAvailability = await window.Translator.availability({
-      sourceLanguage: "en",
-      targetLanguage: getTranslatorLanguage(outputLanguage),
-    });
-    return {
-      availability: combineAvailability(promptAvailability, translationAvailability),
-      reason: "",
-      language: outputLanguage,
-      promptLanguage,
-    };
-  } catch (error) {
-    return { availability: "unavailable", reason: error?.name || "probe-failed", language: outputLanguage, promptLanguage };
-  }
+  return {
+    availability: "available",
+    reason: "",
+    language: getAutoEditLanguage(language),
+    promptLanguage: getAutoEditPromptLanguage(language),
+  };
 }
 
-function median(values) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+export function canRunAutoEdit(clip, previousClip, trackLocks = {}) {
+  if (trackLocks?.image) return false;
+  return Boolean(
+    clip?.type === "video" &&
+    Number(clip?.duration) > 0 &&
+    canRemovePauses(clip, previousClip)
+  );
 }
 
-export function getAdaptiveSceneThreshold(frames, floor = 0.1) {
-  const scores = frames.slice(1).map((frame) => Number(frame.difference) || 0);
-  const center = median(scores);
-  const deviation = median(scores.map((score) => Math.abs(score - center)));
-  return Math.max(floor, center + Math.max(0.035, deviation * 2.5));
+export function calculateAutoEditMetrics(originalDuration = 0, candidates = [], captions = []) {
+  const safeDuration = Math.max(0, Number(originalDuration) || 0);
+  const enabledCuts = (candidates || []).filter((cut) => (cut.enabled ?? cut.selected ?? true) !== false);
+  const mergedCuts = mergeCutCandidates(enabledCuts);
+  const timeSaved = mergedCuts.reduce((sum, cut) => sum + (cut.end - cut.start), 0);
+  const projectedDuration = Math.max(0, safeDuration - timeSaved);
+
+  const pauseCount = (candidates || []).filter((cut) => cut.type === "pause" || cut.type === "merged").length;
+  const fillerCount = (candidates || []).filter((cut) => cut.type === "filler").length;
+  const sceneCount = (candidates || []).filter((cut) => cut.type === "scene").length;
+
+  return {
+    originalDuration: safeDuration,
+    projectedDuration,
+    timeSaved: Number(timeSaved.toFixed(3)),
+    percentageReduced: safeDuration > 0 ? Math.round((timeSaved / safeDuration) * 100) : 0,
+    totalCutsCount: candidates?.length || 0,
+    enabledCutsCount: enabledCuts.length,
+    pauseCount,
+    fillerCount,
+    sceneCount,
+    captionCount: captions?.length || 0,
+  };
 }
 
-export function selectChangedFrames(frames, { threshold, maxFrames = Infinity, minTimeGap = 1.2 } = {}) {
-  if (!frames.length) return [];
-  if (maxFrames <= 1) return [frames[0]];
-  const selected = frames.filter((frame, index) => index === 0 || frame.segmentId !== frames[index - 1].segmentId).slice(0, maxFrames);
-  const effectiveThreshold = Number.isFinite(threshold) ? threshold : getAdaptiveSceneThreshold(frames);
-  const ranked = frames.slice(1).map((frame, index) => {
-    const previousScore = frames[index]?.difference || 0;
-    const localPeak = frame.difference >= previousScore && frame.difference >= (frames[index + 2]?.difference || 0);
-    const quality = frame.quality ?? 1;
-    return { frame, score: frame.difference * (.7 + quality * .3), localPeak };
-  }).filter(({ frame, score }) => score >= effectiveThreshold && (frame.quality ?? 1) >= .28).sort((a, b) => b.score - a.score);
-  for (const { frame } of ranked) {
-    if (selected.length >= maxFrames) break;
-    if (selected.every((item) => item.segmentId !== frame.segmentId || Math.abs(item.time - frame.time) >= minTimeGap)) selected.push(frame);
+/**
+ * Executes the integrated smart Auto Edit analysis pipeline:
+ * 1. Speech transcription with Whisper ASR (token-level timestamps)
+ * 2. VAD pause detection with Silero VAD
+ * 3. Filler word detection and candidate merging via Rough Cut
+ * 4. Optional AI visual scene boundary detection
+ */
+export async function runAutoEditPipeline({
+  clip,
+  sourceAudioBlob = null,
+  settings = {},
+  onProgress = () => {},
+  signal,
+}) {
+  const duration = Number(clip?.duration);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw Object.assign(new Error("autoEditClipUnsupported"), { code: "autoEditClipUnsupported" });
   }
-  // Explicit finite budgets (used only by callers/tests) may request coverage fill.
-  if (Number.isFinite(maxFrames) && selected.length < maxFrames) {
-    const fallback = frames.slice(1, -1).filter((frame) => (frame.quality ?? 1) >= .28).sort((a, b) => {
-      const distance = (frame) => Math.min(...selected.map((item) => Math.abs(item.time - frame.time)));
-      return distance(b) - distance(a);
-    });
-    for (const frame of fallback) {
-      if (selected.length >= maxFrames) break;
-      if (selected.every((item) => item.segmentId !== frame.segmentId || Math.abs(item.time - frame.time) >= minTimeGap)) selected.push(frame);
+
+  const {
+    transcribe = true,
+    removePauses = true,
+    removeFillerWords = true,
+    detectScenes = false,
+    threshold = 0.5,
+    minimum = 0.8,
+    keep = 0.3,
+    language = "en",
+  } = settings;
+
+  onProgress?.(5, "autoEditPreparing");
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  // Step 1: VAD Silence / Pause Analysis
+  let probabilities = null;
+  if (removePauses) {
+    onProgress?.(10, "autoEditFindingScenes");
+    try {
+      probabilities = await analyzeVideoPauses(clip, {
+        language,
+        signal,
+        onProgress: (p, phase) => {
+          if (!signal?.aborted) {
+            onProgress?.(Math.min(45, 10 + Math.round(p * 0.35)), phase || "autoEditFindingScenes");
+          }
+        },
+      });
+    } catch (vadErr) {
+      if (signal?.aborted) throw vadErr;
+      console.warn("[AutoEdit] VAD pause analysis warning:", vadErr);
     }
   }
-  return selected.sort((a, b) => a.time - b.time);
+
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  // Step 2: Speech Transcription (Whisper) for Captions and Filler Words
+  let transcriptResult = null;
+  if (transcribe || removeFillerWords) {
+    onProgress?.(50, "autoEditWritingCaptions");
+    try {
+      let audioBlob = sourceAudioBlob;
+      if (!audioBlob && clip.blob instanceof Blob) {
+        audioBlob = clip.blob;
+      } else if (!audioBlob && typeof clip.src === "string") {
+        try {
+          const res = await fetch(clip.src, { signal });
+          if (res.ok) audioBlob = await res.blob();
+        } catch {
+          // ignore fetch error
+        }
+      }
+
+      if (audioBlob) {
+        transcriptResult = await transcribeAudioToCaptionSegments(audioBlob, {
+          preferredLanguage: language,
+          signal,
+          onProgress: ({ progress, phase }) => {
+            if (!signal?.aborted) {
+              onProgress?.(Math.min(85, 50 + Math.round(progress * 0.35)), phase || "autoEditWritingCaptions");
+            }
+          },
+        });
+      }
+    } catch (asrErr) {
+      if (signal?.aborted) throw asrErr;
+      console.warn("[AutoEdit] Speech transcription warning:", asrErr);
+    }
+  }
+
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  // Step 3: Scene Detection (Optional)
+  let sceneResult = null;
+  if (detectScenes) {
+    onProgress?.(86, "autoEditFindingScenes");
+    try {
+      const videoSource = clip.blob || clip.src;
+      if (videoSource) {
+        sceneResult = await detectVideoScenes(videoSource, {
+          onProgress: (p) => {
+            if (!signal?.aborted) {
+              onProgress?.(Math.min(95, 86 + Math.round(p * 0.09)), "autoEditFindingScenes");
+            }
+          },
+        });
+      }
+    } catch (sceneErr) {
+      if (signal?.aborted) throw sceneErr;
+      console.warn("[AutoEdit] Scene detection warning:", sceneErr);
+    }
+  }
+
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  // Step 4: Extract rough cut candidates (Pauses & Filler Words)
+  const rawChunks = transcriptResult?.rawChunks || [];
+  const rawSegments = transcriptResult?.segments || [];
+
+  const roughCandidates = (removePauses || removeFillerWords)
+    ? findRoughCutCandidates({
+        probabilities,
+        chunks: rawChunks,
+        clip,
+        settings: {
+          threshold,
+          minimum,
+          keep,
+          removeFillerWords,
+        },
+      })
+    : [];
+
+  const candidates = roughCandidates.map((c, idx) => ({
+    ...c,
+    id: c.id || `cut-${idx}`,
+    enabled: true,
+  }));
+
+  // Step 5: Format Captions
+  let captions = [];
+  if (transcribe) {
+    if (Array.isArray(rawSegments) && rawSegments.length > 0) {
+      captions = rawSegments.map((seg) => ({
+        id: seg.id || makeId("caption"),
+        start: Number(seg.start) || 0,
+        end: Number(seg.end) || 0,
+        text: String(seg.text || "").trim(),
+        visualSegmentId: clip.id,
+        ...(Array.isArray(seg.words) && seg.words.length > 0 ? {
+          words: seg.words.map((w) => ({
+            text: String(w.text || "").trim(),
+            start: Number(w.start),
+            end: Number(w.end),
+          })),
+        } : {}),
+      }));
+    } else if (rawChunks.length > 0) {
+      captions = regroupReviewSegments(rawChunks, duration, { grouping: "phrases" }).map((seg) => ({
+        ...seg,
+        visualSegmentId: clip.id,
+      }));
+    }
+  }
+
+  const sceneBoundaries = sceneResult?.boundaries || [];
+  const metrics = calculateAutoEditMetrics(duration, candidates, captions);
+  onProgress?.(100, "autoEditDone");
+
+  return {
+    clip,
+    candidates,
+    sceneBoundaries,
+    captions,
+    rawChunks,
+    transcriptResult,
+    metrics,
+  };
 }
 
-export function selectCandidatesBySegment(frames, maxPerSegment) {
-  const groups = [];
-  frames.forEach((frame) => {
-    let group = groups.find((item) => item.segmentId === frame.segmentId);
-    if (!group) { group = { segmentId: frame.segmentId, frames: [] }; groups.push(group); }
-    group.frames.push(frame);
-  });
-  return groups.flatMap((group) => {
-    return selectChangedFrames(group.frames, { maxFrames: Number.isFinite(maxPerSegment) ? maxPerSegment : Infinity, minTimeGap: 1.2 });
-  });
+/**
+ * Builds an atomic review plan for Auto Edit, ensuring:
+ * - Existing captions on the timeline are preserved by default.
+ * - Track locks are strictly validated.
+ * - Stale plans are rejected via project fingerprinting.
+ * - Multi-track ripple cuts across visual, audio, caption, and overlay tracks.
+ */
+export function buildAutoEditReview({
+  snapshot,
+  runtime,
+  clipId,
+  approvedCuts = [],
+  approvedCaptions = [],
+  approvedSceneBoundaries = [],
+  rippleEditing = true,
+  preserveCaptions = true,
+  includeCuts = true,
+  includeCaptions = true,
+}) {
+  const index = runtime.visualSegments.findIndex((c) => c.id === clipId);
+  const live = runtime.visualSegments[index];
+  if (!live || !canRemovePauses(live, runtime.visualSegments[index - 1])) {
+    throw Object.assign(new Error("autoEditClipUnsupported"), { code: "autoEditClipUnsupported" });
+  }
+
+  // Validate track locks
+  if (snapshot.trackLocks?.image && includeCuts && approvedCuts.length > 0) {
+    throw Object.assign(new Error("autoEditTrackLocked"), { code: "autoEditTrackLocked" });
+  }
+  if (snapshot.trackLocks?.caption && includeCaptions && approvedCaptions.length > 0) {
+    throw Object.assign(new Error("captionTrackLocked"), { code: "captionTrackLocked" });
+  }
+  if (runtime.sourceAudioBlob && snapshot.sourceAudioLinked !== false && snapshot.trackLocks?.source && includeCuts && approvedCuts.length > 0) {
+    throw Object.assign(new Error("sourceAudioTrackLocked"), { code: "sourceAudioTrackLocked" });
+  }
+
+  const enabledCuts = includeCuts
+    ? (approvedCuts || [])
+        .filter((c) => (c.enabled ?? c.selected ?? true) !== false)
+        .map((c) => ({ ...c, enabled: true }))
+    : [];
+
+  const hasCuts = enabledCuts.length > 0;
+  const hasCaptions = includeCaptions && Array.isArray(approvedCaptions) && approvedCaptions.length > 0;
+
+  if (!hasCuts && !hasCaptions && (!approvedSceneBoundaries || !approvedSceneBoundaries.length)) {
+    throw Object.assign(new Error("autoEditNoSelection"), { code: "autoEditNoSelection" });
+  }
+
+  const clipStartOffset = runtime.visualSegments
+    .slice(0, index)
+    .reduce((sum, c) => sum + (c.duration || 0), 0);
+
+  // Position captions relative to clip start offset
+  let positionedCaptions = [];
+  if (hasCaptions) {
+    const alreadyOffset =
+      clipStartOffset > 0.001 &&
+      approvedCaptions.every((cap) => Number(cap.start) >= clipStartOffset - 0.05);
+    const offsetToAdd = alreadyOffset ? 0 : clipStartOffset;
+
+    positionedCaptions = approvedCaptions.map((cap) => ({
+      ...cap,
+      id: cap.id || makeId("caption"),
+      start: Number((offsetToAdd + Number(cap.start)).toFixed(3)),
+      end: Number((offsetToAdd + Number(cap.end)).toFixed(3)),
+      visualSegmentId: clipId,
+      ...(Array.isArray(cap.words) ? {
+        words: cap.words.map((w) => ({
+          text: String(w.text || "").trim(),
+          start: Number((offsetToAdd + Number(w.start)).toFixed(3)),
+          end: Number((offsetToAdd + Number(w.end)).toFixed(3)),
+        })),
+      } : {}),
+    }));
+  }
+
+  // Preserve existing captions on the timeline outside this clip
+  let mergedCaptions = positionedCaptions;
+  const existingCaptions = Array.isArray(snapshot.captionSegments) ? snapshot.captionSegments : [];
+  if (preserveCaptions && existingCaptions.length > 0) {
+    const clipStart = clipStartOffset;
+    const clipEnd = clipStartOffset + (Number(live.duration) || 0);
+    const preserved = existingCaptions.filter((cap) => {
+      const s = Number(cap.start) || 0;
+      const e = Number(cap.end) || 0;
+      return e <= clipStart + 0.05 || s >= clipEnd - 0.05;
+    });
+    mergedCaptions = [...preserved, ...positionedCaptions].sort((a, b) => (a.start || 0) - (b.start || 0));
+  }
+
+  // If cuts are present:
+  if (hasCuts) {
+    const working = structuredClone(snapshot);
+    if (mergedCaptions.length > 0) {
+      working.captionSegments = mergedCaptions;
+      working.script = mergedCaptions.map((c) => c.text).join("\n");
+      working.captionsEnabled = true;
+    }
+
+    try {
+      const cutReview = buildRoughCutReview(
+        working,
+        runtime,
+        clipId,
+        enabledCuts,
+        rippleEditing
+      );
+
+      return {
+        ...cutReview,
+        rippleEditing,
+        fingerprint: browserProjectFingerprint(snapshot, rippleEditing, runtime.visualSegments, runtime),
+        isAutoEdit: true,
+        appliedCutsCount: enabledCuts.length,
+        appliedCaptionsCount: positionedCaptions.length,
+      };
+    } catch (err) {
+      if (err.code === "roughCutLocked" || err.code === "pauseLocked") {
+        throw Object.assign(new Error("autoEditTrackLocked"), { code: "autoEditTrackLocked" });
+      }
+      if (err.code === "roughCutTooShort" || err.code === "pauseTooShort") {
+        throw Object.assign(new Error("autoEditTooShort"), { code: "autoEditTooShort" });
+      }
+      if (err.code === "roughCutNoSelection" || err.code === "pauseNoSelection") {
+        throw Object.assign(new Error("autoEditNoSelection"), { code: "autoEditNoSelection" });
+      }
+      throw err;
+    }
+  }
+
+  // If only captions are being applied:
+  const nextProject = structuredClone(snapshot);
+  nextProject.captionSegments = mergedCaptions;
+  nextProject.script = mergedCaptions.map((c) => c.text).join("\n");
+  nextProject.captionsEnabled = true;
+
+  return {
+    project: nextProject,
+    mediaOrigins: Object.create(null),
+    hasChanges: true,
+    rippleEditing,
+    fingerprint: browserProjectFingerprint(snapshot, rippleEditing, runtime.visualSegments, runtime),
+    duration: nextProject.visualSegments.reduce((sum, c) => sum + (c.duration || 0), 0),
+    focusTime: positionedCaptions[0]?.start ?? clipStartOffset,
+    rows: [{ changed: true, index, start: clipStartOffset }],
+    isAutoEdit: true,
+    appliedCutsCount: 0,
+    appliedCaptionsCount: positionedCaptions.length,
+  };
 }
 
+// Backward-compatibility stubs for legacy helper exports
 export function normalizeGeneratedCaptions(value, duration) {
   const items = Array.isArray(value) ? value : value?.captions;
   if (!Array.isArray(items)) return [];
@@ -178,283 +445,22 @@ export function normalizeClipCaptionTimings(captions, clipStart, clipEnd, prefer
   return normalized.filter((caption) => caption.end - caption.start >= 0.19);
 }
 
-function waitForMedia(element, event) {
-  return new Promise((resolve, reject) => {
-    const done = () => { cleanup(); resolve(); };
-    const fail = () => { cleanup(); reject(element.error || new Error(`Media ${event} failed`)); };
-    const cleanup = () => { element.removeEventListener(event, done); element.removeEventListener("error", fail); };
-    element.addEventListener(event, done, { once: true });
-    element.addEventListener("error", fail, { once: true });
-  });
+export function createFrameCaptionSession() {
+  return Promise.resolve({ destroy: () => {} });
 }
 
-async function canvasBlob(canvas) {
-  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Frame encoding failed")), "image/jpeg", 0.82));
+export function createAutoEditTranslator() {
+  return null;
 }
 
-function createFlowWorkerClient() {
-  const worker = new Worker(new URL("../workers/auto-edit.worker.js", import.meta.url), { type: "module" });
-  const pending = new Map();
-  let requestId = 0;
-  worker.onmessage = (event) => {
-    const request = pending.get(event.data?.id);
-    if (!request) return;
-    pending.delete(event.data.id);
-    request.resolve(event.data);
-  };
-  worker.onerror = (error) => {
-    pending.forEach(({ reject }) => reject(error));
-    pending.clear();
-  };
-  return {
-    analyze(pixels, width, height, segmentId) {
-      const id = ++requestId;
-      const promise = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-      worker.postMessage({ type: "analyze", id, pixels: pixels.buffer, width, height, segmentId }, [pixels.buffer]);
-      return promise;
-    },
-    terminate() { worker.terminate(); pending.forEach(({ reject }) => reject(new DOMException("Aborted", "AbortError"))); pending.clear(); },
-  };
+export function extractAutoEditFrames() {
+  return Promise.resolve([]);
 }
 
-function drawContainedFrame(context, source, sourceWidth, sourceHeight) {
-  const width = context.canvas.width;
-  const height = context.canvas.height;
-  const scale = Math.min(width / sourceWidth, height / sourceHeight);
-  const drawWidth = sourceWidth * scale;
-  const drawHeight = sourceHeight * scale;
-  context.fillStyle = "#000";
-  context.fillRect(0, 0, width, height);
-  context.drawImage(source, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+export function generateFrameCaptions() {
+  return Promise.resolve([]);
 }
 
-export function getAspectRatioLabel(width, height) {
-  const ratio = width / Math.max(1, height);
-  const presets = [[9, 16], [1, 1], [4, 3], [3, 2], [16, 9], [21, 9]];
-  const [w, h] = presets.reduce((best, value) => Math.abs(value[0] / value[1] - ratio) < Math.abs(best[0] / best[1] - ratio) ? value : best);
-  return `${w}:${h}`;
-}
-
-export async function extractAutoEditFrames(segments, onProgress = () => {}, signal) {
-  const frames = [];
-  const flowWorker = createFlowWorkerClient();
-  let timelineStart = 0;
-  try {
-    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      const segment = segments[segmentIndex];
-      const duration = Math.max(0.2, Number(segment.duration) || 0.2);
-      const canvas = document.createElement("canvas");
-      canvas.width = 224; canvas.height = 224;
-      const context = canvas.getContext("2d", { willReadFrequently: true });
-      if (segment.type === "video") {
-        const video = document.createElement("video");
-        video.muted = true; video.preload = "auto"; video.src = segment.src;
-        if (video.readyState < 1) await waitForMedia(video, "loadedmetadata");
-        const sourceStart = Number(segment.sourceStart) || 0;
-        const sourceDuration = Math.max(0.2, Number(segment.sourceDuration) || video.duration || duration);
-        // Keep a stable temporal resolution instead of a fixed total-frame cap.
-        // Long videos therefore receive proportionally more analysis samples.
-        const samplesPerSecond = duration <= 120 ? 1.5 : duration <= 600 ? 1 : 0.75;
-        const sampleCount = Math.max(3, Math.ceil(duration * samplesPerSecond) + 1);
-        for (let sample = 0; sample < sampleCount; sample += 1) {
-          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-          const ratio = sampleCount === 1 ? 0 : sample / (sampleCount - 1);
-          video.currentTime = Math.min(Math.max(0, video.duration - 0.05), sourceStart + ratio * sourceDuration);
-          await waitForMedia(video, "seeked");
-          drawContainedFrame(context, video, video.videoWidth, video.videoHeight);
-          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-          const blob = await canvasBlob(canvas);
-          const metrics = await flowWorker.analyze(pixels, canvas.width, canvas.height, segment.id);
-          frames.push({ segmentId: segment.id, segmentIndex, segmentName: segment.name || `Clip ${segmentIndex + 1}`, segmentStart: timelineStart, segmentEnd: timelineStart + duration, time: timelineStart + ratio * duration, ...metrics, blob, aspectRatio: getAspectRatioLabel(video.videoWidth, video.videoHeight) });
-        }
-        video.removeAttribute("src"); video.load();
-      } else if (segment.src) {
-        const image = new Image(); image.src = segment.src;
-        if (!image.complete) await waitForMedia(image, "load");
-        drawContainedFrame(context, image, image.naturalWidth, image.naturalHeight);
-        frames.push({ segmentId: segment.id, segmentIndex, segmentName: segment.name || `Clip ${segmentIndex + 1}`, segmentStart: timelineStart, segmentEnd: timelineStart + duration, time: timelineStart, difference: 1, blob: await canvasBlob(canvas), aspectRatio: getAspectRatioLabel(image.naturalWidth, image.naturalHeight) });
-      }
-      timelineStart += duration;
-      onProgress(Math.round(((segmentIndex + 1) / segments.length) * 55));
-    }
-    return selectCandidatesBySegment(frames);
-  } finally {
-    flowWorker.terminate();
-  }
-}
-
-export function createFrameCaptionSession({ language, onDownloadProgress, onRetry, signal }) {
-  const modelLanguage = getAutoEditPromptLanguage(language);
-  const options = {
-    expectedInputs: [{ type: "text", languages: ["en"] }, { type: "image" }],
-    expectedOutputs: [{ type: "text", languages: [modelLanguage] }],
-  };
-  return createChromeBuiltInSession({
-    create: (createOptions) => window.LanguageModel.create(createOptions),
-    options,
-    signal,
-    onDownloadProgress,
-    onRetry,
-  });
-}
-
-export function createAutoEditTranslator({ language, onDownloadProgress, onRetry, signal }) {
-  const outputLanguage = getAutoEditLanguage(language);
-  if (getAutoEditPromptLanguage(language) === outputLanguage) return null;
-  return createChromeBuiltInSession({
-    create: (createOptions) => window.Translator.create(createOptions),
-    options: {
-      sourceLanguage: "en",
-      targetLanguage: getTranslatorLanguage(outputLanguage),
-    },
-    signal,
-    onDownloadProgress,
-    onRetry,
-  });
-}
-
-async function translateText(text, translator) {
-  if (!translator || !text) return text;
-  return String(await translator.translate(text)).trim();
-}
-
-export async function generateImageVoiceoverText({ src, language = "en", signal }) {
-  if (!src) throw new Error("image-missing");
-  const modelLanguage = getAutoEditPromptLanguage(language);
-  const session = await createFrameCaptionSession({ language, signal });
-  const translator = await createAutoEditTranslator({ language, signal });
-  try {
-    const response = await fetch(src, { signal });
-    if (!response.ok) throw new Error("image-load-failed");
-    const image = await response.blob();
-    const schema = {
-      type: "object",
-      properties: { text: { type: "string", minLength: 1 } },
-      required: ["text"],
-      additionalProperties: false,
-    };
-    const result = await session.prompt([{ role: "user", content: [
-      { type: "text", value: `Write one concise, natural voiceover narration sentence in ${getAutoEditLanguageName(modelLanguage)} describing only the visible content of this image. Do not invent names, identities, locations, or unseen events. Do not use labels, markdown, or quotation marks.` },
-      { type: "image", value: image },
-    ] }], { responseConstraint: schema, signal });
-    const text = String(JSON.parse(result)?.text || "").trim();
-    if (!text) throw new Error("empty-caption");
-    return translateText(text, translator);
-  } finally {
-    session.destroy?.();
-    translator?.destroy?.();
-  }
-}
-
-async function withIsolatedPromptSession(session, signal, callback) {
-  const isolated = typeof session.clone === "function" ? await session.clone({ signal }) : session;
-  try {
-    return await callback(isolated);
-  } finally {
-    if (isolated !== session) isolated.destroy?.();
-  }
-}
-
-async function generateSingleFrameCaption(session, frame, outputLanguage, schema, signal) {
-  return withIsolatedPromptSession(session, signal, async (promptSession) => {
-    const response = await promptSession.prompt([{ role: "user", content: [
-      { type: "text", value: `Write one concise on-screen caption in ${outputLanguage} describing only what is visibly happening in this video frame at ${frame.time.toFixed(2)} seconds. Return a meaningful non-empty caption. Do not mention the timestamp.` },
-      { type: "image", value: frame.blob },
-    ] }], { responseConstraint: schema, signal });
-    return String(JSON.parse(response)?.text || "").trim();
-  });
-}
-
-async function generateCaptionGroup(session, frames, duration, modelLanguage, translator, signal) {
-  const outputLanguage = getAutoEditLanguageName(modelLanguage);
-  const content = [{ type: "text", value: `Describe every provided candidate frame with one concise on-screen caption. Output only in ${outputLanguage}. Return exactly ${frames.length} captions in the same order as the images. Use only visible evidence; do not invent names or facts. Frame timestamps: ${frames.map((frame) => frame.time.toFixed(2)).join(", ")} seconds.` }];
-  frames.forEach((frame) => content.push({ type: "image", value: frame.blob }));
-  const schema = { type: "object", properties: { captions: { type: "array", minItems: frames.length, maxItems: frames.length, items: { type: "object", properties: { text: { type: "string", minLength: 1 } }, required: ["text"], additionalProperties: false } } }, required: ["captions"], additionalProperties: false };
-  const singleSchema = { type: "object", properties: { text: { type: "string", minLength: 1 } }, required: ["text"], additionalProperties: false };
-  let descriptions;
-  try {
-    const response = await withIsolatedPromptSession(session, signal, (promptSession) =>
-      promptSession.prompt([{ role: "user", content }], { responseConstraint: schema, signal })
-    );
-    const returned = JSON.parse(response)?.captions;
-    descriptions = Array.isArray(returned) ? returned.map((item) => String(item?.text || "").trim()) : [];
-  } catch (error) {
-    if (error?.name === "AbortError") throw error;
-    // Chrome's local multimodal model can reject a valid multi-image request
-    // with kErrorUnknown on some GPU/model combinations. Retry each image in
-    // an isolated session so one oversized/unstable batch does not fail a clip.
-    descriptions = [];
-  }
-  for (let index = 0; index < frames.length; index += 1) {
-    if (descriptions[index]) continue;
-    const frame = frames[index];
-    descriptions[index] = await generateSingleFrameCaption(session, frame, outputLanguage, singleSchema, signal);
-  }
-  const translatedDescriptions = await Promise.all(descriptions.map((text) => translateText(text, translator)));
-  return frames.map((frame, index) => ({
-    id: makeId("caption"),
-    text: translatedDescriptions[index],
-    start: frame.time,
-    end: Math.min(duration, Math.max(frame.time + 1.2, frames[index + 1]?.time ?? frame.segmentEnd ?? duration)),
-    hidden: false,
-  })).filter((caption) => caption.text);
-}
-
-function createSlidingWindows(frames, size = 6, overlap = 2) {
-  if (!frames.length) return [];
-  const stride = Math.max(1, size - overlap);
-  const windows = [];
-  for (let start = 0; start < frames.length; start += stride) {
-    windows.push({ frames: frames.slice(start, start + size), start, commitEnd: frames[start + stride]?.time ?? Infinity });
-    if (start + size >= frames.length) break;
-  }
-  return windows;
-}
-
-export async function generateFrameCaptions({ frames, duration, language, session: providedSession, translator: providedTranslator, onDownloadProgress, onPartial, signal }) {
-  const modelLanguage = getAutoEditPromptLanguage(language);
-  const session = providedSession || await createFrameCaptionSession({ language, onDownloadProgress });
-  const translator = providedTranslator === undefined ? await createAutoEditTranslator({ language, onDownloadProgress }) : providedTranslator;
-  const groups = [];
-  frames.forEach((frame) => {
-    let group = groups.find((item) => item.segmentId === frame.segmentId);
-    if (!group) { group = { segmentId: frame.segmentId, segmentIndex: frame.segmentIndex, segmentName: frame.segmentName, frames: [] }; groups.push(group); }
-    group.frames.push(frame);
-  });
-  const allCaptions = [];
-  const windowsBySegment = new Map(groups.map((group) => [group.segmentId, createSlidingWindows(group.frames)]));
-  const totalWindows = [...windowsBySegment.values()].reduce((sum, windows) => sum + windows.length, 0);
-  let completedWindows = 0;
-  try {
-    for (const group of groups) {
-      const windows = windowsBySegment.get(group.segmentId) || [];
-      const clipStart = group.frames[0]?.segmentStart ?? 0;
-      const clipEnd = group.frames[0]?.segmentEnd ?? duration;
-      let groupCaptions = [];
-      onPartial?.({ segmentId: group.segmentId, status: "running", captions: [], windowIndex: 0, totalWindows: windows.length, completedWindows, allWindows: totalWindows });
-      try {
-        for (let windowIndex = 0; windowIndex < windows.length; windowIndex += 1) {
-          const window = windows[windowIndex];
-          const generated = await generateCaptionGroup(session, window.frames, duration, modelLanguage, translator, signal);
-          // Overlap gives the model context; each window commits only its new time region.
-          const committed = generated.filter((caption) => (caption.start + caption.end) / 2 < window.commitEnd || windowIndex === windows.length - 1);
-          groupCaptions.push(...committed);
-          completedWindows += 1;
-          const partialCaptions = normalizeClipCaptionTimings(groupCaptions, clipStart, clipEnd).map((caption) => ({ ...caption, visualSegmentId: group.segmentId, visualSegmentIndex: group.segmentIndex, visualSegmentName: group.segmentName }));
-          onPartial?.({ segmentId: group.segmentId, status: "running", captions: partialCaptions, windowIndex: windowIndex + 1, totalWindows: windows.length, completedWindows, allWindows: totalWindows });
-        }
-        const timedCaptions = normalizeClipCaptionTimings(groupCaptions, clipStart, clipEnd);
-        const captions = timedCaptions.map((caption) => ({ ...caption, visualSegmentId: group.segmentId, visualSegmentIndex: group.segmentIndex, visualSegmentName: group.segmentName }));
-        allCaptions.push(...captions);
-        onPartial?.({ segmentId: group.segmentId, status: captions.length ? "complete" : "empty", captions, windowIndex: windows.length, totalWindows: windows.length, completedWindows, allWindows: totalWindows });
-      } catch (error) {
-        onPartial?.({ segmentId: group.segmentId, status: "error", captions: [], error: error?.message || String(error) });
-      }
-    }
-    return allCaptions.sort((a, b) => a.start - b.start);
-  } finally {
-    if (!providedSession) session.destroy?.();
-    if (providedTranslator === undefined) translator?.destroy?.();
-  }
+export function generateImageVoiceoverText() {
+  return Promise.resolve("");
 }

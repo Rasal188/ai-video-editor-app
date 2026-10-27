@@ -27,7 +27,7 @@ function getExportFailureMessage(error, copy, localize) {
   const detail = messages.join(" ");
   if (/out of memory|memory allocation|insufficient memory|array buffer allocation|allocation failed|内存/i.test(detail)) return copy.memory;
   if (/failed to fetch|networkerror|err_network|load failed|network request|网络/i.test(detail)) return copy.network;
-  if (/NotReadableError|NotFoundError|MEDIA_ERR|media.*(?:missing|not found|unavailable)|音频媒体已丢失|素材.*(?:失效|丢失)/i.test(detail)) return copy.media;
+  if (/NotReadableError|NotFoundError|MEDIA_ERR|media.*(?:missing|not found|unavailable)|failed to load (?:image|video|visual)|音频媒体已丢失|素材.*(?:失效|丢失)/i.test(detail)) return copy.media;
   if (/音轨|audio track|audio encoder|AudioEncoder/i.test(detail)) return copy.audio;
   if (/NotSupportedError|not supported|unsupported|不支持/i.test(detail)) return copy.unsupported;
   if (error?.message === localize("exportRangeInvalid")) return error.message;
@@ -45,11 +45,17 @@ export function useVideoExport(d) {
       d.notify(d.t("exportVisualRequired"));
       return { status: "blocked", error: d.t("exportVisualRequired") };
     }
+    const effectiveRatio = options.ratio
+      ? (typeof options.ratio === "string"
+          ? (options.ratio === "9:16" ? { width: 1080, height: 1920 } : options.ratio === "1:1" ? { width: 1080, height: 1080 } : { width: 1920, height: 1080 })
+          : options.ratio)
+      : d.ratio;
     const exportSettings = {
       ...requestedSettings,
       ...(audioOnly ? { range: "full", audio: "mix", captions: "none" } : {}),
-      ...getExportDimensions(d.ratio, Number(requestedSettings.resolution)),
+      ...getExportDimensions(effectiveRatio, Number(requestedSettings.resolution)),
       videoBitsPerSecond: getEffectiveExportBitrate(requestedSettings),
+      ratio: effectiveRatio,
     };
     const notify = (message) => {
       if (!options.suppressNotification) d.notify(message);

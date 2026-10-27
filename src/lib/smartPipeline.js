@@ -92,23 +92,154 @@ export function createSmartPipelinePlan({
   });
 
   // 2. Prepare captions
+  // Contract: Full-source transcription is retained and explicitly remapped
+  // to clip-local coordinates using clip.sourceStart, duration, and playbackRate.
+  const sourceStart = Math.max(0, Number(clip?.sourceStart) || 0);
+  const playbackRate = Math.max(0.01, Number(clip?.playbackRate) || 1);
+  const sourceWindowStart = sourceStart;
+  const sourceWindowEnd = sourceStart + duration * playbackRate;
+
+  // Compute clip-local rawChunks so review regrouping always operates on local coordinates
+  const isChunkAlreadyClipLocal =
+    sourceStart <= 0.001 ||
+    (rawChunks.length > 0 &&
+      !rawChunks.some((c) => Number(c?.timestamp?.[0]) >= sourceWindowStart - 0.05) &&
+      rawChunks.every((c) => Number(c?.timestamp?.[1]) <= duration * playbackRate + 0.5));
+
+  const localChunks = rawChunks
+    .filter((c) => {
+      if (isChunkAlreadyClipLocal) return true;
+      const s = Number(c?.timestamp?.[0]);
+      const e = Number(c?.timestamp?.[1]);
+      if (!Number.isFinite(s) || !Number.isFinite(e)) return true;
+      return e > sourceWindowStart + 0.001 && s < sourceWindowEnd - 0.001;
+    })
+    .map((c) => {
+      if (isChunkAlreadyClipLocal) return c;
+      const s = Number(c?.timestamp?.[0]);
+      const e = Number(c?.timestamp?.[1]);
+      if (!Number.isFinite(s) || !Number.isFinite(e)) return c;
+      const localS = Math.max(0, (s - sourceWindowStart) / playbackRate);
+      const localE = Math.min(duration, (e - sourceWindowStart) / playbackRate);
+      return {
+        ...c,
+        timestamp: [Number(localS.toFixed(4)), Number(Math.max(localS + 0.01, localE).toFixed(4))],
+      };
+    });
+
   let captionSegments = [];
   if (Array.isArray(rawSegments) && rawSegments.length > 0) {
-    captionSegments = rawSegments.map((seg, idx) => ({
-      id: seg.id || `pipeline-cap-${idx}`,
-      start: Number(seg.start) || 0,
-      end: Number(seg.end) || 0,
-      text: String(seg.text || "").trim(),
-      ...(Array.isArray(seg.words) && seg.words.length > 0 ? {
-        words: seg.words.map((w) => ({
-          text: String(w.text || "").trim(),
-          start: Number(w.start),
-          end: Number(w.end),
-        })),
-      } : {}),
-    }));
-  } else if (rawChunks.length > 0) {
-    captionSegments = regroupReviewSegments(rawChunks, duration, { grouping: "phrases" });
+    const isSegmentAlreadyClipLocal =
+      sourceStart <= 0.001 ||
+      (!rawSegments.some((seg) => Number(seg.start) >= sourceWindowStart - 0.05) &&
+        rawSegments.every((seg) => Number(seg.end) <= duration * playbackRate + 0.5));
+
+    const remapped = [];
+    for (let idx = 0; idx < rawSegments.length; idx++) {
+      const seg = rawSegments[idx];
+      const rawStart = Number(seg.start);
+      const rawEnd = Number(seg.end);
+      if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd) || rawEnd <= rawStart) {
+        continue;
+      }
+
+      let localStart;
+      let localEnd;
+
+      if (isSegmentAlreadyClipLocal) {
+        localStart = Math.max(0, rawStart);
+        localEnd = Math.min(duration, rawEnd);
+      } else {
+        // Exclude segments completely outside the clip's source window
+        if (rawEnd <= sourceWindowStart + 0.001 || rawStart >= sourceWindowEnd - 0.001) {
+          continue;
+        }
+        // Explicitly remap timestamps using clip sourceStart and playbackRate
+        localStart = Math.max(0, (rawStart - sourceWindowStart) / playbackRate);
+        localEnd = Math.min(duration, (rawEnd - sourceWindowStart) / playbackRate);
+      }
+
+      if (localEnd - localStart < 0.001) {
+        continue;
+      }
+
+      let start = Math.max(0, Number(localStart.toFixed(4)));
+      let end = Math.min(duration, Number(localEnd.toFixed(4)));
+
+      if (end - start < 0.2) {
+        if (start + 0.2 <= duration) {
+          end = start + 0.2;
+        } else {
+          end = duration;
+          start = Math.max(0, duration - 0.2);
+        }
+      }
+
+      const segmentWords = Array.isArray(seg.words) && seg.words.length > 0
+        ? seg.words
+            .map((w) => {
+              const ws = Number(w.start);
+              const we = Number(w.end);
+              if (!Number.isFinite(ws) || !Number.isFinite(we) || we <= ws) return null;
+              const localWs = isSegmentAlreadyClipLocal ? ws : (ws - sourceWindowStart) / playbackRate;
+              const localWe = isSegmentAlreadyClipLocal ? we : (we - sourceWindowStart) / playbackRate;
+              const validWs = Math.max(start, Math.min(end, localWs));
+              const validWe = Math.max(validWs, Math.min(end, localWe));
+              return {
+                ...w,
+                text: String(w.text || "").trim(),
+                start: Number(validWs.toFixed(4)),
+                end: Number(validWe.toFixed(4)),
+              };
+            })
+            .filter(Boolean)
+        : undefined;
+
+      remapped.push({
+        ...seg,
+        id: seg.id || `pipeline-cap-${idx}`,
+        start: Number(start.toFixed(4)),
+        end: Number(end.toFixed(4)),
+        text: String(seg.text || "").trim(),
+        ...(segmentWords ? { words: segmentWords } : {}),
+      });
+    }
+    captionSegments = remapped;
+  } else if (localChunks.length > 0) {
+    const rawGrouped = regroupReviewSegments(localChunks, duration, { grouping: "phrases" });
+    captionSegments = (rawGrouped || []).map((seg, idx) => {
+      const rawStart = Number(seg.start);
+      let start = Math.max(0, Number.isFinite(rawStart) ? rawStart : 0);
+      const rawEnd = Number(seg.end);
+      let end = Number.isFinite(rawEnd) ? Math.min(duration, Math.max(start + 0.2, rawEnd)) : Math.min(duration, start + 0.2);
+      if (end - start < 0.2) {
+        if (start + 0.2 <= duration) {
+          end = start + 0.2;
+        } else {
+          end = duration;
+          start = Math.max(0, duration - 0.2);
+        }
+      }
+      return {
+        ...seg,
+        id: seg.id || `pipeline-cap-${idx}`,
+        start: Number(start.toFixed(4)),
+        end: Number(end.toFixed(4)),
+        ...(Array.isArray(seg.words) ? {
+          words: seg.words.map((w) => {
+            const ws = Number(w.start);
+            const we = Number(w.end);
+            const validWs = Number.isFinite(ws) ? Math.max(start, ws) : start;
+            const validWe = Number.isFinite(we) ? Math.max(validWs, Math.min(end, we)) : end;
+            return {
+              ...w,
+              start: Number(validWs.toFixed(4)),
+              end: Number(validWe.toFixed(4)),
+            };
+          }),
+        } : {}),
+      };
+    });
   }
 
   const metrics = calculatePipelineMetrics(duration, candidates, captionSegments);
@@ -117,7 +248,7 @@ export function createSmartPipelinePlan({
     clip,
     candidates,
     captionSegments,
-    rawChunks,
+    rawChunks: localChunks,
     transcriptResult,
     metrics,
   };
@@ -170,6 +301,14 @@ export function buildSmartPipelineReview({
     fail("pipelineNoSelection");
   }
 
+  if (hasCaptions && snapshot.trackLocks?.caption) {
+    fail("pipelineLocked");
+  }
+
+  if (hasCuts && snapshot.sourceAudioLinked !== false && runtime.sourceAudioBlob && snapshot.trackLocks?.source) {
+    fail("pipelineLocked");
+  }
+
   const clipStartOffset = runtime.visualSegments
     .slice(0, index)
     .reduce((sum, clip) => sum + clip.duration, 0);
@@ -191,27 +330,58 @@ export function buildSmartPipelineReview({
       const alreadyTimelineOffset =
         clipStartOffset > 0.001 &&
         approvedCaptions.length > 0 &&
-        approvedCaptions.every((cap) => Number(cap.start) >= clipStartOffset - 0.05);
+        (
+          approvedCaptions.some((cap) => cap.isTimelineOffset || cap.timelineOffset || cap.timeline) ||
+          (
+            approvedCaptions.every((cap) => Number(cap.start) >= clipStartOffset - 0.05) &&
+            approvedCaptions.some((cap) => Number(cap.end) > live.duration + 0.05)
+          )
+        );
       const offsetToAdd = alreadyTimelineOffset ? 0 : clipStartOffset;
 
-      // Convert captions to timeline coordinates relative to clipStartOffset
-      const positionedCaptions = approvedCaptions.map((cap, i) => ({
-        ...cap,
-        id: cap.id || `cap-${i}-${Date.now()}`,
-        start: offsetToAdd + Number(cap.start),
-        end: offsetToAdd + Number(cap.end),
-        ...(Array.isArray(cap.words) ? {
-          words: cap.words.map((w) => ({
-            ...w,
-            start: offsetToAdd + Number(w.start),
-            end: offsetToAdd + Number(w.end),
-          })),
-        } : {}),
-      }));
+      // Convert captions to timeline coordinates relative to clipStartOffset and ensure MIN_TIMED_CAPTION_SECONDS
+      const positionedCaptions = approvedCaptions.map((cap, i) => {
+        const rawStart = offsetToAdd + Number(cap.start);
+        const start = Math.max(0, Number.isFinite(rawStart) ? rawStart : 0);
+        const rawEnd = offsetToAdd + Number(cap.end);
+        let end = Number.isFinite(rawEnd) ? Math.max(start + 0.2, rawEnd) : start + 0.2;
+        if (end - start < 0.2) {
+          end = start + 0.2;
+        }
+        return {
+          ...cap,
+          id: cap.id || `cap-${i}-${Date.now()}`,
+          start,
+          end,
+          ...(Array.isArray(cap.words) ? {
+            words: cap.words.map((w) => {
+              const ws = offsetToAdd + Number(w.start);
+              const we = offsetToAdd + Number(w.end);
+              const validWs = Number.isFinite(ws) ? Math.max(start, ws) : start;
+              const validWe = Number.isFinite(we) ? Math.max(validWs, Math.min(end, we)) : end;
+              return {
+                ...w,
+                start: validWs,
+                end: validWe,
+              };
+            }),
+          } : {}),
+        };
+      });
 
-      // If replacing or appending captions, put them in project.captionSegments
-      working.captionSegments = positionedCaptions;
-      working.script = positionedCaptions.map((c) => c.text).join("\n");
+      // Preserve existing captions outside the target clip's timeline window
+      const clipTimelineStart = clipStartOffset;
+      const clipTimelineEnd = clipStartOffset + live.duration;
+      const existingOtherCaptions = (snapshot.captionSegments || []).filter(
+        (c) => Number(c.end) <= clipTimelineStart + 0.01 || Number(c.start) >= clipTimelineEnd - 0.01
+      );
+      const combinedCaptions = [...existingOtherCaptions, ...positionedCaptions].sort(
+        (a, b) => (Number(a.start) || 0) - (Number(b.start) || 0)
+      );
+
+      working.captionSegments = combinedCaptions;
+      working.script = combinedCaptions.map((c) => c.text).join("\n");
+      working.captionsEnabled = true;
       workingSnapshot = working;
     }
 
@@ -224,13 +394,17 @@ export function buildSmartPipelineReview({
         rippleEditing
       );
 
+      if (hasCaptions) {
+        cutReview.project.captionsEnabled = true;
+      }
+
       return {
         ...cutReview,
         rippleEditing,
         fingerprint: browserProjectFingerprint(snapshot, rippleEditing, runtime.visualSegments, runtime),
         isSmartPipeline: true,
         appliedCutsCount: enabledCuts.length,
-        appliedCaptionsCount: hasCaptions ? approvedCaptions.length : 0,
+        appliedCaptionsCount: hasCaptions ? (cutReview.project.captionSegments?.length ?? approvedCaptions.length) : 0,
       };
     } catch (err) {
       if (err.code === "roughCutLocked" || err.code === "pauseLocked") {
@@ -251,25 +425,57 @@ export function buildSmartPipelineReview({
   const alreadyTimelineOffset =
     clipStartOffset > 0.001 &&
     approvedCaptions.length > 0 &&
-    approvedCaptions.every((cap) => Number(cap.start) >= clipStartOffset - 0.05);
+    (
+      approvedCaptions.some((cap) => cap.isTimelineOffset || cap.timelineOffset || cap.timeline) ||
+      (
+        approvedCaptions.every((cap) => Number(cap.start) >= clipStartOffset - 0.05) &&
+        approvedCaptions.some((cap) => Number(cap.end) > live.duration + 0.05)
+      )
+    );
   const offsetToAdd = alreadyTimelineOffset ? 0 : clipStartOffset;
 
-  const positionedCaptions = approvedCaptions.map((cap, i) => ({
-    ...cap,
-    id: cap.id || `cap-${i}-${Date.now()}`,
-    start: offsetToAdd + Number(cap.start),
-    end: offsetToAdd + Number(cap.end),
-    ...(Array.isArray(cap.words) ? {
-      words: cap.words.map((w) => ({
-        ...w,
-        start: offsetToAdd + Number(w.start),
-        end: offsetToAdd + Number(w.end),
-      })),
-    } : {}),
-  }));
+  const positionedCaptions = approvedCaptions.map((cap, i) => {
+    const rawStart = offsetToAdd + Number(cap.start);
+    const start = Math.max(0, Number.isFinite(rawStart) ? rawStart : 0);
+    const rawEnd = offsetToAdd + Number(cap.end);
+    let end = Number.isFinite(rawEnd) ? Math.max(start + 0.2, rawEnd) : start + 0.2;
+    if (end - start < 0.2) {
+      end = start + 0.2;
+    }
+    return {
+      ...cap,
+      id: cap.id || `cap-${i}-${Date.now()}`,
+      start,
+      end,
+      ...(Array.isArray(cap.words) ? {
+        words: cap.words.map((w) => {
+          const ws = offsetToAdd + Number(w.start);
+          const we = offsetToAdd + Number(w.end);
+          const validWs = Number.isFinite(ws) ? Math.max(start, ws) : start;
+          const validWe = Number.isFinite(we) ? Math.max(validWs, Math.min(end, we)) : end;
+          return {
+            ...w,
+            start: validWs,
+            end: validWe,
+          };
+        }),
+      } : {}),
+    };
+  });
 
-  nextProject.captionSegments = positionedCaptions;
-  nextProject.script = positionedCaptions.map((c) => c.text).join("\n");
+  // Preserve existing captions outside the target clip's timeline window
+  const clipTimelineStart = clipStartOffset;
+  const clipTimelineEnd = clipStartOffset + live.duration;
+  const existingOtherCaptions = (snapshot.captionSegments || []).filter(
+    (c) => Number(c.end) <= clipTimelineStart + 0.01 || Number(c.start) >= clipTimelineEnd - 0.01
+  );
+  const combinedCaptions = [...existingOtherCaptions, ...positionedCaptions].sort(
+    (a, b) => (Number(a.start) || 0) - (Number(b.start) || 0)
+  );
+
+  nextProject.captionSegments = combinedCaptions;
+  nextProject.script = combinedCaptions.map((c) => c.text).join("\n");
+  nextProject.captionsEnabled = true;
 
   return {
     project: nextProject,

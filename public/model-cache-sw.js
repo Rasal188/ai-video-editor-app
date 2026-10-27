@@ -24,13 +24,16 @@ const CACHEABLE_EXTENSIONS = [
 const HUGGING_FACE_HOSTS = new Set([
   "huggingface.co",
   "cdn-lfs.huggingface.co",
+  "cdn-lfs.hf.co",
   "cdn-lfs-us-1.hf.co",
   "cdn-lfs-eu-1.hf.co",
+  "us.aws.cdn.hf.co",
 ]);
 const MODEL_SCOPE_HOSTS = new Set([
   "modelscope.cn",
   "www.modelscope.cn",
   "modelscope.oss-cn-beijing.aliyuncs.com",
+  "cdn-lfs-cn-1.modelscope.cn",
 ]);
 const MIRRORED_REPOSITORIES = new Set([
   "stable-audio-3-small-music-onnx",

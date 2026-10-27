@@ -91,7 +91,14 @@ export function useRoughCut(options) {
             setJob({ running: true, progress: 85, phase: "roughCutTranscribing" });
             const mediaBlob = captured.blob || (captured.src ? await fetch(captured.src, { signal: controller.signal }).then((r) => r.blob()) : null);
             if (mediaBlob) {
-              const asrResult = await transcribeAudioToCaptionSegments(mediaBlob, {
+              const { sliceAudioBlob } = await import("../lib/media.js");
+              const sourceStart = Number(captured.sourceStart) || 0;
+              const clipDuration = Number(captured.duration) || Infinity;
+              const clipBlob = (sourceStart > 0 || Number.isFinite(clipDuration))
+                ? await sliceAudioBlob(mediaBlob, sourceStart, clipDuration)
+                : mediaBlob;
+
+              const asrResult = await transcribeAudioToCaptionSegments(clipBlob, {
                 preferredLanguage: options.language,
                 signal: controller.signal,
               });

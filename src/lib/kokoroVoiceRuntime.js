@@ -2,7 +2,7 @@ import { loadVoiceModelFromMirrors, voiceModelFileUrls } from "../config/voiceMo
 import { orderModelUrlsForNetwork } from "./modelSources.js";
 import { prepareVoiceModelStorage } from "./voiceModelStorage.js";
 
-const SHARED_MODEL_CACHE = "timeline-studio-model-cache-v4";
+const SHARED_MODEL_CACHE = "timeline-studio-model-cache-v5";
 const KOKORO_VOICE_CACHE = "kokoro-voices";
 const UPSTREAM_VOICE_PREFIX = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/";
 
@@ -72,23 +72,67 @@ async function loadRuntime(onProgress) {
   return runtimePromise;
 }
 
-async function fetchOwnedVoiceStyle(voiceId, originalFetch, init) {
+function createCombinedSignal(callerSignal, timeoutSignal) {
+  if (!callerSignal) return { signal: timeoutSignal, cleanup: () => {} };
+  if (!timeoutSignal) return { signal: callerSignal, cleanup: () => {} };
+  if (typeof AbortSignal.any === "function") {
+    return { signal: AbortSignal.any([callerSignal, timeoutSignal]), cleanup: () => {} };
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(callerSignal.aborted ? callerSignal.reason : timeoutSignal.reason);
+  if (callerSignal.aborted || timeoutSignal.aborted) {
+    onAbort();
+    return { signal: controller.signal, cleanup: () => {} };
+  }
+  callerSignal.addEventListener("abort", onAbort, { once: true });
+  timeoutSignal.addEventListener("abort", onAbort, { once: true });
+  const cleanup = () => {
+    callerSignal.removeEventListener("abort", onAbort);
+    timeoutSignal.removeEventListener("abort", onAbort);
+  };
+  return { signal: controller.signal, cleanup };
+}
+
+async function fetchOwnedVoiceStyle(voiceId, originalFetch, init = {}) {
   const candidates = await orderModelUrlsForNetwork(voiceModelFileUrls(`kokoro/voices/${voiceId}.bin`));
   const failures = [];
   for (const candidate of candidates) {
+    let timer;
+    let cleanupSignal = () => {};
     try {
-      const response = await originalFetch(candidate, init);
+      if (init.signal?.aborted) {
+        throw new DOMException("The user aborted a request.", "AbortError");
+      }
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      if (controller) {
+        timer = setTimeout(() => controller.abort(new Error("NETWORK_TIMEOUT")), 20000);
+      }
+      const { signal: requestSignal, cleanup } = createCombinedSignal(init.signal, controller?.signal);
+      cleanupSignal = cleanup;
+      const response = await originalFetch(candidate, { ...init, signal: requestSignal });
       if (response.ok) return response;
       failures.push(`${new URL(candidate).hostname}: HTTP ${response.status}`);
     } catch (error) {
+      if (init.signal?.aborted || error?.name === "AbortError" && init.signal?.aborted) {
+        throw error;
+      }
       failures.push(`${new URL(candidate).hostname}: ${error?.message || String(error)}`);
+    } finally {
+      if (timer) clearTimeout(timer);
+      cleanupSignal();
     }
   }
   throw new Error(`MODEL_MIRRORS_UNAVAILABLE: ${failures.join("; ")}`);
 }
 
 export async function predictKokoroVoice(input, onProgress) {
+  if (input?.signal?.aborted) {
+    throw new DOMException("The user aborted a request.", "AbortError");
+  }
   const tts = await loadRuntime(onProgress);
+  if (input?.signal?.aborted) {
+    throw new DOMException("The user aborted a request.", "AbortError");
+  }
   onProgress?.({ backend: "wasm", progress: 92 });
   // Let React paint the phase change before main-thread WASM inference starts.
   // Otherwise the last download label remains visible throughout generation.
@@ -105,12 +149,15 @@ export async function predictKokoroVoice(input, onProgress) {
   const mirroredFetch = (resource, init) => {
     const requestUrl = typeof resource === "string" ? resource : resource?.url;
     return requestUrl === upstreamUrl
-      ? fetchOwnedVoiceStyle(input.voiceId, originalFetch, init)
+      ? fetchOwnedVoiceStyle(input.voiceId, originalFetch, { ...init, signal: input?.signal || init?.signal })
       : originalFetch(resource, init);
   };
   globalThis.fetch = mirroredFetch;
   try {
     const audio = await tts.generate(input.text, { voice: input.voiceId, speed: input.speed });
+    if (input?.signal?.aborted) {
+      throw new DOMException("The user aborted a request.", "AbortError");
+    }
     return audio.toBlob();
   } finally {
     if (globalThis.fetch === mirroredFetch) globalThis.fetch = originalFetch;

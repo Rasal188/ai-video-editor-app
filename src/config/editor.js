@@ -1,14 +1,10 @@
-import {
-  ClosedCaptioning,
-  ImageSquare,
-  MusicNote,
-  MagicWand,
-  PlugsConnected,
-  Scan,
-  Sticker,
-} from "@phosphor-icons/react";
-
-export { MODEL_ID, AUTOMATIC_CAPTION_MODEL_ID, AUTOMATIC_CAPTION_MODEL_LABEL } from "./models.js";
+import { ClosedCaptioning } from "@phosphor-icons/react/dist/csr/ClosedCaptioning";
+import { ImageSquare } from "@phosphor-icons/react/dist/csr/ImageSquare";
+import { MusicNote } from "@phosphor-icons/react/dist/csr/MusicNote";
+import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
+import { PlugsConnected } from "@phosphor-icons/react/dist/csr/PlugsConnected";
+import { Scan } from "@phosphor-icons/react/dist/csr/Scan";
+import { Sticker } from "@phosphor-icons/react/dist/csr/Sticker";
 
 export const SAMPLE_IMAGE = "/assets/sample-portrait.png";
 export const DEFAULT_TIMELINE_DURATION_SECONDS = 10;

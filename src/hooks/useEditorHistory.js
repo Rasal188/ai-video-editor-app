@@ -13,13 +13,16 @@ const HISTORY_DEBOUNCE_MS = 180;
 
 function cloneItems(items = []) {
   return (Array.isArray(items) ? items : []).map((item) => {
-    if (item && Array.isArray(item.words)) {
-      return {
-        ...item,
-        words: item.words.map((w) => ({ ...w })),
-      };
-    }
-    return { ...item };
+    if (!item || typeof item !== "object") return item;
+    return {
+      ...item,
+      words: Array.isArray(item.words) ? item.words.map((w) => ({ ...w })) : undefined,
+      baseTransform: item.baseTransform ? { ...item.baseTransform } : undefined,
+      keyframes: Array.isArray(item.keyframes) ? item.keyframes.map((k) => ({ ...k })) : undefined,
+      colorGrade: item.colorGrade ? { ...item.colorGrade } : undefined,
+      mask: item.mask ? { ...item.mask } : undefined,
+      animation: item.animation ? { ...item.animation } : undefined,
+    };
   });
 }
 

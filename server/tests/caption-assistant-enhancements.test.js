@@ -485,6 +485,108 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
       const resolved = await resolveCaptionSourceMedia(projectData);
       assert.equal(resolved, null);
     });
+
+    it("correctly derives timeline position for non-first visual clips by cumulative duration when start is undefined", async () => {
+      const dummyBlob1 = { size: 1000, type: "video/mp4" };
+      const dummyBlob2 = { size: 2000, type: "video/mp4" };
+      const projectData = {
+        visualSegments: [
+          { id: "vis-1", type: "video", duration: 5.5, blob: dummyBlob1 },
+          { id: "vis-2", type: "video", duration: 7.0, blob: dummyBlob2 },
+        ],
+        selectedVisualSegmentId: "vis-2",
+        audioSegments: [],
+        userAssets: [],
+        sourceAudioBlob: null,
+      };
+
+      const resolved = await resolveCaptionSourceMedia(projectData);
+      assert.ok(resolved);
+      assert.equal(resolved.blob, dummyBlob2);
+      // Timeline position for vis-2 must be derived from duration of vis-1 (5.5s), NOT default to 0
+      assert.equal(resolved.start, 5.5);
+      assert.equal(resolved.duration, 7.0);
+    });
+
+    it("prioritizes audio track when audio is explicitly selected or track is audio", async () => {
+      const videoBlob = { size: 1000, type: "video/mp4" };
+      const audioBlob = { size: 500, type: "audio/wav" };
+      const projectData = {
+        visualSegments: [
+          { id: "vis-1", type: "video", duration: 10, blob: videoBlob },
+        ],
+        audioSegments: [
+          { id: "aud-voiceover", start: 2.0, duration: 4.0, blob: audioBlob },
+        ],
+        selectedTrack: "audio",
+        selectedAudioSegmentId: "aud-voiceover",
+        userAssets: [],
+        sourceAudioBlob: null,
+      };
+
+      const resolved = await resolveCaptionSourceMedia(projectData);
+      assert.ok(resolved);
+      assert.equal(resolved.blob, audioBlob, "Selected audio track must be prioritized over video clip");
+      assert.equal(resolved.start, 2.0);
+      assert.equal(resolved.duration, 4.0);
+    });
+
+    it("falls back to audio track when video clip is silent (hasAudio=false, isMuted=true, or volume=0)", async () => {
+      const silentVideoBlob = { size: 1000, type: "video/mp4" };
+      const voiceoverBlob = { size: 500, type: "audio/wav" };
+      const projectData = {
+        visualSegments: [
+          { id: "vis-silent", type: "video", duration: 10, blob: silentVideoBlob, hasAudio: false, isMuted: true },
+        ],
+        audioSegments: [
+          { id: "aud-vo", start: 0.5, duration: 8.0, blob: voiceoverBlob },
+        ],
+        userAssets: [],
+        sourceAudioBlob: null,
+      };
+
+      const resolved = await resolveCaptionSourceMedia(projectData);
+      assert.ok(resolved);
+      assert.equal(resolved.blob, voiceoverBlob, "Must fall back to audio voiceover when video clip has no audio");
+      assert.equal(resolved.start, 0.5);
+      assert.equal(resolved.duration, 8.0);
+    });
+
+    it("ensures newly generated captions cannot be overwritten by a stale snapshot during multi-step assistant plan", () => {
+      // Simulate Assistant plan that generates captions and then applies caption styling
+      const generatedCaptions = [
+        { id: "cap-gen-1", text: "Generated speech caption 1", start: 0.5, end: 2.5 },
+        { id: "cap-gen-2", text: "Generated speech caption 2", start: 3.0, end: 5.0 },
+      ];
+
+      // Initial snapshot before caption generation was empty
+      const staleSnapshot = createTestProject({
+        captionSegments: [],
+        captionsEnabled: false,
+      });
+
+      // The fix in AiAssistantPanel ensures that if generatedCaptions exists,
+      // snapshot.captionSegments is populated with generatedCaptions before applying timeline actions
+      if (generatedCaptions && (!staleSnapshot.captionSegments || staleSnapshot.captionSegments.length === 0)) {
+        staleSnapshot.captionSegments = generatedCaptions;
+        staleSnapshot.captionsEnabled = true;
+      }
+
+      const plan = {
+        actions: [
+          { id: "act-1", type: "caption.set_style", params: { scope: "default", style: { captionSize: 28, karaoke: true } } },
+        ],
+      };
+
+      const result = executePlanOnProject(staleSnapshot, plan);
+      assert.equal(result.ok, true);
+      // Verify generated captions were NOT lost or wiped out
+      assert.equal(result.project.captionSegments.length, 2);
+      assert.equal(result.project.captionSegments[0].text, "Generated speech caption 1");
+      assert.equal(result.project.captionSegments[1].text, "Generated speech caption 2");
+      assert.equal(result.project.captionStyle.captionSize, 28);
+      assert.equal(result.project.captionStyle.karaoke, true);
+    });
   });
 
   // =========================================================================

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 
 const rootDir = process.cwd();
-const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173";
+const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173/?view=editor";
 const OUT_DIR = resolve(rootDir, "artifacts", "caption-presets-keywords");
 const SOURCE_MEDIA_PATH = resolve(OUT_DIR, "source-sample.mp4");
 

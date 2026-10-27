@@ -13,6 +13,7 @@ import {
   ClosedCaptioning,
   Diamond,
   DownloadSimple,
+  FilmSlate,
   FrameCorners,
   MagnifyingGlassPlus,
   MicrophoneStage,
@@ -1104,6 +1105,7 @@ export function ToolPanel(props) {
     analyzeEffectVisual,
     openSmartPipeline,
     openSceneDetection,
+    openShortsStudio,
     smartMode,
     setSmartMode,
     openMobileInspector,
@@ -1485,6 +1487,7 @@ export function ToolPanel(props) {
             ["ai-music", MusicNote, aiCopy.title, aiCopy.hint],
             ["smart-frame", FrameCorners, t("smartFrame"), t("smartFrameHint")],
             ["smart-zoom", MagnifyingGlassPlus, t("smartZoomTitle", uiLanguage === "zh" ? "智能变焦特写" : "Smart Zoom"), t("smartZoomHint", uiLanguage === "zh" ? "人脸居中 · 节奏推进与跳切" : "Face close-ups & dynamic transitions")],
+            ["ai-shorts", FilmSlate, t("shortsStudioTitle", uiLanguage === "zh" ? "AI 爆款短视频" : "AI Shorts Studio"), t("shortsStudioHint", uiLanguage === "zh" ? "长视频一键切片 · 多机位精彩短片" : "Long-to-short video generator")],
           ].map(([id, Icon, title, hint]) => (
             <button
               className={smartMode === id ? "is-active" : ""}
@@ -1497,8 +1500,9 @@ export function ToolPanel(props) {
                 setSmartMode(id);
                 if (id === "smart-pipeline") openSmartPipeline?.();
                 if (id === "scene-detect") openSceneDetection?.();
+                if (id === "ai-shorts") openShortsStudio?.();
                 if (id === "ai-music" && window.matchMedia?.("(max-width: 760px)").matches) openMobileInspector?.();
-                if ((id === "remove-pauses" || id === "rough-cut" || id === "smart-pipeline" || id === "scene-detect" || id === "smart-zoom") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
+                if ((id === "remove-pauses" || id === "rough-cut" || id === "smart-pipeline" || id === "scene-detect" || id === "smart-zoom" || id === "ai-shorts") && window.matchMedia?.("(max-width: 1279px)").matches) openMobileInspector?.();
               }}
             >
               <Icon size={24} weight="duotone" /><strong>{title}</strong><span>{hint}</span>

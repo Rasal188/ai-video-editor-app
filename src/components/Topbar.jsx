@@ -87,6 +87,7 @@ export function Topbar({
   onBackToDashboard,
   onOpenAiAssistant,
   isAssistantOpen = false,
+  onOpenShortsStudio,
 }) {
   const exportAnchorRef = useRef(null);
   const ratioAnchorRef = useRef(null);
@@ -344,6 +345,19 @@ export function Topbar({
           >
             <Sparkle size={16} weight="fill" color="#818cf8" />
             <span className="topbar-ai-assistant-text">AI Assistant</span>
+          </button>
+        )}
+        {onOpenShortsStudio && (
+          <button
+            className="topbar-ai-btn topbar-shorts-studio-btn"
+            type="button"
+            onClick={onOpenShortsStudio}
+            title={t("shortsStudioTitle", "AI Shorts Studio")}
+            aria-label="AI Shorts Studio"
+            data-testid="topbar-shorts-studio-btn"
+          >
+            <FilmSlate size={16} weight="fill" color="#c084fc" />
+            <span className="topbar-shorts-studio-text">Shorts Studio</span>
           </button>
         )}
         <nav className="topbar-community-links" aria-label={t("communityLinks", "社区链接")}>

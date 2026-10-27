@@ -1,3 +1,5 @@
+import { selectPrimaryFace, extractSpeechIntervals, isSpeechActiveAtTime } from "./shortsReframing.js";
+
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, Number(value) || 0));
 
 export const SMART_FRAME_VERSION = 2;
@@ -34,12 +36,13 @@ function inferHeadBox(subject) {
   const width = box.xMax - box.xMin;
   const height = box.yMax - box.yMin;
   const centerX = (box.xMin + box.xMax) / 2;
-  const headWidth = Math.max(width * 0.5, height * 0.18);
+  const headWidth = Math.max(width * 0.45, Math.min(width, height * 0.28));
+  const headHeight = Math.min(height * 0.28, Math.max(0.08, height * 0.22));
   return normalizeBox({
     xMin: centerX - headWidth / 2,
     xMax: centerX + headWidth / 2,
-    yMin: box.yMin - height * 0.42,
-    yMax: box.yMin + height * 0.28,
+    yMin: box.yMin,
+    yMax: Math.min(box.yMax, box.yMin + headHeight),
   });
 }
 
@@ -113,11 +116,22 @@ export function solveSmartFrameCrop(sourceSize, targetSize, subjectBox, options 
   const paddedWidthOccupancy = Math.max(0.5, desiredWidthOccupancy - padding * 0.18);
   const shotZoomLimit = shot === "close" ? 1.08 : shot === "full" ? 1.2 : shot === "medium" ? 1.35 : 1.55;
   const maxZoom = Math.min(requestedMaxZoom, shotZoomLimit);
+
   let height = Math.max(
     largest.height / maxZoom,
     subjectHeight / paddedHeightOccupancy,
     (subjectWidth / paddedWidthOccupancy) / normalizedAspect,
   );
+
+  // In narrow vertical reframing (e.g. 9:16 target where normalizedAspect < 0.6):
+  // The source frame width is already discarded by ~68%. Over-zooming creates an excessively tight,
+  // claustrophobic crop that slices off shoulders and ears. Prevent height from shrinking below 0.95
+  // unless explicit forceTightZoom is requested.
+  if (normalizedAspect < 0.65 && !options.forceTightZoom) {
+    const minSafePortraitHeight = Math.max(0.92, subjectHeight / paddedHeightOccupancy);
+    height = Math.max(height, minSafePortraitHeight);
+  }
+
   let width = height * normalizedAspect;
   if (width > largest.width || height > largest.height) {
     width = largest.width;
@@ -126,9 +140,8 @@ export function solveSmartFrameCrop(sourceSize, targetSize, subjectBox, options 
 
   const crop = normalizeCrop({
     x: guide.focusX - width / 2 + (Number(options.leadX) || 0),
-    // Anchor a person shot from the protected head top. Centering the face is
-    // visually tempting but clips hair/headwear in square and portrait outputs.
-    y: guide.head ? guide.head.yMin - height * 0.055 : guide.focusY - height / 2,
+    // Anchor a person shot from the protected head top with natural headroom.
+    y: guide.head ? Math.max(0, guide.head.yMin - height * 0.055) : guide.focusY - height / 2,
     width,
     height,
   });
@@ -149,7 +162,12 @@ function keepSubjectInside(crop, subjectBox, margin = 0.08) {
     if (subject.xMin < next.x + marginX) next.x = subject.xMin - marginX;
     if (subject.xMax > next.x + next.width - marginX) next.x = subject.xMax - next.width + marginX;
   } else {
-    next.x = guide.focusX - next.width / 2;
+    // When subject is wider than crop (e.g. multi-person span), anchor on head focus rather than empty midpoint
+    if (guide.head) {
+      next.x = (guide.head.xMin + guide.head.xMax) / 2 - next.width / 2;
+    } else {
+      next.x = guide.focusX - next.width / 2;
+    }
   }
 
   if (subjectHeight + marginY * 2 <= next.height) {
@@ -167,7 +185,7 @@ function keepSubjectInside(crop, subjectBox, margin = 0.08) {
       if (protectedHead.xMin < next.x + headMarginX) next.x = protectedHead.xMin - headMarginX;
       if (protectedHead.xMax > next.x + next.width - headMarginX) next.x = protectedHead.xMax - next.width + headMarginX;
     } else {
-      next.x = guide.focusX - next.width / 2;
+      next.x = (protectedHead.xMin + protectedHead.xMax) / 2 - next.width / 2;
     }
     if (headHeight + headMarginY * 2 <= next.height) {
       if (protectedHead.yMin < next.y + headMarginY) next.y = protectedHead.yMin - headMarginY;
@@ -176,6 +194,8 @@ function keepSubjectInside(crop, subjectBox, margin = 0.08) {
       next.y = protectedHead.yMin - next.height * 0.055;
     }
   }
+  next.x = clamp(next.x, 0, 1 - next.width);
+  next.y = clamp(next.y, 0, 1 - next.height);
   return normalizeCrop(next);
 }
 
@@ -189,6 +209,12 @@ function smoothPass(frames, amount, reverse = false) {
     const current = output[index];
     const deadX = previous.crop.width * 0.025;
     const deadY = previous.crop.height * 0.025;
+    const isCut = Boolean(current.isCut || current.cut || Math.abs(current.crop.x - previous.crop.x) > 0.22);
+    if (isCut) {
+      current.isCut = true;
+      current.cut = true;
+      return;
+    }
     ["x", "y", "width", "height"].forEach((key) => {
       const delta = current.crop[key] - previous.crop[key];
       const dead = key === "x" ? deadX : key === "y" ? deadY : 0.002;
@@ -211,6 +237,12 @@ function frameDistance(frame, start, end) {
 function compressFrames(frames, tolerance) {
   if (frames.length <= 2) return frames;
   const keep = new Set([0, frames.length - 1]);
+  // Always preserve shot cuts and transitions
+  frames.forEach((frame, idx) => {
+    if (frame.isCut || frame.cut || frames[idx + 1]?.isCut || frames[idx + 1]?.cut) {
+      keep.add(idx);
+    }
+  });
   const visit = (startIndex, endIndex) => {
     let maximum = 0;
     let maximumIndex = -1;
@@ -243,6 +275,12 @@ export function buildSmartFrameRecord({
 }) {
   const motion = SMART_FRAME_MOTIONS[settings.motion] ? settings.motion : "smooth";
   const motionConfig = SMART_FRAME_MOTIONS[motion];
+  const speechIntervals = extractSpeechIntervals({
+    speechIntervals: segment?.speechIntervals,
+    sentences: segment?.sentences,
+    captionSegments: segment?.captionSegments,
+  });
+
   const rawSamples = (Array.isArray(samples) ? samples : [])
     .filter((sample) => Number.isFinite(Number(sample?.time)))
     .map((sample) => ({
@@ -251,23 +289,43 @@ export function buildSmartFrameRecord({
       confidence: clamp(sample.subject?.score ?? sample.confidence ?? 0),
       state: sample.state || (sample.subject ? "tracked" : "lost"),
       source: sample.source || "detector",
+      faces: Array.isArray(sample.faces) ? sample.faces : (sample.subject?.face ? [sample.subject.face] : []),
+      subjects: Array.isArray(sample.subjects) ? sample.subjects : (sample.subject ? [sample.subject] : []),
     }))
     .sort((left, right) => left.time - right.time);
   let lastAcceptedSubject = null;
   const prepared = rawSamples.map((sample, index) => {
-    if (sample.subject) lastAcceptedSubject = sample.subject;
+    let currentSubject = sample.subject;
+    const candidates = Array.isArray(sample.faces) && sample.faces.length > 0
+      ? sample.faces
+      : (Array.isArray(sample.subjects) && sample.subjects.length > 0 ? sample.subjects : (sample.subject ? [sample.subject] : []));
+
+    if (candidates.length > 1) {
+      const isSpeechActive = isSpeechActiveAtTime(sample.time, speechIntervals);
+      const selected = selectPrimaryFace(candidates, lastAcceptedSubject?.box || null, {
+        sourceSize,
+        time: sample.time,
+        isSpeechActive,
+        targetRatio,
+      });
+      if (selected) {
+        currentSubject = normalizeSubject({ box: selected, label: selected.label || "person", score: selected.confidence ?? 0.9 });
+      }
+    }
+
+    if (currentSubject) lastAcceptedSubject = currentSubject;
     const previousSubject = rawSamples[Math.max(0, index - 1)]?.subject;
-    const currentSubject = sample.subject || lastAcceptedSubject;
+    const activeSubject = currentSubject || lastAcceptedSubject;
     const previousCenterX = previousSubject
       ? (previousSubject.box.xMin + previousSubject.box.xMax) / 2
-      : currentSubject ? (currentSubject.box.xMin + currentSubject.box.xMax) / 2 : 0.5;
-    const currentCenterX = currentSubject
-      ? (currentSubject.box.xMin + currentSubject.box.xMax) / 2
+      : activeSubject ? (activeSubject.box.xMin + activeSubject.box.xMax) / 2 : 0.5;
+    const currentCenterX = activeSubject
+      ? (activeSubject.box.xMin + activeSubject.box.xMax) / 2
       : previousCenterX;
     const leadX = clamp((currentCenterX - previousCenterX) * 0.35, -0.055, 0.055);
     return {
       ...sample,
-      crop: solveSmartFrameCrop(sourceSize, targetSize, currentSubject, { ...settings, leadX }),
+      crop: solveSmartFrameCrop(sourceSize, targetSize, activeSubject, { ...settings, leadX }),
     };
   });
   if (!prepared.length) throw new Error("没有可用于智能构图的主体轨迹");
@@ -318,22 +376,39 @@ export function buildSmartFrameRecord({
       ...frame.crop,
       confidence: frame.confidence,
       state: frame.state,
+      isCut: Boolean(frame.isCut || frame.cut),
+      cut: Boolean(frame.isCut || frame.cut),
     })),
   });
 }
 
 export function normalizeSmartFrame(value) {
-  if (!value || value.enabled === false || !Array.isArray(value.cropKeyframes) || !value.cropKeyframes.length) return null;
-  const cropKeyframes = value.cropKeyframes
+  const target = value?.cropKeyframes ? value : (value?.smartFrame?.cropKeyframes ? value.smartFrame : (value?.visualEffects?.smartFrame?.cropKeyframes ? value.visualEffects.smartFrame : value));
+  if (!target || target.enabled === false || !Array.isArray(target.cropKeyframes) || !target.cropKeyframes.length) return null;
+  const isFallback = Boolean(
+    target.isFallback ||
+    target.metadata?.isFallback ||
+    target.metadata?.status === "fallback" ||
+    target.state === "fallback" ||
+    (target.cropKeyframes.length > 0 && target.cropKeyframes.every((f) => f.state === "fallback" || f.isFallback || f.confidence === 0)) ||
+    (target.cropKeyframes.length <= 2 && target.cropKeyframes.every((f) => (f.confidence ?? 0) <= 0.5 && Math.abs((f.panFactor ?? 0.5) - 0.5) < 0.01))
+  );
+  const state = isFallback ? "fallback" : (target.state || "tracked");
+
+  const cropKeyframes = target.cropKeyframes
     .map((frame) => ({
       time: Math.max(0, Number(frame.time) || 0),
       ...normalizeCrop(frame),
-      confidence: clamp(frame.confidence ?? 0),
-      state: frame.state || "tracked",
+      confidence: isFallback ? 0 : clamp(frame.confidence ?? 0),
+      state: isFallback ? "fallback" : (frame.state || state),
+      isFallback,
+      cut: Boolean(frame.cut || frame.isCut),
+      isCut: Boolean(frame.cut || frame.isCut),
+      ...(Number.isFinite(frame.panFactor) ? { panFactor: frame.panFactor } : {}),
     }))
     .sort((left, right) => left.time - right.time);
-  const storedVersion = Math.max(1, Number(value.version) || 1);
-  const analysisSamples = (Array.isArray(value.analysisTrack?.samples) ? value.analysisTrack.samples : [])
+  const storedVersion = Math.max(1, Number(target.version) || 1);
+  const analysisSamples = (Array.isArray(target.analysisTrack?.samples) ? target.analysisTrack.samples : [])
     .filter((sample) => Number.isFinite(Number(sample?.time)))
     .map((sample) => ({
       time: Math.max(0, Number(sample.time)),
@@ -346,28 +421,32 @@ export function normalizeSmartFrame(value) {
   return {
     version: SMART_FRAME_VERSION,
     enabled: true,
-    targetRatio: String(value.targetRatio || "16:9"),
-    presentation: storedVersion >= 2 && value.presentation === "safe-contain" ? "safe-contain" : "crop",
+    isFallback,
+    state,
+    confidence: isFallback ? 0 : clamp(target.confidence ?? 1),
+    metadata: target.metadata || (isFallback ? { status: "fallback", isFallback: true } : {}),
+    targetRatio: String(target.targetRatio || "16:9"),
+    presentation: storedVersion >= 2 && target.presentation === "safe-contain" ? "safe-contain" : "crop",
     settings: {
-      motion: SMART_FRAME_MOTIONS[value.settings?.motion] ? value.settings.motion : "smooth",
-      padding: clamp(value.settings?.padding ?? 0.16, 0.04, 0.4),
-      maxZoom: storedVersion < 2 ? 1.45 : Math.max(1, Math.min(2, Number(value.settings?.maxZoom) || 1.45)),
+      motion: SMART_FRAME_MOTIONS[target.settings?.motion] ? target.settings.motion : "smooth",
+      padding: clamp(target.settings?.padding ?? 0.16, 0.04, 0.4),
+      maxZoom: storedVersion < 2 ? 1.45 : Math.max(1, Math.min(2, Number(target.settings?.maxZoom) || 1.45)),
     },
     sourceSize: {
-      width: Math.max(1, Number(value.sourceSize?.width) || 1),
-      height: Math.max(1, Number(value.sourceSize?.height) || 1),
+      width: Math.max(1, Number(target.sourceSize?.width) || 1),
+      height: Math.max(1, Number(target.sourceSize?.height) || 1),
     },
-    sourceSignature: value.sourceSignature || {},
-    stats: value.stats || {},
+    sourceSignature: target.sourceSignature || {},
+    stats: target.stats || {},
     analysisTrack: analysisSamples.length ? {
       samples: analysisSamples,
       sourceSize: {
-        width: Math.max(1, Number(value.analysisTrack?.sourceSize?.width) || Number(value.sourceSize?.width) || 1),
-        height: Math.max(1, Number(value.analysisTrack?.sourceSize?.height) || Number(value.sourceSize?.height) || 1),
+        width: Math.max(1, Number(target.analysisTrack?.sourceSize?.width) || Number(target.sourceSize?.width) || 1),
+        height: Math.max(1, Number(target.analysisTrack?.sourceSize?.height) || Number(target.sourceSize?.height) || 1),
       },
-      modelRevision: String(value.analysisTrack?.modelRevision || value.sourceSignature?.modelRevision || ""),
-      runtimeBackend: String(value.analysisTrack?.runtimeBackend || value.stats?.runtimeBackend || "unknown"),
-      analysisMs: Math.max(0, Number(value.analysisTrack?.analysisMs) || Number(value.stats?.analysisMs) || 0),
+      modelRevision: String(target.analysisTrack?.modelRevision || target.sourceSignature?.modelRevision || ""),
+      runtimeBackend: String(target.analysisTrack?.runtimeBackend || target.stats?.runtimeBackend || "unknown"),
+      analysisMs: Math.max(0, Number(target.analysisTrack?.analysisMs) || Number(target.stats?.analysisMs) || 0),
     } : null,
     cropKeyframes,
   };
@@ -376,22 +455,100 @@ export function normalizeSmartFrame(value) {
 export function resolveSmartFrameCropAtTime(value, requestedTime = 0) {
   const smartFrame = normalizeSmartFrame(value);
   if (!smartFrame) return null;
-  const time = Math.max(0, Number(requestedTime) || 0);
+  const rawTime = Math.max(0, Number(requestedTime) || 0);
   const frames = smartFrame.cropKeyframes;
-  if (time <= frames[0].time) return { ...normalizeCrop(frames[0]), presentation: smartFrame.presentation };
-  if (time >= frames.at(-1).time) return { ...normalizeCrop(frames.at(-1)), presentation: smartFrame.presentation };
+  if (!Array.isArray(frames) || frames.length === 0) return null;
+  const isFallback = Boolean(smartFrame.isFallback || smartFrame.metadata?.status === "fallback" || smartFrame.state === "fallback");
+  const state = isFallback ? "fallback" : (smartFrame.state || "tracked");
+
+  let time = rawTime;
+  const firstTime = frames[0].time;
+  const lastTime = frames.at(-1).time;
+  const trackSpan = lastTime - firstTime;
+  const sourceStart = Number(smartFrame.sourceSignature?.sourceStart ?? smartFrame.sourceStart ?? 0);
+
+  // If keyframes are relative to 0 ([0, duration]) but requestedTime was passed in source time (>= sourceStart)
+  if (firstTime === 0 && sourceStart > 0 && time >= sourceStart - 0.2) {
+    time = time - sourceStart;
+  } else if (firstTime > 0 && time < firstTime && (sourceStart === 0 || Math.abs(firstTime - sourceStart) < 0.5)) {
+    // Keyframes are in source time ([sourceStart, sourceEnd]) but requestedTime was passed in local time ([0, duration])
+    if (time <= trackSpan + 0.5) {
+      time = time + firstTime;
+    }
+  }
+
+  const toPanFactor = (c, origKf) => {
+    if (origKf && Number.isFinite(origKf.panFactor)) return origKf.panFactor;
+    if (!c) return 0.5;
+    return (1 - c.width) > 0.0001 ? Number((c.x / (1 - c.width)).toFixed(4)) : 0.5;
+  };
+
+  if (time <= frames[0].time) {
+    const norm = normalizeCrop(frames[0]);
+    return {
+      ...norm,
+      panFactor: toPanFactor(norm, frames[0]),
+      presentation: smartFrame.presentation,
+      isFallback,
+      state,
+      confidence: frames[0].confidence ?? (isFallback ? 0 : 1),
+    };
+  }
+  if (time >= frames.at(-1).time) {
+    const last = frames.at(-1);
+    const norm = normalizeCrop(last);
+    return {
+      ...norm,
+      panFactor: toPanFactor(norm, last),
+      presentation: smartFrame.presentation,
+      isFallback,
+      state,
+      confidence: last.confidence ?? (isFallback ? 0 : 1),
+    };
+  }
   const nextIndex = frames.findIndex((frame) => frame.time >= time);
   const previous = frames[Math.max(0, nextIndex - 1)];
   const next = frames[nextIndex];
+
+  // If next keyframe represents a camera shot change or subject cut,
+  // do not interpolate across the boundary: hold previous until next.time
+  if (next.cut || next.isCut) {
+    if (time < next.time) {
+      const norm = normalizeCrop(previous);
+      return {
+        ...norm,
+        panFactor: toPanFactor(norm, previous),
+        presentation: smartFrame.presentation,
+        isFallback,
+        state: previous.state || state,
+        confidence: previous.confidence !== undefined ? previous.confidence : (isFallback ? 0 : 1),
+      };
+    }
+    const norm = normalizeCrop(next);
+    return {
+      ...norm,
+      panFactor: toPanFactor(norm, next),
+      presentation: smartFrame.presentation,
+      isFallback,
+      state: next.state || state,
+      confidence: next.confidence !== undefined ? next.confidence : (isFallback ? 0 : 1),
+    };
+  }
+
   const mix = clamp((time - previous.time) / Math.max(0.0001, next.time - previous.time));
-  return {
-    ...normalizeCrop({
+  const interpolated = normalizeCrop({
     x: previous.x + (next.x - previous.x) * mix,
     y: previous.y + (next.y - previous.y) * mix,
     width: previous.width + (next.width - previous.width) * mix,
     height: previous.height + (next.height - previous.height) * mix,
-    }),
+  });
+  return {
+    ...interpolated,
+    panFactor: toPanFactor(interpolated),
     presentation: smartFrame.presentation,
+    isFallback,
+    state: (previous.state === "coast" || next.state === "coast") ? "coast" : (previous.state || state),
+    confidence: previous.confidence !== undefined ? previous.confidence : (isFallback ? 0 : 1),
   };
 }
 
@@ -414,5 +571,8 @@ export function smartFrameCropToPixels(crop, sourceSize) {
       height: normalized.height,
     },
     presentation: crop?.presentation === "safe-contain" ? "safe-contain" : "crop",
+    isFallback: Boolean(crop?.isFallback || crop?.state === "fallback"),
+    state: crop?.state || "tracked",
+    confidence: crop?.confidence ?? 1,
   };
 }

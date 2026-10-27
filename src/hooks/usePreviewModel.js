@@ -26,10 +26,34 @@ export function usePreviewModel(d) {
   const previewSmartCropRect = useMemo(() => {
     const smartFrame = d.previewSmartFrameOverride === false
       ? null
-      : d.previewSmartFrameOverride || d.previewVisualSegment?.smartFrame;
+      : d.previewSmartFrameOverride || d.previewVisualSegment?.smartFrame || d.previewVisualSegment?.visualEffects?.smartFrame;
     const crop = resolveSmartFrameCropAtTime(smartFrame, d.previewVisualSourceTime);
-    return crop ? smartFrameCropToPixels(crop, smartFrame.sourceSize) : null;
-  }, [d.previewSmartFrameOverride, d.previewVisualSegment?.smartFrame, d.previewVisualSourceTime]);
+    if (!crop) return null;
+    const rect = smartFrameCropToPixels(crop, smartFrame?.sourceSize);
+    if (rect) {
+      const isFallback = Boolean(
+        crop.isFallback ||
+        smartFrame?.isFallback ||
+        smartFrame?.metadata?.status === "fallback" ||
+        smartFrame?.state === "fallback" ||
+        crop.state === "fallback"
+      );
+      rect.isFallback = isFallback;
+      rect.state = isFallback ? "fallback" : (crop.state || smartFrame?.state || "tracked");
+      rect.confidence = crop.confidence ?? smartFrame?.confidence ?? (isFallback ? 0 : 1);
+
+      console.info("[ShortsStudio Pipeline Diagnostic] Preview stage smart crop evaluated:", {
+        isFallback: rect.isFallback,
+        state: rect.state,
+        confidence: rect.confidence,
+        cropX: rect.x,
+        normalizedXMin: rect.normalized?.xMin,
+        normalizedWidth: rect.normalized?.width,
+        smartCropActive: Boolean(!rect.isFallback && rect.state !== "fallback" && rect.confidence > 0),
+      });
+    }
+    return rect;
+  }, [d.previewSmartFrameOverride, d.previewVisualSegment?.smartFrame, d.previewVisualSegment?.visualEffects?.smartFrame, d.previewVisualSourceTime]);
   const effectiveCaptionPlacement = d.captionPlacement;
   const previewVisualRenderSrc =
     previewVisionOptions.removeBackground &&

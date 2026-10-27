@@ -20,6 +20,8 @@ export function syncTimelineAudioElement(media, { active, shouldPlay, expectedTi
   if (media.paused && !media.__timelinePlayPending) {
     if (Math.abs(media.currentTime - expectedTime) > 0.04) media.currentTime = expectedTime;
     requestTimelineMediaPlay(media);
+  } else if (!media.paused && Math.abs(media.currentTime - expectedTime) > 0.15) {
+    media.currentTime = expectedTime;
   }
 }
 

@@ -140,9 +140,10 @@ export async function executeRenderJob({ jobId, userId }) {
   const resolvedArchive = archivePath ? resolve(process.cwd(), archivePath) : null;
 
   if (!resolvedArchive || !existsSync(resolvedArchive)) {
+    const reason = !archivePath ? "revision has no archive registered" : `file missing from disk`;
     return renderJobQueries.updateRenderJobStatus(job.id, {
       status: renderJobQueries.RENDER_STATUS.FAILED,
-      errorMessage: `Project archive not found at: ${archivePath || "null"}`,
+      errorMessage: `Project archive not found at: ${archivePath || "null"} (${reason}). Please ensure the project archive is saved and uploaded before requesting a render.`,
       completedAt: new Date().toISOString(),
     });
   }

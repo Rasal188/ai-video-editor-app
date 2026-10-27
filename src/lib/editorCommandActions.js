@@ -16,7 +16,6 @@ export function createEditorCommandActions(d) {
 
   function selectTool(toolId) {
     d.setActiveTool(toolId);
-    if (toolId !== "smart") d.setAvatarPanelOpen(false);
     if (toolId === "audio") {
       const video = d.selectedTrack === "overlay" ? d.selectedVisualOverlay : d.selectedTrack === "image" ? d.selectedVisualSegment : null;
       if (video?.type !== "video") d.setSelectedTrack("audio");

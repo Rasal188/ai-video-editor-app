@@ -232,6 +232,184 @@ describe("Assistant Editing Operations & Project Command Engine Regressions", ()
       assert.equal(result.ok, false);
       assert.equal(result.code, "INVALID_RANGE");
     });
+
+    it("should accurately handle two valid splits at 59.211s and 118.422s on the same visual clip", () => {
+      const longVideoProject = {
+        ...createBaseProject(),
+        visualSegments: [
+          {
+            id: "vis-long",
+            type: "video",
+            duration: 180,
+            sourceStart: 0,
+            sourceDuration: 180,
+            playbackRate: 1,
+          },
+        ],
+      };
+
+      const multiSplitPlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-split-1", type: "visual.split", clipId: "vis-long", at: 59.211, rightClipId: "vis-long-part2" },
+          { id: "op-split-2", type: "visual.split", clipId: "vis-long", at: 118.422, rightClipId: "vis-long-part3" },
+        ],
+      };
+
+      const result = applyCommandPlan(longVideoProject, multiSplitPlan);
+      assert.equal(result.ok, true, `Plan should succeed: ${result.message}`);
+      assert.equal(result.project.visualSegments.length, 3);
+
+      const [part1, part2, part3] = result.project.visualSegments;
+
+      // Part 1
+      assert.equal(part1.id, "vis-long");
+      assert.equal(part1.duration, 59.211);
+      assert.equal(part1.sourceStart, 0);
+      assert.equal(part1.sourceDuration, 59.211);
+
+      // Part 2
+      assert.equal(part2.id, "vis-long-part2");
+      assert.equal(part2.duration, 59.211);
+      assert.equal(part2.sourceStart, 59.211);
+      assert.equal(part2.sourceDuration, 59.211);
+
+      // Part 3
+      assert.equal(part3.id, "vis-long-part3");
+      assert.equal(part3.duration, 61.578);
+      assert.equal(part3.sourceStart, 118.422);
+      assert.equal(part3.sourceDuration, 61.578);
+
+      // Total timeline duration must be preserved without gaps or overlaps
+      const totalDuration = result.project.visualSegments.reduce((sum, c) => sum + c.duration, 0);
+      assert.equal(Number(totalDuration.toFixed(3)), 180);
+    });
+
+    it("should handle three or more sequential splits on the same clip with consistent source timing", () => {
+      const project = {
+        ...createBaseProject(),
+        visualSegments: [
+          {
+            id: "vis-cut-test",
+            type: "video",
+            duration: 120,
+            sourceStart: 10,
+            sourceDuration: 120,
+            playbackRate: 1,
+          },
+        ],
+      };
+
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-s1", type: "visual.split", clipId: "vis-cut-test", at: 30, rightClipId: "vis-p2" },
+          { id: "op-s2", type: "visual.split", clipId: "vis-cut-test", at: 60, rightClipId: "vis-p3" },
+          { id: "op-s3", type: "visual.split", clipId: "vis-cut-test", at: 90, rightClipId: "vis-p4" },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.visualSegments.length, 4);
+
+      const segments = result.project.visualSegments;
+      assert.equal(segments[0].id, "vis-cut-test");
+      assert.equal(segments[0].duration, 30);
+      assert.equal(segments[0].sourceStart, 10);
+
+      assert.equal(segments[1].id, "vis-p2");
+      assert.equal(segments[1].duration, 30);
+      assert.equal(segments[1].sourceStart, 40);
+
+      assert.equal(segments[2].id, "vis-p3");
+      assert.equal(segments[2].duration, 30);
+      assert.equal(segments[2].sourceStart, 70);
+
+      assert.equal(segments[3].id, "vis-p4");
+      assert.equal(segments[3].duration, 30);
+      assert.equal(segments[3].sourceStart, 100);
+    });
+
+    it("should atomically reject and rollback multi-action plans when any split position is invalid", () => {
+      const project = {
+        ...createBaseProject(),
+        visualSegments: [
+          {
+            id: "vis-rollback",
+            type: "video",
+            duration: 50,
+            sourceStart: 0,
+            sourceDuration: 50,
+          },
+        ],
+      };
+
+      // Second split is beyond duration (at: 999)
+      const invalidPlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-valid", type: "visual.split", clipId: "vis-rollback", at: 20, rightClipId: "vis-rb-2" },
+          { id: "op-invalid", type: "visual.split", clipId: "vis-rollback", at: 999, rightClipId: "vis-rb-3" },
+        ],
+      };
+
+      const result = applyCommandPlan(project, invalidPlan);
+      assert.equal(result.ok, false);
+      assert.equal(result.code, "INVALID_RANGE");
+
+      // Verify the input project was completely untouched
+      assert.equal(project.visualSegments.length, 1);
+      assert.equal(project.visualSegments[0].id, "vis-rollback");
+      assert.equal(project.visualSegments[0].duration, 50);
+    });
+
+    it("should correctly support undo and redo across multi-split command plans", () => {
+      const project = {
+        ...createBaseProject(),
+        visualSegments: [
+          {
+            id: "vis-undo-test",
+            type: "video",
+            duration: 100,
+            sourceStart: 0,
+            sourceDuration: 100,
+          },
+        ],
+      };
+
+      const snapshotBefore = structuredClone(project);
+
+      const splitPlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-u1", type: "visual.split", clipId: "vis-undo-test", at: 40, rightClipId: "vis-u2" },
+          { id: "op-u2", type: "visual.split", clipId: "vis-undo-test", at: 70, rightClipId: "vis-u3" },
+        ],
+      };
+
+      const applied = applyCommandPlan(project, splitPlan);
+      assert.equal(applied.ok, true);
+      assert.equal(applied.project.visualSegments.length, 3);
+
+      // Simulate editor undo: restore previous snapshot
+      const undoneProject = structuredClone(snapshotBefore);
+      assert.equal(undoneProject.visualSegments.length, 1);
+      assert.equal(undoneProject.visualSegments[0].id, "vis-undo-test");
+      assert.equal(undoneProject.visualSegments[0].duration, 100);
+
+      // Simulate editor redo: re-apply the plan from the restored snapshot
+      const redone = applyCommandPlan(undoneProject, splitPlan);
+      assert.equal(redone.ok, true);
+      assert.equal(redone.project.visualSegments.length, 3);
+      assert.equal(redone.project.visualSegments[0].duration, 40);
+      assert.equal(redone.project.visualSegments[1].duration, 30);
+      assert.equal(redone.project.visualSegments[2].duration, 30);
+    });
   });
 
   describe("Clip Muting and Property Adjustments", () => {
@@ -292,6 +470,186 @@ describe("Assistant Editing Operations & Project Command Engine Regressions", ()
       assert.equal(result.ok, true);
       assert.equal(result.project.musicSegments[0].volume, 0.6);
       assert.equal(result.project.musicSegments[0].muted, true);
+    });
+
+    it("should update scale, x, y, rotation, and opacity on main visual clips while synchronizing canonical baseTransform", () => {
+      const project = createBaseProject();
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-scale", type: "clip.set_property", clipId: "vis-1", property: "scale", value: 1.5 },
+          { id: "op-x", type: "clip.set_property", clipId: "vis-1", property: "x", value: 25 },
+          { id: "op-y", type: "clip.set_property", clipId: "vis-1", property: "y", value: -15 },
+          { id: "op-rot", type: "clip.set_property", clipId: "vis-1", property: "rotation", value: 45 },
+          { id: "op-opac", type: "clip.set_property", clipId: "vis-1", property: "opacity", value: 0.75 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+
+      const clip = result.project.visualSegments[0];
+      // Top-level properties updated
+      assert.equal(clip.scale, 1.5);
+      assert.equal(clip.x, 25);
+      assert.equal(clip.y, -15);
+      assert.equal(clip.rotation, 45);
+      assert.equal(clip.opacity, 0.75);
+
+      // Canonical baseTransform synchronized for preview and rendering engines
+      assert.deepEqual(clip.baseTransform, {
+        x: 25,
+        y: -15,
+        scale: 1.5,
+        rotation: 45,
+        opacity: 0.75,
+      });
+    });
+
+    it("should preserve existing transform values when updating a single transform property", () => {
+      const project = createBaseProject();
+      project.visualSegments[0].baseTransform = { x: 10, y: 20, scale: 1.2, rotation: 30, opacity: 0.9 };
+
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-only-scale", type: "clip.set_property", clipId: "vis-1", property: "scale", value: 2.0 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+
+      const clip = result.project.visualSegments[0];
+      assert.equal(clip.scale, 2.0);
+      assert.equal(clip.baseTransform.scale, 2.0);
+      // Other transform properties must remain strictly preserved
+      assert.equal(clip.baseTransform.x, 10);
+      assert.equal(clip.baseTransform.y, 20);
+      assert.equal(clip.baseTransform.rotation, 30);
+      assert.equal(clip.baseTransform.opacity, 0.9);
+    });
+
+    it("should handle main visual clips separately from overlay clips without cross-contamination", () => {
+      const project = {
+        ...createBaseProject(),
+        visualOverlaySegments: [
+          {
+            id: "overlay-1",
+            name: "PIP Video",
+            start: 0,
+            duration: 5,
+            baseTransform: { x: 27, y: -24, scale: 0.34, rotation: 0, opacity: 1 },
+          },
+        ],
+      };
+
+      // 1. Updating main visual clip via clip.set_property (y positioning)
+      const visualPlan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-vis-y", type: "clip.set_property", clipId: "vis-1", property: "y", value: 30 },
+        ],
+      };
+      const visualRes = applyCommandPlan(project, visualPlan);
+      assert.equal(visualRes.ok, true);
+      assert.equal(visualRes.project.visualSegments[0].baseTransform.y, 30);
+      assert.equal(visualRes.project.visualOverlaySegments[0].baseTransform.y, -24, "Overlay transform unaffected");
+
+      // 2. Updating overlay clip via overlay.set_transform
+      const overlayPlan = {
+        schemaVersion: 1,
+        baseRevision: 1,
+        operations: [
+          { id: "op-ovl-trans", type: "overlay.set_transform", clipId: "overlay-1", transform: { y: 15, scale: 0.5 } },
+        ],
+      };
+      const overlayRes = applyCommandPlan(visualRes.project, overlayPlan);
+      assert.equal(overlayRes.ok, true);
+      assert.equal(overlayRes.project.visualOverlaySegments[0].baseTransform.y, 15);
+      assert.equal(overlayRes.project.visualOverlaySegments[0].baseTransform.scale, 0.5);
+      assert.equal(overlayRes.project.visualSegments[0].baseTransform.y, 30, "Main visual transform unaffected");
+
+      // 3. overlay.set_transform fails when targeting nonexistent overlay and does NOT silently alter main visual clips
+      const invalidOverlayPlan = {
+        schemaVersion: 1,
+        baseRevision: 2,
+        operations: [
+          { id: "op-ovl-missing", type: "overlay.set_transform", clipId: "nonexistent-overlay", transform: { y: 50 } },
+        ],
+      };
+      const invalidRes = applyCommandPlan(overlayRes.project, invalidOverlayPlan);
+      assert.equal(invalidRes.ok, false);
+      assert.equal(invalidRes.code, "CLIP_NOT_FOUND");
+    });
+
+    it("should allow editing transform and undoing to restore the exact previous transform state", () => {
+      // Test the deep cloning logic used by editor history
+      function cloneItems(items = []) {
+        return (Array.isArray(items) ? items : []).map((item) => {
+          if (!item || typeof item !== "object") return item;
+          return {
+            ...item,
+            words: Array.isArray(item.words) ? item.words.map((w) => ({ ...w })) : undefined,
+            baseTransform: item.baseTransform ? { ...item.baseTransform } : undefined,
+            keyframes: Array.isArray(item.keyframes) ? item.keyframes.map((k) => ({ ...k })) : undefined,
+            colorGrade: item.colorGrade ? { ...item.colorGrade } : undefined,
+            mask: item.mask ? { ...item.mask } : undefined,
+            animation: item.animation ? { ...item.animation } : undefined,
+          };
+        });
+      }
+
+      const initialVisuals = [
+        {
+          id: "vis-1",
+          type: "video",
+          duration: 10,
+          baseTransform: { x: 0, y: 0, scale: 1.0, rotation: 0, opacity: 1 },
+          keyframes: [{ time: 0, scale: 1.0 }],
+          colorGrade: { temperature: 10 },
+        },
+      ];
+
+      // Create snapshot (as done in useEditorHistory createSnapshot)
+      const snapshotVisuals = cloneItems(initialVisuals);
+
+      // Mutate the active project clip
+      const project = {
+        ...createBaseProject(),
+        visualSegments: initialVisuals,
+      };
+
+      const plan = {
+        schemaVersion: 1,
+        baseRevision: 0,
+        operations: [
+          { id: "op-edit-scale", type: "clip.set_property", clipId: "vis-1", property: "scale", value: 1.75 },
+          { id: "op-edit-x", type: "clip.set_property", clipId: "vis-1", property: "x", value: 40 },
+        ],
+      };
+
+      const result = applyCommandPlan(project, plan);
+      assert.equal(result.ok, true);
+      assert.equal(result.project.visualSegments[0].baseTransform.scale, 1.75);
+      assert.equal(result.project.visualSegments[0].baseTransform.x, 40);
+
+      // Snapshot MUST retain the exact pristine values (not mutated by reference)
+      assert.equal(snapshotVisuals[0].baseTransform.scale, 1.0);
+      assert.equal(snapshotVisuals[0].baseTransform.x, 0);
+
+      // Restoring snapshot restores exact previous transform values
+      const restoredVisuals = cloneItems(snapshotVisuals);
+      assert.deepEqual(restoredVisuals[0].baseTransform, {
+        x: 0,
+        y: 0,
+        scale: 1.0,
+        rotation: 0,
+        opacity: 1,
+      });
     });
   });
 

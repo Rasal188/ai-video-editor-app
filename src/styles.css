@@ -2536,6 +2536,17 @@ button:disabled {
 .smart-frame-motion-options button.is-active { border-color: rgba(105, 226, 210, 0.7); background: rgba(61, 207, 187, 0.09); }
 .smart-frame-motion-options button.is-active strong { color: #83eddf; }
 
+.smart-frame-motion-options.smart-zoom-options-2col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.smart-zoom-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+
 .smart-frame-padding {
   display: grid;
   gap: 8px;

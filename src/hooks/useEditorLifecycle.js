@@ -14,12 +14,9 @@ export function useEditorLifecycle(d) {
     document.documentElement.lang = d.activeLanguage === "zh" ? "zh-CN" : d.activeLanguage;
   }, [d.activeLanguage]);
 
-  useEffect(() => () => {
-    d.avatarMotionWorkerRef.current?.terminate();
-    d.avatarRenderWorkerRef.current?.terminate();
-  }, []);
-
   useEffect(() => {
+    // If the project aspect ratio is locked by user choice or generator assembly, do not override
+    if (d.autoRatioSourceKeyRef.current?.startsWith("locked")) return;
     const ratioSource = d.visualSegments.find((segment) => segment.width > 0 && segment.height > 0);
     if (!ratioSource) {
       d.autoRatioSourceKeyRef.current = "";

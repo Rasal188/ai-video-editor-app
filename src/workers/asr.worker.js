@@ -262,12 +262,11 @@ async function transcribe({ requestId, audioBuffer, preferredLanguage, modelId }
   );
 
   const transcriptionOptions = {
-    chunk_length_s: 30,
+    chunk_length_s: 25,
     max_new_tokens: 224,
-    no_repeat_ngram_size: 3,
-    repetition_penalty: 1.15,
-    stride_length_s: 5,
+    stride_length_s: 4,
     return_timestamps: "word",
+    condition_on_previous_text: false,
   };
   if (isMultilingualWhisper(transcriber)) {
     transcriptionOptions.language = languageResult.language;

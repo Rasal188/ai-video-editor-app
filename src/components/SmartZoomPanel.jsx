@@ -103,19 +103,30 @@ function SmartZoomPanelInner({
 
   const handleAddPunchIn = useCallback(() => {
     const currentProj = (getProjectSnapshot ? getProjectSnapshot() : null)
-      || { visualSegments: visualSegments.length ? visualSegments : (activeClip ? [activeClip] : []) };
+      || { visualSegments: safeVisualSegments.length ? safeVisualSegments : (activeClip ? [activeClip] : []) };
     const targetClip = (scope === "clip" && activeClip)
       ? activeClip
-      : (visualSegments.find((c) => currentTime >= (c.start || 0) && currentTime < (c.start || 0) + (c.duration || 0)) || activeClip);
+      : (safeVisualSegments.find((c) => {
+          const idx = safeVisualSegments.indexOf(c);
+          const cStart = Number.isFinite(c.start)
+            ? c.start
+            : safeVisualSegments.slice(0, idx).reduce((sum, item) => sum + (Number(item.duration) || 0), 0);
+          const cDur = Number(c.duration) || 0;
+          return currentTime >= cStart && currentTime < cStart + cDur;
+        }) || activeClip);
 
     if (!targetClip) {
-      notify?.("Please select a visual clip first");
+      notify?.(t?.("smartZoomNoClipSelected", "Please select a visual clip first") || "Please select a visual clip first");
       return;
     }
 
-    // Clip-relative timestamp
-    const clipStart = targetClip.start || 0;
-    const clipLocalTime = Math.max(0, Math.min(targetClip.duration || 0, currentTime - clipStart));
+    // Clip-relative timestamp with accurate cumulative start offset
+    const clipIndex = safeVisualSegments.findIndex((c) => c?.id === targetClip.id);
+    const clipStart = Number.isFinite(targetClip.start)
+      ? targetClip.start
+      : safeVisualSegments.slice(0, clipIndex >= 0 ? clipIndex : 0).reduce((sum, c) => sum + (Number(c.duration) || 0), 0);
+    const clipDur = Number(targetClip.duration) || 0;
+    const clipLocalTime = Math.max(0, Math.min(clipDur, currentTime - clipStart));
 
     const action = {
       id: `punch-in-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -156,7 +167,7 @@ function SmartZoomPanelInner({
     updateSelectedVisualEffects,
     scope,
     activeClip,
-    visualSegments,
+    safeVisualSegments,
     currentTime,
     scale,
     duration,
@@ -164,11 +175,12 @@ function SmartZoomPanelInner({
     transitionDuration,
     anchorFace,
     notify,
+    t,
   ]);
 
   const handleRemovePunchIn = useCallback((clipId, punchInId) => {
     const currentProj = (getProjectSnapshot ? getProjectSnapshot() : null)
-      || { visualSegments: visualSegments.length ? visualSegments : (activeClip ? [activeClip] : []) };
+      || { visualSegments: safeVisualSegments.length ? safeVisualSegments : (activeClip ? [activeClip] : []) };
     const rev = currentProj.commandState?.revision || 0;
     const plan = {
       schemaVersion: 1,
@@ -197,11 +209,11 @@ function SmartZoomPanelInner({
     } else {
       notify?.(result.message || "Failed to remove punch-in");
     }
-  }, [getProjectSnapshot, onApplyPlan, updateSelectedVisualEffects, visualSegments, activeClip, notify]);
+  }, [getProjectSnapshot, onApplyPlan, updateSelectedVisualEffects, safeVisualSegments, activeClip, notify]);
 
   const handleResetZoom = useCallback(() => {
     const currentProj = (getProjectSnapshot ? getProjectSnapshot() : null)
-      || { visualSegments: visualSegments.length ? visualSegments : (activeClip ? [activeClip] : []) };
+      || { visualSegments: safeVisualSegments.length ? safeVisualSegments : (activeClip ? [activeClip] : []) };
     const rev = currentProj.commandState?.revision || 0;
     const operations = [];
 
@@ -244,15 +256,15 @@ function SmartZoomPanelInner({
     } else {
       notify?.(result.message || "Failed to reset zoom");
     }
-  }, [getProjectSnapshot, onApplyPlan, updateSelectedVisualEffects, scope, activeClipId, visualSegments, activeClip, notify]);
+  }, [getProjectSnapshot, onApplyPlan, updateSelectedVisualEffects, scope, activeClipId, safeVisualSegments, activeClip, notify]);
 
   const handleGenerateFromSpeech = useCallback(() => {
     const currentProj = (getProjectSnapshot ? getProjectSnapshot() : null)
-      || { visualSegments: visualSegments.length ? visualSegments : (activeClip ? [activeClip] : []) };
+      || { visualSegments: safeVisualSegments.length ? safeVisualSegments : (activeClip ? [activeClip] : []) };
 
     const targetClips = (scope === "clip" && activeClip)
       ? [activeClip]
-      : (visualSegments.length > 0 ? visualSegments : (activeClip ? [activeClip] : []));
+      : (safeVisualSegments.length > 0 ? safeVisualSegments : (activeClip ? [activeClip] : []));
 
     if (targetClips.length === 0) {
       notify?.("No visual clips available");
@@ -263,18 +275,21 @@ function SmartZoomPanelInner({
     let totalGenerated = 0;
 
     for (const clip of targetClips) {
-      // Find captions within this clip's time range
-      const clipStart = clip.start || 0;
-      const clipEnd = clipStart + (clip.duration || 0);
+      // Find captions within this clip's time range using cumulative start
+      const clipIndex = safeVisualSegments.findIndex((c) => c?.id === clip.id);
+      const clipStart = Number.isFinite(clip.start)
+        ? clip.start
+        : safeVisualSegments.slice(0, clipIndex >= 0 ? clipIndex : 0).reduce((sum, c) => sum + (Number(c.duration) || 0), 0);
+      const clipEnd = clipStart + (Number(clip.duration) || 0);
       const clipCaptions = captionSegments
         .filter((c) => (c.end || 0) > clipStart && (c.start || 0) < clipEnd)
         .map((c) => ({
           ...c,
           start: Math.max(0, (c.start || 0) - clipStart),
-          end: Math.min(clip.duration || 0, (c.end || 0) - clipStart),
+          end: Math.min(Number(clip.duration) || 0, (c.end || 0) - clipStart),
         }));
 
-      const detected = detectSpeechPunchInMoments(clipCaptions, clip.duration || 0, {
+      const detected = detectSpeechPunchInMoments(clipCaptions, Number(clip.duration) || 0, {
         scale,
         duration,
         transitionDuration: isSmooth ? transitionDuration : 0,
@@ -348,18 +363,18 @@ function SmartZoomPanelInner({
           <MagnifyingGlassPlus size={22} weight="duotone" />
         </span>
         <div>
-          <strong>{t?.("smartZoomTitle", "AI 智能变焦与节奏特写") || "AI 智能变焦与节奏特写"}</strong>
-          <p>{t?.("smartZoomHint", "在说话重点处自动推进或跳切，锚定人脸，永无黑边。") || "在说话重点处自动推进或跳切，锚定人脸，永无黑边。"}</p>
-          <small className="smart-frame-acceleration">{t?.("smartZoomLocal", "本地极速处理 · 零模型下载") || "本地极速处理 · 零模型下载"}</small>
+          <strong>{t?.("smartZoomTitle", "Smart Zoom") || "Smart Zoom"}</strong>
+          <p>{t?.("smartZoomHint", "Face close-ups & dynamic transitions") || "Face close-ups & dynamic transitions"}</p>
+          <small className="smart-frame-acceleration">{t?.("smartZoomLocal", "Fast local processing · Zero model downloads") || "Fast local processing · Zero model downloads"}</small>
         </div>
       </section>
 
       {/* Scope Switcher */}
       <div className="smart-frame-section-heading">
-        <strong>{t?.("smartZoomScope", "应用范围") || "应用范围"}</strong>
-        <span>{scope === "clip" ? (activeClip?.name || "当前片段") : "整个时间线"}</span>
+        <strong>{t?.("smartZoomScope", "Scope") || "Scope"}</strong>
+        <span>{scope === "clip" ? (activeClip?.name || t?.("smartZoomCurrentClip", "Current clip") || "Current clip") : (t?.("smartZoomAllClips", "Entire Timeline") || "Entire Timeline")}</span>
       </div>
-      <div className="smart-frame-motion-options" role="radiogroup" aria-label="Scope">
+      <div className="smart-frame-motion-options smart-zoom-options-2col" role="radiogroup" aria-label="Scope">
         <button
           className={scope === "clip" ? "is-active" : ""}
           type="button"
@@ -367,8 +382,8 @@ function SmartZoomPanelInner({
           aria-checked={scope === "clip"}
           onClick={() => setScope("clip")}
         >
-          <strong>{t?.("smartZoomSelectedClip", "当前选中片段") || "当前选中片段"}</strong>
-          <span>{activeClip ? activeClip.name || "Clip" : "无选中片段"}</span>
+          <strong>{t?.("smartZoomSelectedClip", "Selected Clip") || "Selected Clip"}</strong>
+          <span>{activeClip ? activeClip.name || "Clip" : (t?.("smartZoomNoClipSelected", "No clip selected") || "No clip selected")}</span>
         </button>
         <button
           className={scope === "timeline" ? "is-active" : ""}
@@ -377,15 +392,15 @@ function SmartZoomPanelInner({
           aria-checked={scope === "timeline"}
           onClick={() => setScope("timeline")}
         >
-          <strong>{t?.("smartZoomAllClips", "整个时间线") || "整个时间线"}</strong>
-          <span>{`${visualSegments.length} 个视频片段`}</span>
+          <strong>{t?.("smartZoomAllClips", "Entire Timeline") || "Entire Timeline"}</strong>
+          <span>{`${safeVisualSegments.length} ${t?.("smartZoomClipsCount", "video clips") || "video clips"}`}</span>
         </button>
       </div>
 
       {/* Automatic Generation from Speech */}
       <div className="smart-frame-section-heading">
-        <strong>{t?.("smartZoomSpeechSync", "节奏自适应生成") || "节奏自适应生成"}</strong>
-        <span>{`${captionSegments.length} 句字幕可用`}</span>
+        <strong>{t?.("smartZoomSpeechSync", "Speech-Adaptive Generation") || "Speech-Adaptive Generation"}</strong>
+        <span>{`${captionSegments.length} ${t?.("smartZoomCaptionsAvailable", "captions available") || "captions available"}`}</span>
       </div>
       <button
         type="button"
@@ -407,17 +422,17 @@ function SmartZoomPanelInner({
         data-testid="smart-zoom-generate-btn"
       >
         <Sparkle size={18} weight="fill" />
-        <span>{t?.("smartZoomGenerateSpeech", "根据字幕重点自动生成特写") || "根据字幕重点自动生成特写"}</span>
+        <span>{t?.("smartZoomGenerateSpeech", "Auto-Generate Punch-Ins from Captions") || "Auto-Generate Punch-Ins from Captions"}</span>
       </button>
 
       {/* Zoom Configuration Sliders */}
       <div className="smart-frame-section-heading" style={{ marginTop: 8 }}>
-        <strong>{t?.("smartZoomParameters", "变焦参数设定") || "变焦参数设定"}</strong>
+        <strong>{t?.("smartZoomParameters", "Zoom Parameters") || "Zoom Parameters"}</strong>
       </div>
 
       <label className="smart-frame-padding">
         <span>
-          <strong>{t?.("smartZoomScale", "放大强度") || "放大强度"}</strong>
+          <strong>{t?.("smartZoomScale", "Zoom Scale") || "Zoom Scale"}</strong>
           <em>{`${scale.toFixed(2)}x (+${Math.round((scale - 1) * 100)}%)`}</em>
         </span>
         <input
@@ -432,7 +447,7 @@ function SmartZoomPanelInner({
 
       <label className="smart-frame-padding">
         <span>
-          <strong>{t?.("smartZoomDuration", "特写保持时长") || "特写保持时长"}</strong>
+          <strong>{t?.("smartZoomDuration", "Hold Duration") || "Hold Duration"}</strong>
           <em>{`${duration.toFixed(1)}s`}</em>
         </span>
         <input
@@ -447,31 +462,31 @@ function SmartZoomPanelInner({
 
       {/* Transition Style: Jump Cut vs Smooth */}
       <div className="smart-frame-section-heading">
-        <strong>{t?.("smartZoomTransition", "过渡模式") || "过渡模式"}</strong>
+        <strong>{t?.("smartZoomTransition", "Transition Mode") || "Transition Mode"}</strong>
       </div>
-      <div className="smart-frame-motion-options">
+      <div className="smart-frame-motion-options smart-zoom-options-2col">
         <button
           className={isSmooth ? "is-active" : ""}
           type="button"
           onClick={() => setIsSmooth(true)}
         >
-          <strong>{t?.("smartZoomSmooth", "平滑推进") || "平滑推进"}</strong>
-          <span>自然呼吸感</span>
+          <strong>{t?.("smartZoomSmooth", "Smooth Push") || "Smooth Push"}</strong>
+          <span>{t?.("smartZoomSmoothHint", "Natural & smooth") || "Natural & smooth"}</span>
         </button>
         <button
           className={!isSmooth ? "is-active" : ""}
           type="button"
           onClick={() => setIsSmooth(false)}
         >
-          <strong>{t?.("smartZoomJump", "跳切特写") || "跳切特写"}</strong>
-          <span>干脆节奏感</span>
+          <strong>{t?.("smartZoomJump", "Jump Cut") || "Jump Cut"}</strong>
+          <span>{t?.("smartZoomJumpHint", "Crisp & rhythmic") || "Crisp & rhythmic"}</span>
         </button>
       </div>
 
       {isSmooth ? (
         <label className="smart-frame-padding">
           <span>
-            <strong>{t?.("smartZoomTransitionDuration", "推进过渡耗时") || "推进过渡耗时"}</strong>
+            <strong>{t?.("smartZoomTransitionDuration", "Transition Duration") || "Transition Duration"}</strong>
             <em>{`${transitionDuration.toFixed(2)}s`}</em>
           </span>
           <input
@@ -503,10 +518,10 @@ function SmartZoomPanelInner({
           <User size={18} color="#38bdf8" weight={anchorFace ? "fill" : "regular"} />
           <div>
             <div style={{ fontSize: 13, fontWeight: 500, color: "#f1f5f8" }}>
-              {t?.("smartZoomAnchorFace", "人脸智能居中") || "人脸智能居中"}
+              {t?.("smartZoomAnchorFace", "Face-Anchored Zoom") || "Face-Anchored Zoom"}
             </div>
             <div style={{ fontSize: 11, color: "#8e9ca8" }}>
-              {t?.("smartZoomAnchorFaceHint", "自动跟踪演讲者面部，防边缘出界") || "自动跟踪演讲者面部，防边缘出界"}
+              {t?.("smartZoomAnchorFaceHint", "Track subject face to prevent edge clipping") || "Track subject face to prevent edge clipping"}
             </div>
           </div>
         </div>
@@ -539,12 +554,12 @@ function SmartZoomPanelInner({
         data-testid="smart-zoom-add-btn"
       >
         <Plus size={16} weight="bold" />
-        <span>{`在当前播放位置添加特写 (${formatTimestamp(currentTime)})`}</span>
+        <span>{`${t?.("smartZoomAddAtPlayhead", "Add Punch-In at Playhead") || "Add Punch-In at Playhead"} (${formatTimestamp(currentTime)})`}</span>
       </button>
 
       {/* Active Punch-Ins List */}
       <div className="smart-frame-section-heading" style={{ marginTop: 12 }}>
-        <strong>{`当前特写列表 (${activePunchIns.length})`}</strong>
+        <strong>{`${t?.("smartZoomActiveList", "Active Punch-Ins") || "Active Punch-Ins"} (${activePunchIns.length})`}</strong>
         {activePunchIns.length > 0 ? (
           <button
             type="button"
@@ -562,7 +577,7 @@ function SmartZoomPanelInner({
             data-testid="smart-zoom-reset-btn"
           >
             <ArrowCounterClockwise size={13} />
-            <span>重置所有特写</span>
+            <span>{t?.("smartZoomResetAll", "Reset All Zooms") || "Reset All Zooms"}</span>
           </button>
         ) : null}
       </div>
@@ -570,8 +585,8 @@ function SmartZoomPanelInner({
       {activePunchIns.length === 0 ? (
         <div className="smart-frame-empty">
           <ArrowsInLineHorizontal size={26} weight="duotone" />
-          <strong>暂无特写效果</strong>
-          <span>点击上方按钮自动根据字幕生成，或在播放位置手动添加。</span>
+          <strong>{t?.("smartZoomNoPunchIns", "No punch-ins added yet") || "No punch-ins added yet"}</strong>
+          <span>{t?.("smartZoomEmptyHint", "Click above to auto-generate from captions or add at playhead.") || "Click above to auto-generate from captions or add at playhead."}</span>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -593,11 +608,11 @@ function SmartZoomPanelInner({
                 <div style={{ fontWeight: 600, color: "#e2e8f0" }}>
                   {`${formatTimestamp(p.timelineTime ?? p.time ?? p.timestamp ?? 0)} · ${(Number(p.scale) || 1).toFixed(2)}x`}
                   <span style={{ marginLeft: 6, fontSize: 10, color: "#38bdf8", background: "rgba(56,189,248,0.12)", padding: "2px 6px", borderRadius: 4 }}>
-                    {(p.transition === "smooth" || (p.transitionDuration || 0) > 0) ? (t?.("smartZoomSmoothBadge", "平滑") || "平滑") : (t?.("smartZoomJumpBadge", "跳切") || "跳切")}
+                    {(p.transition === "smooth" || (p.transitionDuration || 0) > 0) ? (t?.("smartZoomSmoothBadge", "Smooth") || "Smooth") : (t?.("smartZoomJumpBadge", "Jump") || "Jump")}
                   </span>
                 </div>
                 <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
-                  {`${t?.("smartZoomDurationLabel", "持续") || "持续"} ${(Number(p.duration) || 0).toFixed(1)}s · ${(p.faceAnchored ?? p.anchorFace) ? (t?.("smartZoomFaceAnchoredBadge", "人脸锚定") || "人脸锚定") : (t?.("smartZoomCenterBadge", "中心缩放") || "中心缩放")}`}
+                  {`${t?.("smartZoomDurationLabel", "Hold") || "Hold"} ${(Number(p.duration) || 0).toFixed(1)}s · ${(p.faceAnchored ?? p.anchorFace) ? (t?.("smartZoomFaceAnchoredBadge", "Face-Anchored") || "Face-Anchored") : (t?.("smartZoomCenterBadge", "Center Zoom") || "Center Zoom")}`}
                 </div>
               </div>
               <button
@@ -609,7 +624,7 @@ function SmartZoomPanelInner({
                   cursor: "pointer",
                   padding: 4,
                 }}
-                title={t?.("smartZoomDeletePunchIn", "删除此特写") || "删除此特写"}
+                title={t?.("smartZoomDeletePunchIn", "Delete punch-in") || "Delete punch-in"}
                 onClick={() => handleRemovePunchIn(p.clipId, p.punchInId)}
                 onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
                 onMouseLeave={(e) => (e.currentTarget.style.color = "#94a3b8")}

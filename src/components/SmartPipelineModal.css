@@ -86,6 +86,13 @@
   line-height: 1.4;
 }
 
+.smart-pipeline-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.smart-pipeline-header-btn,
 .smart-pipeline-close-btn {
   display: flex;
   align-items: center;
@@ -100,6 +107,7 @@
   transition: all 0.15s ease;
 }
 
+.smart-pipeline-header-btn:hover,
 .smart-pipeline-close-btn:hover {
   background: #22303c;
   border-color: #334454;
@@ -395,8 +403,34 @@
   max-width: 380px;
 }
 
-.smart-pipeline-cancel-btn {
+.smart-pipeline-analyzing-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-top: 10px;
+}
+
+.smart-pipeline-minimize-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: #1e293b;
+  border: 1px solid #3b82f640;
+  border-radius: 6px;
+  color: #93c5fd;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.smart-pipeline-minimize-action-btn:hover {
+  background: #3b82f620;
+  border-color: #60a5fa;
+  color: #dbeafe;
+}
+
+.smart-pipeline-cancel-btn {
   padding: 6px 16px;
   background: #22303c;
   border: 1px solid #334454;
@@ -404,6 +438,7 @@
   color: #cbd5e1;
   font-size: 12px;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
 .smart-pipeline-cancel-btn:hover {
@@ -786,4 +821,127 @@
 .smart-pipeline-btn-secondary:hover {
   background: #283745;
   color: #f1f5f9;
+}
+
+/* Minimized Floating Progress Banner */
+.smart-pipeline-minimized-floating-banner {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  z-index: 1300;
+  background: #0f172a;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 0 20px rgba(139, 92, 246, 0.2);
+  border-radius: 12px;
+  padding: 0.85rem 1.15rem;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  min-width: 320px;
+  max-width: 460px;
+  animation: smartPipelineBannerSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes smartPipelineBannerSlideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.smart-pipeline-minimized-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.smart-pipeline-mini-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(139, 92, 246, 0.25);
+  border-top-color: #a78bfa;
+  border-radius: 50%;
+  animation: smartPipelineSpin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes smartPipelineSpin {
+  to { transform: rotate(360deg); }
+}
+
+.smart-pipeline-minimized-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.smart-pipeline-minimized-text strong {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smart-pipeline-minimized-phase {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smart-pipeline-minimized-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.smart-pipeline-mini-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.smart-pipeline-mini-btn-primary {
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  border: none;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
+}
+
+.smart-pipeline-mini-btn-primary:hover {
+  background: linear-gradient(135deg, #8b5cf6, #818cf8);
+}
+
+.smart-pipeline-mini-btn-danger {
+  background: transparent;
+  border: 1px solid #ef444440;
+  color: #f87171;
+}
+
+.smart-pipeline-mini-btn-danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+.smart-pipeline-mini-btn-ghost {
+  background: transparent;
+  border: 1px solid #334454;
+  color: #cbd5e1;
+}
+
+.smart-pipeline-mini-btn-ghost:hover {
+  background: #22303c;
+  color: #f8fafc;
 }

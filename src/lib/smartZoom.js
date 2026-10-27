@@ -199,7 +199,8 @@ export function normalizePunchIn(punchIn, clipDuration = Infinity) {
   if (!punchIn || typeof punchIn !== "object") return null;
 
   const id = String(punchIn.id || `pi-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
-  const time = Math.max(0, Number(punchIn.time) || 0);
+  const rawTime = punchIn.time !== undefined ? punchIn.time : punchIn.tStart;
+  const time = Math.max(0, Number(rawTime) || 0);
   const scale = normalizePunchInScale(punchIn.scale);
   const maxPossibleDuration = Math.max(0.1, clipDuration - time);
   const requestedDuration = Number.isFinite(Number(punchIn.duration))
@@ -236,19 +237,30 @@ export function normalizePunchIn(punchIn, clipDuration = Infinity) {
  * Preserves existing non-punch-in keyframes (e.g. rotation, opacity, or user keyframes outside punch-in intervals).
  */
 export function compilePunchInKeyframes(existingKeyframes = [], punchIns = [], clipDuration = 10) {
-  const safeDuration = Math.max(0.1, Number(clipDuration) || 10);
-  const normalizedPunchIns = (Array.isArray(punchIns) ? punchIns : [])
+  let preservedFrames = existingKeyframes;
+  let rawPunchIns = punchIns;
+  let duration = clipDuration;
+
+  // Handle overloaded signature: compilePunchInKeyframes(punchIns, clipDuration)
+  if (typeof punchIns === "number" || (!Array.isArray(punchIns) && typeof clipDuration !== "number")) {
+    rawPunchIns = existingKeyframes;
+    duration = typeof punchIns === "number" ? punchIns : 10;
+    preservedFrames = [];
+  }
+
+  const safeDuration = Math.max(0.1, Number(duration) || 10);
+  const normalizedPunchIns = (Array.isArray(rawPunchIns) ? rawPunchIns : [])
     .map((p) => normalizePunchIn(p, safeDuration))
     .filter(Boolean)
     .sort((a, b) => a.time - b.time);
 
   // If no punch-ins, remove punch-in specific transform keyframes and return cleanly
   if (!normalizedPunchIns.length) {
-    return (existingKeyframes || []).filter((kf) => !kf.isPunchIn);
+    return (preservedFrames || []).filter((kf) => !kf.isPunchIn);
   }
 
   // Collect non-punch-in existing keyframes
-  const preservedFrames = (existingKeyframes || []).filter((kf) => !kf.isPunchIn);
+  const basePreservedFrames = (preservedFrames || []).filter((kf) => !kf.isPunchIn);
 
   const generated = [];
 
@@ -301,7 +313,7 @@ export function compilePunchInKeyframes(existingKeyframes = [], punchIns = [], c
   }
 
   // Merge preserved frames with generated punch-in frames
-  const allFrames = [...preservedFrames, ...generated]
+  const allFrames = [...basePreservedFrames, ...generated]
     .filter((f) => Number.isFinite(f.time))
     .sort((a, b) => a.time - b.time);
 
