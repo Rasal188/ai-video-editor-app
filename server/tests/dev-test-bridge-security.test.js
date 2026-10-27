@@ -23,9 +23,21 @@ test("Security Regression: window.__PROJECT_SNAPSHOT__ is absent from all produc
   }
 });
 
+const BRIDGE_TEST_EVENTS = [
+  "test:open-scene-detection",
+  "test:apply-scene-cuts",
+  "test:open-ai-assistant",
+  "test:apply-ai-assistant-plan",
+  "test:apply-project",
+  "test:apply-ai-generator-project",
+];
+
 test("Security Regression: _virtual_devTestBridge chunk contains only an inert no-op stub", () => {
   assert.ok(fs.existsSync(distAssetsDir), "dist/assets directory must exist (run npm run build first)");
-  const separateFiles = fs.readdirSync(distAssetsDir).filter((f) => f.includes("devTestBridge") && f.endsWith(".js"));
+  const allBundles = fs.readdirSync(distAssetsDir).filter((f) => f.endsWith(".js") || f.endsWith(".mjs"));
+  assert.ok(allBundles.length > 0, "Production bundle must contain generated JS files");
+
+  const separateFiles = allBundles.filter((f) => f.includes("devTestBridge"));
 
   if (separateFiles.length > 0) {
     for (const file of separateFiles) {
@@ -33,16 +45,66 @@ test("Security Regression: _virtual_devTestBridge chunk contains only an inert n
       assert.equal(content.includes("__PROJECT_SNAPSHOT__"), false, "Separate chunk must not expose __PROJECT_SNAPSHOT__");
       assert.equal(content.includes("addEventListener"), false, "Separate chunk must not contain addEventListener");
       assert.equal(content.includes("getProjectSnapshot"), false, "Separate chunk must not contain getProjectSnapshot");
-    }
-  } else {
-    // When Rollup inlines the 60-byte virtual stub into main chunks, verify development bridge logic is completely absent
-    const allBundles = fs.readdirSync(distAssetsDir).filter((f) => f.endsWith(".js") || f.endsWith(".mjs"));
-    for (const file of allBundles) {
-      const content = fs.readFileSync(path.join(distAssetsDir, file), "utf8");
-      assert.equal(content.includes("__PROJECT_SNAPSHOT__"), false, `Bundle ${file} must not expose __PROJECT_SNAPSHOT__`);
-      assert.equal(content.includes("getProjectSnapshot"), false, `Bundle ${file} must not expose getProjectSnapshot`);
+      for (const eventName of BRIDGE_TEST_EVENTS) {
+        assert.equal(content.includes(eventName), false, `Separate chunk must not contain test event hook: ${eventName}`);
+      }
     }
   }
+
+  // Cross-bundle check (applicable to both standalone chunks and inlined Linux bundles):
+  // Verify that real dev bridge logic and test automation hooks are completely absent across all bundles.
+  for (const file of allBundles) {
+    const content = fs.readFileSync(path.join(distAssetsDir, file), "utf8");
+    assert.equal(content.includes("__PROJECT_SNAPSHOT__"), false, `Bundle ${file} must not expose __PROJECT_SNAPSHOT__`);
+    assert.equal(content.includes("window.getProjectSnapshot"), false, `Bundle ${file} must not expose window.getProjectSnapshot`);
+    for (const eventName of BRIDGE_TEST_EVENTS) {
+      assert.equal(content.includes(eventName), false, `Bundle ${file} must not contain bridge event hook: ${eventName}`);
+    }
+  }
+});
+
+test("Security Regression: verifies security guarantees in both standalone chunk and inlined Linux bundle scenarios", () => {
+  function verifyBundleSecurity(bundleContent, { isStandaloneChunk = false } = {}) {
+    if (bundleContent.includes("__PROJECT_SNAPSHOT__")) {
+      throw new Error("SECURITY_VIOLATION: __PROJECT_SNAPSHOT__ exposed");
+    }
+    if (bundleContent.includes("window.getProjectSnapshot")) {
+      throw new Error("SECURITY_VIOLATION: window.getProjectSnapshot exposed");
+    }
+    for (const eventName of BRIDGE_TEST_EVENTS) {
+      if (bundleContent.includes(eventName)) {
+        throw new Error(`SECURITY_VIOLATION: test bridge event exposed: ${eventName}`);
+      }
+    }
+    if (isStandaloneChunk) {
+      if (bundleContent.includes("addEventListener")) {
+        throw new Error("SECURITY_VIOLATION: addEventListener found in standalone stub chunk");
+      }
+      if (bundleContent.includes("getProjectSnapshot")) {
+        throw new Error("SECURITY_VIOLATION: getProjectSnapshot found in standalone stub chunk");
+      }
+    }
+    return true;
+  }
+
+  // 1. Standalone chunk scenario (e.g. Windows Rollup separate chunk output)
+  const validStandaloneChunk = "function e(){return()=>{}}export{e as registerDevTestBridge};";
+  assert.equal(verifyBundleSecurity(validStandaloneChunk, { isStandaloneChunk: true }), true);
+
+  // Standalone chunk must reject bridge leaks
+  assert.throws(() => verifyBundleSecurity("window.__PROJECT_SNAPSHOT__ = true;", { isStandaloneChunk: true }), /SECURITY_VIOLATION/);
+  assert.throws(() => verifyBundleSecurity("function e(getProjectSnapshot){}", { isStandaloneChunk: true }), /SECURITY_VIOLATION/);
+  assert.throws(() => verifyBundleSecurity('window.addEventListener("test:open-scene-detection")', { isStandaloneChunk: true }), /SECURITY_VIOLATION/);
+
+  // 2. Inlined Linux bundle scenario (e.g. Linux Rollup inlining no-op stub into editor-*.js)
+  // Legitimate internal prop/identifier `getProjectSnapshot` is permitted when not bound to window or bridge events:
+  const validInlinedLinuxBundle = "const useWebMcpEditor=({getProjectSnapshot})=>{}; function registerDevTestBridge(){return()=>{}}";
+  assert.equal(verifyBundleSecurity(validInlinedLinuxBundle, { isStandaloneChunk: false }), true);
+
+  // Inlined bundle must reject real bridge logic
+  assert.throws(() => verifyBundleSecurity("window.__PROJECT_SNAPSHOT__ = getProjectSnapshot;", { isStandaloneChunk: false }), /SECURITY_VIOLATION/);
+  assert.throws(() => verifyBundleSecurity("window.getProjectSnapshot = fn;", { isStandaloneChunk: false }), /SECURITY_VIOLATION/);
+  assert.throws(() => verifyBundleSecurity('window.addEventListener("test:apply-scene-cuts", fn);', { isStandaloneChunk: false }), /SECURITY_VIOLATION/);
 });
 
 test("Security Regression: stripDevTestBridgePlugin resolves virtual stub in build and passes through in serve", async () => {
