@@ -552,7 +552,7 @@ export function AiShortsStudioModal({
                       <div className="shorts-spinner-sm" style={{ width: 10, height: 10 }} />
                       <span>{t("shortsTrackingAnalyzingCard", "Analyzing subject…")}</span>
                     </div>
-                  ) : Boolean(
+                  ) : (
                     isCandidateSmartFrameFallback(candidate.smartFrame, candidate) ||
                     candidate.trackingStatus === "no_subjects_found" ||
                     candidate.trackingStatus === "error" ||

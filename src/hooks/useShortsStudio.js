@@ -494,7 +494,7 @@ export function useShortsStudio({
             const reframed = applyDynamicReframingToCandidate(updated, reframingTrack, { userSelectedSubject });
             Object.assign(updated, reframed);
           } else if (framingMode === "center" || framingMode === "safe-contain") {
-            const fallbackTrack = generateFallbackReframingTrack(sourceSize, targetRatio, updated.duration, updated.cropX ?? 0.5);
+            const fallbackTrack = buildDynamicReframingTrack(sourceSize, targetRatio, updated.duration, []);
             if (framingMode === "safe-contain") fallbackTrack.presentation = "safe-contain";
             const reframed = applyDynamicReframingToCandidate(updated, fallbackTrack, { userSelectedSubject });
             Object.assign(updated, reframed);

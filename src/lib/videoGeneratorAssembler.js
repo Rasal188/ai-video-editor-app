@@ -944,7 +944,9 @@ export async function generateNarrationAudio(spec, { signal, onProgress } = {}) 
       if (timingsHeader) {
         try {
           sceneTimings = JSON.parse(timingsHeader);
-        } catch {}
+        } catch {
+          // ignore malformed timings header
+        }
       }
       wavBlob = await ttsRes.blob();
     }

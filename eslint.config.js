@@ -5,7 +5,18 @@ import reactRefresh from "eslint-plugin-react-refresh";
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**", "public/vendor/**", "src/vendor/**", ".npm-cache/**", "scratch/**"],
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "public/vendor/**",
+      "src/vendor/**",
+      ".npm-cache/**",
+      "scratch/**",
+      "test-artifacts/**",
+      "storage/**",
+      "artifacts/**",
+      "logs/**",
+    ],
   },
   js.configs.recommended,
   {
@@ -32,6 +43,8 @@ export default [
       "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       "no-control-regex": "off",
       "no-useless-escape": "off",
+      "no-empty": ["error", { "allowEmptyCatch": true }],
+      "no-useless-assignment": "warn",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
     },
   },

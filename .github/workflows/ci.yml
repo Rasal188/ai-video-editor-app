@@ -10,12 +10,16 @@ permissions:
 
 jobs:
   quality:
+    name: Code Quality & Automated Test Validation
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - name: Guard repository size
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Guard repository size & forbidden assets
         shell: bash
+        timeout-minutes: 2
         run: |
           if [[ -n "$(git ls-files 'public/models/**')" ]]; then
             echo "::error::AI model weights must be hosted externally, not committed under public/models/."
@@ -33,13 +37,41 @@ jobs:
             fi
           done < <(git ls-files -z)
           exit "$failed"
-      - uses: actions/setup-node@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Install media tooling
-        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run build
+
+      - name: Verify media tooling (FFmpeg)
+        timeout-minutes: 3
+        run: |
+          if ! command -v ffmpeg &> /dev/null; then
+            sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
+          else
+            echo "Pre-installed FFmpeg detected on runner:"
+            ffmpeg -version | head -n 1
+          fi
+
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: npm ci
+
+      - name: Code quality lint
+        timeout-minutes: 4
+        run: npm run lint
+
+      - name: TypeScript typecheck
+        timeout-minutes: 3
+        run: npm run typecheck
+
+      - name: Production bundle build
+        timeout-minutes: 5
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: npm run build
+
+      - name: Run backend automated tests
+        timeout-minutes: 4
+        run: npm run test:backend

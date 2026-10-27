@@ -1525,7 +1525,6 @@ export function buildDynamicReframingTrack({
   // 2. Ensure bounding keyframes exist at t = 0 and t = duration
   if (rawFrames[0].time > 0) {
     rawFrames.unshift({
-      time: 0,
       ...rawFrames[0],
       time: 0,
       isCut: false,
