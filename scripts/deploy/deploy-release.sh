@@ -18,6 +18,7 @@ export PATH="/usr/local/bin:/usr/bin:/bin"
 export LC_ALL=C
 export LANG=C
 export GIT_CONFIG_NOSYSTEM=1
+export GIT_SSH_COMMAND="ssh -i /home/rasal/.ssh/ai-video-editor-deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
 
 # --- B. Strict Argument Validation ---
 if [ "$#" -ne 1 ]; then
@@ -39,7 +40,7 @@ readonly RELEASES_DIR="$HOME_DIR/releases"
 readonly LIVE_LINK="$HOME_DIR/ai-video-editor"
 readonly TMP_LINK="$HOME_DIR/ai-video-editor.tmp"
 readonly REPO_CACHE="$HOME_DIR/repo-cache.git"
-readonly EXPECTED_ORIGIN="https://github.com/Rasal188/ai-video-editor-app.git"
+readonly EXPECTED_ORIGIN="git@github.com:Rasal188/ai-video-editor-app.git"
 readonly DB_SNAPSHOT_DIR="$SHARED_DIR/db-snapshots"
 readonly DIAGNOSTICS_DIR="$SHARED_DIR/diagnostics"
 readonly LOCK_FILE="$SHARED_DIR/.deploy.lock"
