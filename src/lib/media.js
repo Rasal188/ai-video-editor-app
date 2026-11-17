@@ -25,6 +25,7 @@ import {
   getActiveWordIndex,
   isKaraokeEnabled,
   resolveActiveWordColor,
+  resolveKaraokeWordTiming,
 } from "./karaoke.js";
 import { resolveVisionAnalysisAtTime } from "./vision.js";
 import { getVisualFitRect } from "./visualGeometry.js";
@@ -1507,13 +1508,20 @@ export function drawPreviewFrame(context, visual, canvas, options) {
   });
 
   if (captionsEnabled && subtitle) {
-    const isKaraoke = isKaraokeEnabled(captionStyle, captionSegment);
+    // Preview and burned export share this selector, so the exported video shows
+    // the same active word as the preview at any given time. A cue whose text no
+    // longer matches its word timing - or whose stored target alignment was
+    // rejected - renders as plain phrases instead of a highlight that can never
+    // advance or that would sit on the wrong language's words.
+    const wordTiming = resolveKaraokeWordTiming(captionSegment);
+    const displayWords = wordTiming.withheld ? null : wordTiming.words;
+    const isKaraoke = isKaraokeEnabled(captionStyle, captionSegment) && wordTiming.usable;
     const activeWordIndex = isKaraoke
-      ? getActiveWordIndex(captionSegment?.words, currentTime, captionSegment)
+      ? getActiveWordIndex(displayWords, currentTime, captionSegment)
       : -1;
     const activeWordColor =
-      (activeWordIndex >= 0 && captionSegment?.words?.[activeWordIndex]?.color)
-        ? captionSegment.words[activeWordIndex].color
+      (activeWordIndex >= 0 && displayWords?.[activeWordIndex]?.color)
+        ? displayWords[activeWordIndex].color
         : resolveActiveWordColor(captionStyle, captionSegment);
 
     const captionLayout = getCaptionTextLayout({
@@ -1521,7 +1529,7 @@ export function drawPreviewFrame(context, visual, canvas, options) {
       text: subtitle,
       captionSize,
       captionStyle,
-      words: captionSegment?.words,
+      words: displayWords,
       referenceFrame: captionReferenceSize ?? canvas,
       renderFrame: canvas,
     });
@@ -1533,7 +1541,7 @@ export function drawPreviewFrame(context, visual, canvas, options) {
       {
         activeWordIndex,
         activeWordColor,
-        words: captionSegment?.words,
+        words: displayWords,
         captionSegment,
       },
     );

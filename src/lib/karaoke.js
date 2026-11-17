@@ -6,6 +6,8 @@
  */
 
 import { validateSegmentWords } from "./transcriptReview.js";
+import { isFullyAlignedForKaraoke, WORD_TIMING_SOURCES } from "./wordAlignment.js";
+import { getDerivedPhraseWords } from "./phraseTiming.js";
 
 export const DEFAULT_ACTIVE_WORD_COLOR = "#ffd43b";
 
@@ -47,17 +49,8 @@ export function getActiveWordIndex(words, currentTime, segment = null) {
   if (Number.isFinite(segStart) && time < segStart - 0.001) return -1;
   if (Number.isFinite(segEnd) && time >= segEnd) return -1;
 
-  // Detect whether words are relative to segment start (e.g. 0-based within clip)
-  // or absolute timeline timestamps (standard from Milestone 1 ASR).
-  const isSegmentRelative =
-    Number.isFinite(segStart) &&
-    segStart > 0.001 &&
-    Number(words[0]?.start) < segStart - 0.001 &&
-    Number(words[0]?.start) >= 0;
-
+  const { isSegmentRelative, validationStart, validationEnd } = resolveWordTimingWindow(words, segment);
   const effectiveTime = isSegmentRelative ? time - segStart : time;
-  const validationStart = isSegmentRelative ? 0 : segStart;
-  const validationEnd = isSegmentRelative && Number.isFinite(segEnd) ? segEnd - segStart : segEnd;
 
   // Validate words timestamps before using them
   if (!areWordsValidForKaraoke(words, validationStart, validationEnd)) {
@@ -92,6 +85,158 @@ export function getActiveWordIndex(words, currentTime, segment = null) {
 
   // Current time falls into a pause / gap between words -> no word is active
   return -1;
+}
+
+/**
+ * Resolves the timing window that a cue's word array is expressed in.
+ *
+ * Word timings arrive either as absolute timeline timestamps or as offsets
+ * relative to the cue start. Validation must use the same window the renderer
+ * uses, otherwise a valid relative cue would be rejected.
+ *
+ * @param {Array<{ start?: number, end?: number }>} words
+ * @param {{ start?: number, end?: number }|null} [segment]
+ * @returns {{ isSegmentRelative: boolean, validationStart: number, validationEnd: number }}
+ */
+function resolveWordTimingWindow(words, segment = null) {
+  const segStart = segment ? Number(segment.start) : undefined;
+  const segEnd = segment ? Number(segment.end) : undefined;
+
+  // Detect whether words are relative to segment start (e.g. 0-based within clip)
+  // or absolute timeline timestamps (standard from Milestone 1 ASR).
+  const isSegmentRelative =
+    Number.isFinite(segStart) &&
+    segStart > 0.001 &&
+    Number(words[0]?.start) < segStart - 0.001 &&
+    Number(words[0]?.start) >= 0;
+
+  return {
+    isSegmentRelative,
+    validationStart: isSegmentRelative ? 0 : segStart,
+    validationEnd: isSegmentRelative && Number.isFinite(segEnd) ? segEnd - segStart : segEnd,
+  };
+}
+
+/**
+ * Stores a separately-timed target-language word array on a caption cue.
+ *
+ * The cue's source-language `words` array is left untouched, so switching the
+ * caption back to the spoken language still has its genuine ASR timing. Target
+ * words are attached as `alignedWords` and `wordTimingSource` records their
+ * provenance, which is what `resolveKaraokeWordTiming` prefers when present.
+ *
+ * Nothing is copied from `words`. Callers must pass intervals that a real
+ * aligner produced; there is no fallback that derives them from the cue span.
+ *
+ * @param {Array<{ text: string, start: number, end: number }>} words
+ * @returns {{ alignedWords?: Array, wordTimingSource?: string }}
+ */
+export function createTargetWordTiming(words) {
+  if (!Array.isArray(words) || words.length === 0) return {};
+  return {
+    alignedWords: words.map(word => ({ ...word })),
+    wordTimingSource: WORD_TIMING_SOURCES.TARGET_ALIGNMENT,
+  };
+}
+
+/**
+ * Reports whether a caption cue carries word timing that karaoke may rely on.
+ *
+ * Karaoke needs a genuinely aligned word array. A cue whose text was changed by
+ * translation or number normalization drops that array, because no target-word
+ * timestamps exist and source-language timings do not describe the new text.
+ * This helper lets the renderer tell that state apart from a cue that is merely
+ * waiting between words, so the UI can stop advertising an active-word
+ * highlight that can never appear.
+ *
+ * It never supplies, rescales or interpolates timing. It only reports whether
+ * timing already present on the cue is usable.
+ *
+ * @param {object} [segment] - Caption cue, optionally with a `words` array
+ * @returns {boolean} True when valid word-level timing exists for this cue
+ */
+export function hasUsableWordTiming(segment = null) {
+  const words = segment?.words;
+  if (!Array.isArray(words) || words.length === 0) return false;
+  const { validationStart, validationEnd } = resolveWordTimingWindow(words, segment);
+  return areWordsValidForKaraoke(words, validationStart, validationEnd);
+}
+
+/**
+ * Selects the word timing karaoke should use for one caption cue.
+ *
+ * Preview and export both call this, so the two paths cannot disagree about
+ * which language's timing is active. Precedence is explicit:
+ *
+ * 1. `wordTimingSource: "target-alignment"` uses the separately stored
+ *    target-language array, but only when that array validates.
+ * 2. A cue carrying a stored alignment record that is incomplete or invalid is
+ *    withheld from karaoke entirely. Falling through to the source array would
+ *    highlight source-language words over translated text.
+ * 3. `wordTimingSource: "source-word-derived-phrase"` uses the separately
+ *    stored phrase chunks, whose windows are unions of genuine source word
+ *    intervals. This gives translated captions phrase-level synchronization
+ *    without borrowing source words as if they were target words. An invalid
+ *    record is withheld rather than degraded.
+ * 4. Otherwise the cue's own `words` array is used when its timing is valid.
+ *
+ * `withheld` distinguishes "this cue had timing that failed validation" from a
+ * cue that simply has no word timing at all.
+ *
+ * @param {object} [segment]
+ * @returns {{ words: Array|null, source: string|null, usable: boolean, withheld: boolean }}
+ */
+export function resolveKaraokeWordTiming(segment = null) {
+  const empty = { words: null, source: null, usable: false, withheld: false };
+  if (!segment) return empty;
+
+  const targetUsable = words => {
+    if (!Array.isArray(words) || words.length === 0) return false;
+    return hasUsableWordTiming({ start: segment.start, end: segment.end, words });
+  };
+
+  if (segment.wordTimingSource === WORD_TIMING_SOURCES.TARGET_ALIGNMENT) {
+    const words = targetUsable(segment.alignedWords) ? segment.alignedWords : null;
+    if (!words) return { ...empty, withheld: true };
+    return { words, source: WORD_TIMING_SOURCES.TARGET_ALIGNMENT, usable: true, withheld: false };
+  }
+
+  if (segment.wordAlignment) {
+    if (!isFullyAlignedForKaraoke(segment.wordAlignment, Number(segment.start), Number(segment.end))) {
+      return { ...empty, withheld: true };
+    }
+    const words = segment.alignedWords ?? segment.wordAlignment.words;
+    if (!targetUsable(words)) return { ...empty, withheld: true };
+    return { words, source: WORD_TIMING_SOURCES.TARGET_ALIGNMENT, usable: true, withheld: false };
+  }
+
+  // Derived phrase timing is checked before the source array on purpose: once a
+  // cue's text has been translated its source words no longer describe the
+  // shown text, so the stored phrase windows are the only honest timing.
+  if (segment.wordTimingSource === WORD_TIMING_SOURCES.SOURCE_WORD_DERIVED_PHRASE) {
+    const phraseWords = getDerivedPhraseWords(segment);
+    if (!phraseWords) return { ...empty, withheld: true };
+    return { words: phraseWords, source: WORD_TIMING_SOURCES.SOURCE_WORD_DERIVED_PHRASE, usable: true, withheld: false };
+  }
+
+  const words = Array.isArray(segment.words) ? segment.words : null;
+  if (!words || words.length === 0) return empty;
+  if (!hasUsableWordTiming(segment)) return { ...empty, withheld: true };
+  return { words, source: WORD_TIMING_SOURCES.SOURCE_ASR, usable: true, withheld: false };
+}
+
+/**
+ * Reports whether a cue can actually drive an active-word highlight.
+ *
+ * Karaoke needs genuine, valid word timing for the language currently shown.
+ * This is a capability check, kept separate from `isKaraokeEnabled`, which only
+ * reports the stylistic request and is deliberately unchanged.
+ *
+ * @param {object} [segment]
+ * @returns {boolean}
+ */
+export function hasKaraokeTiming(segment = null) {
+  return resolveKaraokeWordTiming(segment).usable;
 }
 
 /**

@@ -10,17 +10,22 @@ describe("Database Migrations", () => {
 
     const result = await runMigrations(testPool, { silent: true });
 
-    assert.equal(result.applied.length, 2);
-    assert.deepEqual(result.applied, ["0001_initial_schema.sql", "0002_otp_and_sessions.sql"]);
+    assert.equal(result.applied.length, 3);
+    assert.deepEqual(result.applied, [
+      "0001_initial_schema.sql",
+      "0002_otp_and_sessions.sql",
+      "0003_overlay_templates.sql",
+    ]);
     assert.equal(result.alreadyApplied.length, 0);
 
     // Verify _migrations tracking table
     const migrationRows = await testPool.query("SELECT name FROM _migrations ORDER BY name ASC");
-    assert.equal(migrationRows.rows.length, 2);
+    assert.equal(migrationRows.rows.length, 3);
     assert.equal(migrationRows.rows[0].name, "0001_initial_schema.sql");
     assert.equal(migrationRows.rows[1].name, "0002_otp_and_sessions.sql");
+    assert.equal(migrationRows.rows[2].name, "0003_overlay_templates.sql");
 
-    // Verify all 7 core tables exist
+    // Verify all core tables exist
     const tablesCheck = await testPool.query(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
     );
@@ -33,6 +38,7 @@ describe("Database Migrations", () => {
       "render_jobs",
       "otp_challenges",
       "sessions",
+      "overlay_templates",
     ];
     for (const table of expectedTables) {
       assert.ok(existingTableNames.has(table), `Table "${table}" should exist`);
@@ -51,10 +57,11 @@ describe("Database Migrations", () => {
     // Second run
     const secondResult = await runMigrations(testPool, { silent: true });
     assert.equal(secondResult.applied.length, 0);
-    assert.equal(secondResult.alreadyApplied.length, 2);
+    assert.equal(secondResult.alreadyApplied.length, 3);
     assert.deepEqual(secondResult.alreadyApplied, [
       "0001_initial_schema.sql",
       "0002_otp_and_sessions.sql",
+      "0003_overlay_templates.sql",
     ]);
 
     await closePool();

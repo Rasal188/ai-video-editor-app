@@ -8,6 +8,7 @@ import {
   isKeywordHighlightEnabled,
   isWordMatchingKeywords,
   resolveActiveWordColor,
+  resolveKaraokeWordTiming,
   resolveKeywordColor,
   resolveKeywords,
 } from "../lib/karaoke.js";
@@ -69,6 +70,18 @@ export function CaptionOverlay({
     };
   }, [captionStyle?.fontId, text]);
   const isKaraoke = isKaraokeEnabled(captionStyle, caption);
+  // Karaoke is requested by the style, but it can only produce an active-word
+  // highlight when this cue carries genuine word timing for the language it is
+  // showing. The selector prefers separately stored target-language alignment,
+  // falls back to the cue's own ASR words, and withholds the highlight when a
+  // stored alignment is incomplete rather than guessing. Preview and export
+  // both use it, so the two cannot disagree at the same timestamp.
+  const wordTiming = useMemo(() => resolveKaraokeWordTiming(caption), [caption]);
+  const karaokeActive = isKaraoke && wordTiming.usable;
+  // A cue whose alignment was rejected must not drive line splitting or keyword
+  // colouring from source-language words either, because the visible text is the
+  // translated text and those words no longer correspond to it.
+  const displayWords = wordTiming.withheld ? null : wordTiming.words;
   const isKeywordActive = isKeywordHighlightEnabled(captionStyle, caption);
   const keywords = useMemo(() => (
     isKeywordActive ? resolveKeywords(captionStyle, caption) : []
@@ -76,8 +89,8 @@ export function CaptionOverlay({
   const keywordColor = resolveKeywordColor(captionStyle, caption);
   const activeWordIndex = useMemo(() => {
     if (!isKaraoke) return -1;
-    return getActiveWordIndex(caption?.words, currentTime, caption);
-  }, [isKaraoke, caption, currentTime]);
+    return getActiveWordIndex(wordTiming.words, currentTime, caption);
+  }, [isKaraoke, caption, currentTime, wordTiming.words]);
 
   const layout = useMemo(
     () => {
@@ -89,12 +102,12 @@ export function CaptionOverlay({
         text,
         captionSize,
         captionStyle,
-        words: caption?.words,
+        words: displayWords,
         referenceFrame: renderFrame,
         renderFrame,
       });
     },
-    [caption?.words, captionSize, captionStyle, fontRevision, renderFrame, text],
+    [captionSize, captionStyle, displayWords, fontRevision, renderFrame, text],
   );
 
   useEffect(() => {
@@ -121,10 +134,10 @@ export function CaptionOverlay({
     drawCaptionLayout(context, layout, { x: 0, y: 0 }, {
       activeWordIndex,
       activeWordColor: resolveActiveWordColor(captionStyle, caption),
-      words: caption?.words,
+      words: displayWords,
       captionSegment: caption,
     });
-  }, [layout, activeWordIndex, captionStyle, caption]);
+  }, [layout, activeWordIndex, captionStyle, caption, displayWords]);
 
   const devicePixelRatio = typeof window === "undefined" ? 1 : Math.max(1, Number(window.devicePixelRatio) || 1);
   const position = positionCaptionLayout(layout, placement);
@@ -138,7 +151,8 @@ export function CaptionOverlay({
       aria-label={text}
       aria-busy={fontStatus === "loading"}
       data-active-word-index={activeWordIndex}
-      data-karaoke={isKaraoke ? "true" : "false"}
+      data-karaoke={karaokeActive ? "true" : "false"}
+      data-karaoke-timing-source={karaokeActive ? wordTiming.source : "none"}
       data-keyword-highlight={isKeywordActive ? "true" : "false"}
       style={{
         width: `${layout.width}px`,
@@ -151,9 +165,9 @@ export function CaptionOverlay({
       onDoubleClick={onDoubleClick}
     >
       <canvas ref={canvasRef} aria-hidden="true" />
-      {Array.isArray(caption?.words) && caption.words.length > 0 ? (
+      {Array.isArray(displayWords) && displayWords.length > 0 ? (
         <div className="caption-words-sr" aria-hidden="true">
-          {caption.words.map((w, idx) => {
+          {displayWords.map((w, idx) => {
             const isWordKeyword = isKeywordActive && isWordMatchingKeywords(w.text, keywords);
             const isActive = idx === activeWordIndex;
             return (
@@ -169,8 +183,8 @@ export function CaptionOverlay({
                   isActive
                     ? { color: resolveActiveWordColor(captionStyle, caption) }
                     : isWordKeyword
-                    ? { color: keywordColor }
-                    : undefined
+                      ? { color: keywordColor }
+                      : undefined
                 }
               >
                 {w.text}
