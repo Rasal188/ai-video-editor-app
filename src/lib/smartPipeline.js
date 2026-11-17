@@ -1,4 +1,6 @@
 import { browserProjectFingerprint } from "./browserEditPlan.js";
+import { attachTranscriptionOutcome } from "./transcriptionOutcome.js";
+import { regroupWorkflowTranscript } from "./workflowTranscription.js";
 import {
   canRemovePauses,
   findRoughCutCandidates,
@@ -6,7 +8,6 @@ import {
   mergeCutCandidates,
 } from "./roughCut.js";
 import {
-  regroupReviewSegments,
   validateCaptionSegments,
 } from "./transcriptReview.js";
 
@@ -206,7 +207,7 @@ export function createSmartPipelinePlan({
     }
     captionSegments = remapped;
   } else if (localChunks.length > 0) {
-    const rawGrouped = regroupReviewSegments(localChunks, duration, { grouping: "phrases" });
+    const rawGrouped = regroupWorkflowTranscript(localChunks, duration, { grouping: "phrases" });
     captionSegments = (rawGrouped || []).map((seg, idx) => {
       const rawStart = Number(seg.start);
       let start = Math.max(0, Number.isFinite(rawStart) ? rawStart : 0);
@@ -242,16 +243,17 @@ export function createSmartPipelinePlan({
     });
   }
 
+  captionSegments = attachTranscriptionOutcome(captionSegments, transcriptResult);
   const metrics = calculatePipelineMetrics(duration, candidates, captionSegments);
 
-  return {
+  return attachTranscriptionOutcome({
     clip,
     candidates,
     captionSegments,
-    rawChunks: localChunks,
+    rawChunks: attachTranscriptionOutcome(localChunks, transcriptResult),
     transcriptResult,
     metrics,
-  };
+  }, transcriptResult);
 }
 
 /**

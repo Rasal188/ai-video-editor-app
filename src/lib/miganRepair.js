@@ -39,11 +39,15 @@ function makeMask(width, height, selection) {
   const y1 = Math.max(0, Math.floor(selection.y * height + 1e-7));
   const x2 = Math.min(width, Math.ceil((selection.x + selection.width) * width - 1e-7));
   const y2 = Math.min(height, Math.ceil((selection.y + selection.height) * height - 1e-7));
-  const padding = Math.max(2, Math.min(6, Math.round(Math.min(x2 - x1, y2 - y1) * 0.03)));
-  for (let y = Math.max(0, y1 - padding); y < Math.min(height, y2 + padding); y += 1) {
-    mask.fill(255, y * width + Math.max(0, x1 - padding), y * width + Math.min(width, x2 + padding));
+  const padding = Math.max(6, Math.min(18, Math.round(Math.min(x2 - x1, y2 - y1) * 0.08)));
+  const px1 = Math.max(0, x1 - padding);
+  const py1 = Math.max(0, y1 - padding);
+  const px2 = Math.min(width, x2 + padding);
+  const py2 = Math.min(height, y2 + padding);
+  for (let y = py1; y < py2; y += 1) {
+    mask.fill(255, y * width + px1, y * width + px2);
   }
-  return { mask, padding, rect: { x: x1, y: y1, width: x2 - x1, height: y2 - y1 } };
+  return { mask, padding, rect: { x: px1, y: py1, width: px2 - px1, height: py2 - py1 } };
 }
 
 function canvasToBlob(canvas) {
@@ -59,7 +63,7 @@ export async function repairMiganFrame({ bitmap, selection, signal, onProgress, 
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const context = canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
   context.drawImage(bitmap, 0, 0);
   bitmap.close?.();
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
@@ -148,7 +152,7 @@ export async function repairMiganFrame({ bitmap, selection, signal, onProgress, 
   const outputCanvas = document.createElement("canvas");
   outputCanvas.width = canvas.width;
   outputCanvas.height = canvas.height;
-  outputCanvas.getContext("2d").putImageData(new ImageData(outputPixels, canvas.width, canvas.height), 0, 0);
+  outputCanvas.getContext("2d", { colorSpace: "srgb" }).putImageData(new ImageData(outputPixels, canvas.width, canvas.height), 0, 0);
   const composedRegion = repairedRegion;
   let composedChangedPixels = 0;
   for (let index = 0; index < composedRegion.length; index += 4) {

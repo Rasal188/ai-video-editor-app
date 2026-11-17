@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { attachTranscriptionOutcome, preserveTranscriptionOutcome } from "../lib/transcriptionOutcome.js";
+import { regroupWorkflowTranscript } from "../lib/workflowTranscription.js";
+import { editorTranscriptionStatus } from "../lib/editorTranscription.js";
 import { createPortal } from "react-dom";
 import {
   Check,
@@ -13,7 +16,6 @@ import {
 import {
   addSegment,
   deleteSegment,
-  regroupReviewSegments,
   updateSegmentText,
   updateSegmentTiming,
   validateCaptionSegments,
@@ -36,7 +38,7 @@ export function TranscriptReviewModal({
   // Sync state whenever reviewData changes
   useEffect(() => {
     if (!isOpen || !reviewData) return;
-    setSegments(Array.isArray(reviewData.segments) ? reviewData.segments : []);
+    setSegments(preserveTranscriptionOutcome(Array.isArray(reviewData.segments) ? reviewData.segments : [], reviewData));
     setFullText(reviewData.text || "");
     setCurrentGrouping(reviewData.grouping || "phrases");
     setActiveTab("segments");
@@ -70,10 +72,10 @@ export function TranscriptReviewModal({
     setCurrentGrouping(newGrouping);
     if (!canRegroup) return;
     try {
-      const regrouped = regroupReviewSegments(rawChunks, duration, {
+      const regrouped = preserveTranscriptionOutcome(regroupWorkflowTranscript(rawChunks, duration, {
         timelineOffset,
         grouping: newGrouping,
-      });
+      }, reviewData.segments || []), reviewData);
       if (regrouped.length) {
         setSegments(regrouped);
         setFullText(regrouped.map((s) => s.text).join("\n"));
@@ -112,10 +114,10 @@ export function TranscriptReviewModal({
 
   const handleApplyClick = () => {
     if (!validation.valid) return;
-    onApply?.({
+    onApply?.(attachTranscriptionOutcome({
       segments,
       text: fullText,
-    });
+    }, reviewData));
   };
 
   const firstError = validation.errors[0];
@@ -153,6 +155,7 @@ export function TranscriptReviewModal({
             <p className="transcript-review-desc">
               {t("reviewCaptionsDesc", "Review and adjust recognizing captions before applying to timeline")}
             </p>
+            <p className="transcript-review-desc" role="status">{editorTranscriptionStatus(reviewData)}</p>
           </div>
           <button
             className="transcript-review-close"

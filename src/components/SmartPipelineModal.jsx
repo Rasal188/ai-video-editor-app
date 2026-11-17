@@ -17,6 +17,7 @@ import {
 } from "@phosphor-icons/react";
 import { formatTime } from "../lib/timeline.js";
 import "./SmartPipelineModal.css";
+import { workflowTranscriptionStatus } from "../lib/workflowTranscription.js";
 
 const STAGES = [
   { id: "select", labelKey: "smartPipelineStepSelect" },
@@ -33,6 +34,7 @@ export function SmartPipelineModal({
   t = (key, fallback) => fallback || key,
 }) {
   const [filterType, setFilterType] = useState("all"); // "all" | "pause" | "filler"
+  const transcriptionStatus = workflowTranscriptionStatus(pipeline.job) || workflowTranscriptionStatus(pipeline.plan);
 
   // Keyboard shortcut: Escape to close / cancel
   useEffect(() => {
@@ -148,6 +150,7 @@ export function SmartPipelineModal({
                     ? t(error, error)
                     : t("smartPipelineComplete", "Analysis complete")}
             </span>
+            {transcriptionStatus && <span role="status" aria-live="polite">{transcriptionStatus}</span>}
           </div>
         </div>
         <div className="smart-pipeline-minimized-actions">
@@ -257,6 +260,7 @@ export function SmartPipelineModal({
           </nav>
         )}
 
+        {transcriptionStatus && <p role="status" aria-live="polite">{transcriptionStatus}</p>}
         {/* Error Banner */}
         {error && (
           <div className="smart-pipeline-error-banner" role="alert">
@@ -415,7 +419,7 @@ export function SmartPipelineModal({
                 <p className="smart-pipeline-progress-hint">
                   {t(
                     "smartPipelineAnalyzingHint",
-                    "Running local Silero VAD pause analysis & Whisper speech recognition."
+                    "Pause detection runs on this device. Speech transcription defaults to Ollalink Cloud (uploads audio), with Local Whisper on this device as an alternative. You can minimize this window while it runs."
                   )}
                 </p>
                 <div className="smart-pipeline-analyzing-actions">

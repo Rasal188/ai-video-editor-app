@@ -1,4 +1,7 @@
+import { captureTranscriptionPreferences } from "../lib/transcriptionPreferences.js";
 import { useEffect, useRef, useState } from "react";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "../lib/transcriptionOutcome.js";
+import { cancelledWorkflowTranscription, isTranscriptionCancellation, workflowTranscriptionOutcome, workflowTranscriptionStatus, regroupWorkflowTranscript } from "../lib/workflowTranscription.js";
 import { browserProjectFingerprint } from "../lib/browserEditPlan.js";
 import {
   canRemovePauses,
@@ -8,7 +11,6 @@ import {
 } from "../lib/smartPipeline.js";
 import { analyzeVideoPauses } from "../lib/sileroVad.js";
 import { transcribeAudioToCaptionSegments } from "../lib/asr.js";
-import { regroupReviewSegments } from "../lib/transcriptReview.js";
 import { sliceAudioBlob } from "../lib/media.js";
 
 export function useSmartPipeline(options) {
@@ -114,11 +116,7 @@ export function useSmartPipeline(options) {
 
   const close = () => {
     stopAudition();
-    if (job.running) {
-      abortRef.current?.abort();
-      abortRef.current = null;
-      setJob({ running: false, progress: 0, phase: "" });
-    }
+    if (job.running) cancel();
     setIsMinimized(false);
     setIsOpen(false);
     setError("");
@@ -135,9 +133,13 @@ export function useSmartPipeline(options) {
 
   const cancel = () => {
     stopAudition();
-    abortRef.current?.abort();
+    const controller = abortRef.current;
+    controller?.abort();
     abortRef.current = null;
-    setJob({ running: false, progress: 0, phase: "" });
+    setJob((current) => attachTranscriptionOutcome(
+      { ...current, running: false, progress: 0, phase: "" },
+      cancelledWorkflowTranscription(controller, controller?.transcriptionPreferences)
+    ));
     setError("");
     setStage("select");
     setIsMinimized(false);
@@ -167,8 +169,11 @@ export function useSmartPipeline(options) {
       return;
     }
 
+    const transcription = captureTranscriptionPreferences();
     const controller = new AbortController();
     abortRef.current = controller;
+    controller.transcriptionPreferences = transcription;
+    let outcome = null;
     const capturedClip = { ...activeClip };
     const fingerprint = browserProjectFingerprint(snapshot, false, runtime.visualSegments, runtime);
 
@@ -186,7 +191,7 @@ export function useSmartPipeline(options) {
           if (!controller.signal.aborted) {
             setJob({
               running: true,
-              progress: Math.min(50, Math.round(progress * 0.5)),
+              progress: Number.isFinite(progress) ? Math.min(50, Math.round(progress * 0.5)) : 5,
               phase: phase || "smartPipelineStepAnalyze",
             });
           }
@@ -200,13 +205,15 @@ export function useSmartPipeline(options) {
       if (settings.generateCaptions || settings.removeFillerWords) {
         setJob({ running: true, progress: 55, phase: "smartPipelineStepCaptions" });
         if (Array.isArray(capturedClip.rawChunks) && capturedClip.rawChunks.length > 0) {
-          transcriptResult = {
-            rawChunks: capturedClip.rawChunks,
+          outcome = getTranscriptionOutcome(capturedClip.rawChunks) || getTranscriptionOutcome(capturedClip);
+          transcriptResult = attachTranscriptionOutcome({
+            rawChunks: attachTranscriptionOutcome(capturedClip.rawChunks, outcome),
             text: capturedClip.transcriptText || "",
             duration: capturedClip.duration,
-          };
+          }, outcome);
         } else {
           try {
+            controller.transcriptionStarted = true;
             const mediaBlob = capturedClip.blob || (
               capturedClip.src
                 ? await fetch(capturedClip.src, { signal: controller.signal }).then((r) => r.blob())
@@ -222,24 +229,33 @@ export function useSmartPipeline(options) {
                 : mediaBlob;
               transcriptResult = await transcribeAudioToCaptionSegments(clipBlob, {
                 preferredLanguage: settings.language || options.language,
+                ...transcription,
                 signal: controller.signal,
                 onProgress: ({ progress, phase }) => {
                   if (!controller.signal.aborted) {
                     setJob({
                       running: true,
-                      progress: Math.min(95, 50 + Math.round(progress * 0.45)),
+                      progress: Number.isFinite(progress) ? Math.min(95, 50 + Math.round(progress * 0.45)) : 55,
                       phase: phase || "smartPipelineStepCaptions",
                     });
                   }
                 },
               });
+              outcome = getTranscriptionOutcome(transcriptResult);
+            } else {
+              outcome = workflowTranscriptionOutcome(null, transcription);
             }
           } catch (asrErr) {
+            outcome = workflowTranscriptionOutcome(asrErr, transcription,
+              isTranscriptionCancellation(asrErr, controller.signal) ? "cancelled" : "failed");
+            controller.transcriptionOutcome = outcome;
+            if (isTranscriptionCancellation(asrErr, controller.signal)) throw asrErr;
             console.warn("[SmartPipeline] Transcription warning:", asrErr);
           }
         }
       }
 
+      controller.transcriptionOutcome = outcome;
       controller.signal.throwIfAborted();
 
       // Step C: Build unified plan
@@ -252,11 +268,11 @@ export function useSmartPipeline(options) {
 
       smartPlan.fingerprint = fingerprint;
       smartPlan.probabilities = probabilities;
-      setPlan(smartPlan);
+      setPlan(attachTranscriptionOutcome(smartPlan, outcome));
       setIncludeCaptions(Boolean(settings.generateCaptions && smartPlan.captionSegments.length > 0));
       setIncludeCuts(Boolean(smartPlan.candidates.length > 0));
 
-      setJob({ running: false, progress: 100, phase: "" });
+      setJob(attachTranscriptionOutcome({ running: false, progress: 100, phase: "" }, outcome));
       abortRef.current = null;
 
       // Navigate to next appropriate stage
@@ -269,10 +285,13 @@ export function useSmartPipeline(options) {
       if (isMinimizedRef.current) {
         const notifyMsg = options.t?.("smartPipelineComplete", "Smart Editing analysis complete! Click to review.")
           || "Smart Editing analysis complete!";
-        options.notify?.(notifyMsg);
+        options.notify?.([notifyMsg, workflowTranscriptionStatus(outcome)].filter(Boolean).join(" "));
       }
     } catch (failure) {
-      if (!controller.signal.aborted) {
+      outcome = getTranscriptionOutcome(failure) || outcome;
+      if (isTranscriptionCancellation(failure, controller.signal)) {
+        if (abortRef.current === controller) setStage("select");
+      } else {
         const errKey = failure.code || "smartPipelineFailed";
         setError(errKey);
         setStage("select");
@@ -285,7 +304,7 @@ export function useSmartPipeline(options) {
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
-        setJob({ running: false, progress: 0, phase: "" });
+        setJob(attachTranscriptionOutcome({ running: false, progress: 0, phase: "" }, outcome));
       }
     }
   };
@@ -344,9 +363,9 @@ export function useSmartPipeline(options) {
   const updateCaptionGrouping = (newGrouping) => {
     if (!plan || !plan.rawChunks?.length) return;
     setCaptionGrouping(newGrouping);
-    const regrouped = regroupReviewSegments(plan.rawChunks, plan.clip.duration, {
+    const regrouped = regroupWorkflowTranscript(plan.rawChunks, plan.clip.duration, {
       grouping: newGrouping,
-    });
+    }, plan.captionSegments);
     if (regrouped.length) {
       const sanitized = regrouped.map((seg, idx) => {
         const rawStart = Number(seg.start);
@@ -378,7 +397,7 @@ export function useSmartPipeline(options) {
       });
       setPlan({
         ...plan,
-        captionSegments: sanitized,
+        captionSegments: attachTranscriptionOutcome(sanitized, plan),
       });
     }
   };

@@ -18,6 +18,7 @@
  */
 
 import { makeId } from "./timeline.js";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "./transcriptionOutcome.js";
 import { BUILTIN_CAPTION_STYLE_PRESETS, getCaptionStylePreset } from "./captionStyles.js";
 import { detectScenesFromSignatures } from "./sceneDetection.js";
 import { compilePunchInKeyframes } from "./smartZoom.js";
@@ -1402,7 +1403,12 @@ export function discoverShortCandidates({
   settings = {},
   aiEvaluator = null,
 }) {
-  const normSettings = normalizeShortsSettings(settings);
+  const sourceCropX = Number.isFinite(sourceMedia?.cropX) ? sourceMedia.cropX : undefined;
+  const initialCropX = Number.isFinite(settings?.cropX) ? settings.cropX : sourceCropX;
+  const normSettings = normalizeShortsSettings({
+    ...settings,
+    ...(Number.isFinite(initialCropX) ? { cropX: initialCropX } : {}),
+  });
   const metadata = inspectSourceMetadata(sourceMedia);
   const audioInput = audioData || sourceMedia?.audioData || sourceMedia?.audioBuffer || sourceMedia?.peaks || sourceMedia?.waveform || null;
 
@@ -1513,7 +1519,7 @@ export function discoverShortCandidates({
           sourceSize: { width: metadata.width || 1920, height: metadata.height || 1080 },
           targetRatio: normSettings.aspectRatio || "9:16",
           sceneCuts: computedSceneCuts.map((c) => c - cand.startTime).filter((c) => c > 0 && c < cand.duration),
-          manualCropX: cand.cropX ?? normSettings.cropX ?? 0.5,
+          manualCropX: cand.cropX ?? (Number.isFinite(sourceMedia?.cropX) ? sourceMedia.cropX : (normSettings.cropX ?? 0.5)),
           userSelectedSubject,
           speechIntervals: (cand.sentences || []).map((s) => ({
             start: Math.max(0, s.start - cand.startTime),
@@ -1542,7 +1548,7 @@ export function discoverShortCandidates({
           { width: metadata.width || 1920, height: metadata.height || 1080 },
           normSettings.aspectRatio || "9:16",
           cand.duration,
-          cand.cropX ?? normSettings.cropX ?? 0.5
+          cand.cropX ?? (Number.isFinite(sourceMedia?.cropX) ? sourceMedia.cropX : (normSettings.cropX ?? 0.5))
         );
         const reframed = applyDynamicReframingToCandidate(cand, fallbackTrack);
         Object.assign(cand, reframed);
@@ -1573,13 +1579,13 @@ export function discoverShortCandidates({
     });
   }
 
-  return {
+  return attachTranscriptionOutcome({
     ok: true,
     metadata,
     settings: normSettings,
     totalDiscovered: rawCandidates.length,
-    candidates: rankedCandidates,
-  };
+    candidates: attachTranscriptionOutcome(rankedCandidates, transcriptResult),
+  }, transcriptResult);
 }
 
 /**
@@ -1765,14 +1771,17 @@ export function convertCandidateToProject(sourceClipOrOptions, candidateArg, opt
     }
   }
 
-  let resolvedCropX = Number.isFinite(options.cropX) ? options.cropX : (Number.isFinite(candidate.cropX) ? candidate.cropX : cropX);
+  const explicitCropX = Number.isFinite(options.cropX)
+    ? options.cropX
+    : (Number.isFinite(candidate.cropX) && Math.abs(candidate.cropX - 0.5) > 0.001 ? candidate.cropX : null);
+  let resolvedCropX = explicitCropX !== null ? explicitCropX : cropX;
   const trackIsReal = trackToUse &&
     !trackToUse.isFallback &&
     trackToUse.state !== "fallback" &&
     Array.isArray(trackToUse.cropKeyframes) &&
     trackToUse.cropKeyframes.length > 0;
 
-  if (trackIsReal) {
+  if (trackIsReal && explicitCropX === null) {
     const kf0 = trackToUse.cropKeyframes[0];
     if (Number.isFinite(kf0.panFactor)) {
       resolvedCropX = kf0.panFactor;
@@ -1833,6 +1842,7 @@ export function convertCandidateToProject(sourceClipOrOptions, candidateArg, opt
       const mappedKeyframes = trackToUse.cropKeyframes.map((kf) => ({
         ...kf,
         time: Number((needsOffset ? validStartTime + (kf.time || 0) : kf.time).toFixed(3)),
+        baseX: Number.isFinite(kf.baseX) ? kf.baseX : kf.x,
         panFactor: Number.isFinite(kf.panFactor)
           ? kf.panFactor
           : ((1 - kf.width) > 0.0001 ? Number((kf.x / (1 - kf.width)).toFixed(4)) : 0.5),
@@ -2094,13 +2104,16 @@ export function convertCandidateToProject(sourceClipOrOptions, candidateArg, opt
     }
   }
 
-  return {
+  const outcome = getTranscriptionOutcome(sourceCaptions) || getTranscriptionOutcome(candidate);
+  return attachTranscriptionOutcome({
     ratioId: targetRatio,
     fitMode,
     visualSegments: [trimmedVisualSegment],
     visualOverlaySegments: overlaySegments,
     segments: [trimmedVisualSegment],
-    captionSegments: finalCaptions,
+    captionSegments: finalCaptions.map((caption, index) => attachTranscriptionOutcome(
+      caption, getTranscriptionOutcome(candidateCaptions[index]) || outcome
+    )),
     captionCallouts,
     motionTypography: motionTypographyMeta,
     transitions: projectTransitions,
@@ -2121,7 +2134,7 @@ export function convertCandidateToProject(sourceClipOrOptions, candidateArg, opt
       framingMode,
       cropX,
     },
-  };
+  }, outcome);
 }
 
 /**
@@ -2176,10 +2189,14 @@ export function resolveSourceCaptions({
 
   // 1. If source has explicit captions attached to it, use them
   if (Array.isArray(activeSource.source.captionSegments) && activeSource.source.captionSegments.length > 0) {
-    return activeSource.source.captionSegments;
+    return activeSource.source.captionSegments.map((caption) => attachTranscriptionOutcome(
+      caption, getTranscriptionOutcome(caption) || getTranscriptionOutcome(activeSource.source)
+    ));
   }
   if (Array.isArray(activeSource.source.captions) && activeSource.source.captions.length > 0) {
-    return activeSource.source.captions;
+    return activeSource.source.captions.map((caption) => attachTranscriptionOutcome(
+      caption, getTranscriptionOutcome(caption) || getTranscriptionOutcome(activeSource.source)
+    ));
   }
 
   // 2. Uploaded media assets MUST NEVER inherit unrelated timeline captions

@@ -67,15 +67,19 @@ export function usePreviewModel(d) {
       : "";
   const previewVisualObjectFit = previewSmartCropRect?.presentation === "safe-contain"
     ? "contain"
-    : previewSmartCropRect ? "cover" : d.fitMode;
+    : previewSmartCropRect
+      ? "cover"
+      : (d.previewVisualSegment?.cropX !== undefined || d.previewVisualSegment?.fitMode === "cover" ? "cover" : d.fitMode);
+  const defaultVisualPosition = d.previewVisualSegment?.objectPosition
+    || (Number.isFinite(d.previewVisualSegment?.cropX) ? `${(Math.max(0, Math.min(1, d.previewVisualSegment.cropX)) * 100).toFixed(1)}% 50.0%` : "50% 50%");
   const previewVisualObjectPosition = previewSmartCropRect
     ? previewSmartCropRect.presentation === "safe-contain"
       ? "50% 50%"
       : getObjectPositionForCrop(previewSmartCropRect)
-    : "50% 50%";
+    : defaultVisualPosition;
   const previewSmartBackgroundPosition = previewSmartCropRect
     ? getObjectPositionForCrop(previewSmartCropRect)
-    : "50% 50%";
+    : defaultVisualPosition;
 
   return {
     effectiveCaptionPlacement, previewSmartCropRect, previewVisionAnalysis,

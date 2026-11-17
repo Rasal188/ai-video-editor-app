@@ -47,6 +47,12 @@ export const config = Object.freeze({
     }),
   }),
 
+  // Server-only GPU credential; never expose through Vite configuration.
+  ollalink: Object.freeze({
+    apiKey: process.env.OLLALINK_API_KEY || "",
+    timeoutMs: 120000,
+  }),
+
   ollima: Object.freeze({
     apiKey: process.env.OLLIMA_API_KEY || "",
     model: process.env.OLLIMA_MODEL || "gemini-3-flash",

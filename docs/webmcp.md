@@ -1,6 +1,6 @@
 # WebMCP integration
 
-Timeline Studio exposes the project open in the editor as 21 structured browser tools. Agents can inspect the timeline and available assets, review and apply supported multi-track edits, inspect rendered frame/audio samples, run browser-local voiceover and transcription jobs, seek and undo, save an editable `.timeline` copy, and run a real browser video export with progress and cancellation. The root URL continues to open the editor directly.
+Timeline Studio exposes the project open in the editor as 21 structured browser tools. Agents can inspect the timeline and available assets, review and apply supported multi-track edits, inspect rendered frame/audio samples, run browser-local voiceover and provider-selected transcription jobs, seek and undo, save an editable `.timeline` copy, and run a real browser video export with progress and cancellation. The root URL continues to open the editor directly.
 
 This is a progressive enhancement for browsers and agent hosts that provide a compatible WebMCP API. Unsupported browsers keep the normal editor. Registration is not proof that a particular agent host can discover or invoke tools. WebMCP is experimental; the current [specification](https://webmachinelearning.github.io/webmcp/) is a Community Group draft, not a W3C Standard.
 
@@ -11,7 +11,7 @@ This is a progressive enhancement for browsers and agent hosts that provide a co
 | Browser WebMCP | The live project in the open tab | Shared editor state, semantic review, one undoable edit transaction; browser downloads of a `.timeline` copy or rendered video |
 | Local STDIO MCP / CLI | A local `.timeline` archive | Repository command runner, revisioned diff/apply, new output archive; supported headless rendering subset |
 
-The local server remains inside [`skills/edit-timeline-studio`](../skills/edit-timeline-studio). Neither path implements a second timeline engine. Browser plans compile to the existing shared command engine and use the editor's ripple and history integration. Video export uses the same rendering hook, progress UI and cancellation controller as the editor's Export button. The website does not host a remote HTTP MCP server, OAuth service, or media-upload endpoint for this integration.
+The local server remains inside [`skills/edit-timeline-studio`](../skills/edit-timeline-studio). Neither path implements a second timeline engine. Browser plans compile to the existing shared command engine and use the editor's ripple and history integration. Video export uses the same rendering hook, progress UI and cancellation controller as the editor's Export button. The website does not host a remote HTTP MCP server or OAuth service for this integration. Authorized Cloud transcription uses the existing authenticated transcription connector; metadata inspection and preparation do not upload media.
 
 ## Runtime registration
 
@@ -34,11 +34,11 @@ Discover the current page schemas before invoking tools. Browser tools share som
 | `timeline_edit_preview` | `stateToken`, either `operations` or legacy `clips`, optional `summary` | Semantic changes and `previewId`; the timeline is unchanged |
 | `timeline_edit_apply` | `previewId` | Applies that exact pending plan as one undoable transaction; returns `transactionId` |
 | `timeline_media_sample` | `stateToken`, optional `times` (1–4), `maxDimension` (256–1024), `audio: {start, duration}` (up to 10 seconds); requires frames or audio | Rendered JPEG frames and/or a WAV timeline mix, returned as data URLs without moving the playhead |
-| `timeline_ai_capabilities` | Optional interface `language` code | Supported built-in voices, local runtime requirements, model-readiness disclosure and task limits; no model execution |
+| `timeline_ai_capabilities` | Optional interface `language` code | Supported built-in voices, shared transcription provider and spoken language, upload/fallback policy, model-readiness and task limits; no inference or upload |
 | `timeline_ai_prepare` | `stateToken`, `request` | Validates a local voiceover or transcription request; returns `aiId` and the resolved plan without downloading or running models |
 | `timeline_ai_start` | `aiId`, `requestId`, `allowModelDownload: true` | Starts the unchanged reviewed AI request and returns `jobId`; may download required models |
 | `timeline_ai_inspect` | `jobId` | Actual task state, progress, generated asset receipts or proposed caption operations, and errors |
-| `timeline_ai_cancel` | `jobId` | Requests cancellation; inspect until the worker or synthesis service acknowledges the outcome |
+| `timeline_ai_cancel` | `jobId` | Requests cancellation; inspect until the HTTP request, worker or synthesis service acknowledges the outcome |
 | `timeline_preview_seek` | `time` in timeline seconds | Pauses playback and seeks within the project duration |
 | `timeline_edit_undo` | `transactionId` | Reverts the latest agent transaction only while the project is unchanged |
 | `timeline_project_save` | `stateToken` | Downloads a new portable `.timeline` project copy; does not render video |
@@ -151,19 +151,21 @@ Media data is delivered to the browser agent. Request only the frames and audio 
 }
 ```
 
-## Browser-local voiceover and transcription
+## Browser-local voiceover and provider-selected transcription
+
+Transcription follows the editor's shared saved provider and spoken language: **Ollalink Cloud by default**, or explicit Local Whisper. Capabilities and preparation disclose provider, language and upload/fallback policy. Cloud sends the selected audio range to Ollalink; Local remains on-device. Temporary Cloud outages may fall back once to Local, with no second paid upload. Cancellation, authentication, validation, unsupported language and invalid responses do not trigger fallback. Preparation performs no upload or inference. Review the upload policy before authorizing start; changed preferences invalidate a prepared transcription plan. Explicit request language wins over shared spoken language, never UI locale.
 
 1. Call `timeline_ai_capabilities` and inspect supported voices, task limits and runtime availability. Its model readiness is disclosed as unprobed; it does not silently download or warm up models. Optional `language` filters the built-in voice catalog.
 2. Prepare with the current project `stateToken` and one request shape below. Read the returned `aiId` and plan, including model downloads, source range, output destination and cancellation behavior.
 3. For an authorized AI task and model download, call `timeline_ai_start` with `aiId`, a unique `requestId` and `allowModelDownload: true`. The same key retries the same start; do not generate a new key merely because a response is uncertain. Preparation never grants model-download permission by itself. Project changes before start invalidate the plan.
-4. Inspect `jobId` with `timeline_ai_inspect`. Progress is reported by the actual service stages, not a fabricated estimate. Use `timeline_ai_cancel` to request cancellation, then inspect until a terminal result is acknowledged. Voice synthesis may finish its current inference before discarding output; transcription cancellation stops its worker.
+4. Inspect `jobId` with `timeline_ai_inspect`. Progress is reported by the actual service stages, not a fabricated estimate. Use `timeline_ai_cancel` to request cancellation, then inspect until a terminal result is acknowledged. Voice synthesis may finish its current inference before discarding output; transcription cancellation aborts its request or worker and discards late results.
 5. On success, inspect the result and create a separate reviewed edit if timeline insertion is wanted. AI jobs never insert voiceover or replace captions automatically.
 
 Voiceover requests use `{kind: "voiceover", voiceId, text, speed?, gain?, timelineOffset?}`. Choose `voiceId` from capabilities. Text is limited to 2,000 characters and split into at most 80 sentence/breath groups with one stable speaker. The optional speed is 0.7–1.3 for voices with `adjustableSpeed: true` (currently Kokoro); other voices require 1; gain is 0.1–4 with browser-local limiting. All groups must succeed before the generated clips are committed to My assets. The receipt provides asset IDs, durations and suggested placements with 0.4-second gaps; these are suggestions, not a timeline edit. Chinese and mixed Chinese/English use the existing two-speaker Hojo route. This tool does not enroll or use clone profiles.
 
 Transcription requests use `{kind: "transcription", assetId, language?, sourceStart?, duration?, timelineOffset?}`. The source must be a ready audio asset already in My assets, with a range of 0.2–120 seconds. Omitted duration uses the remaining source, capped at 120 seconds. The optional language is a recognition preference; inspect the actual output. Times are measured from source audio, then offset by `timelineOffset` into proposed `caption.add` operations. This does not infer a selected clip's trim/speed curve or promise automatic alignment to retimed footage. Inspect and adjust the proposals, then use the normal edit preview/apply path. A cancelled or failed task leaves the existing timeline untouched.
 
-Both requests default `timelineOffset` to zero. One AI task can run at a time; job receipts and retry keys are bounded to the page session. Voiceover artifacts use the editor's owned mirrors pinned to immutable revisions. Transcription uses `onnx-community/whisper-small_timestamped` at immutable revision `65caa70f294b46e1c33ff820aae6b16d048ab818` and its shared model cache. Word-level alignment is grouped into editable short-phrase caption clips; no uniform text-duration approximation is used. Voiceover and transcription use the production browser-local services; this tool surface does not expose remote provider generation or arbitrary model execution.
+Both requests default `timelineOffset` to zero. One AI task can run at a time; job receipts and retry keys are bounded to the page session. Voiceover artifacts use the editor's owned mirrors pinned to immutable revisions. Local transcription and disclosed outage fallback retain `onnx-community/whisper-small_timestamped` at immutable revision `65caa70f294b46e1c33ff820aae6b16d048ab818` and its shared model cache. The required model-download authorization also covers that disclosed fallback. Cloud uses the authenticated bounded production Ollalink route; see [transcription setup and limits](ollalink-transcription.md). Word-level alignment is grouped into editable short-phrase caption clips; no uniform text-duration approximation is used. No arbitrary model execution is exposed.
 
 ## Export a finished video
 
@@ -186,7 +188,7 @@ An MP4 compatibility export can fall back to a real WebM file if transcoding fai
 - Metadata read tools and review diffs return relevant metadata and caption text, not media bytes, blob URLs or a full archive. Only the explicitly requested `timeline_media_sample` returns bounded rendered media. Names, captions, marker notes and user summaries remain untrusted data, not agent instructions.
 - Browser agents receive tool results under their own data-handling terms. Local editing does not imply local processing by the agent. Project and video delivery initiate browser downloads; optional editor connectors and model downloads retain their documented networking behavior.
 
-The browser tool surface does not expose arbitrary JavaScript, filesystem paths, arbitrary URL imports, arbitrary model execution, remote generation, cloud jobs, or advanced effect/retiming commands. Browser-local voiceover and transcription are limited to the reviewed AI task contract above. Existing editor workflows provide other supported controls.
+The browser tool surface does not expose arbitrary JavaScript, filesystem paths, arbitrary URL imports, arbitrary model execution, arbitrary remote generation, cloud rendering jobs, or advanced effect/retiming commands. Voiceover and provider-selected transcription are limited to the reviewed AI task contract above. Existing editor workflows provide other supported controls.
 
 ## Discovery
 

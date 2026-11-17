@@ -1,6 +1,8 @@
+import { captureTranscriptionPreferences } from "./transcriptionPreferences.js";
 import { AUTOMATIC_CAPTION_MODEL_ID, AUTOMATIC_CAPTION_MODEL_LABEL, AUTOMATIC_CAPTION_MODEL_REVISION } from "../config/models.js";
 import { makeId } from "./timeline.js";
 import { captionSegmentsFromWords } from "./captionSegmentation.js";
+import { transcribeWithProvider } from "./cloudAsr.js";
 
 const ASR_SAMPLE_RATE = 16000;
 const LANGUAGE_DETECTION_SECONDS = 20;
@@ -27,6 +29,8 @@ const UI_LANGUAGE_TO_WHISPER_LANGUAGE = {
   it: "it",
   id: "id",
   ru: "ru",
+  hi: "hi",
+  ar: "ar",
 };
 
 const WHISPER_LANGUAGE_NAMES = {
@@ -43,6 +47,8 @@ const WHISPER_LANGUAGE_NAMES = {
   it: "Italiano",
   id: "Bahasa Indonesia",
   ru: "Русский",
+  hi: "हिन्दी",
+  ar: "العربية",
 };
 
 let transcriberState = null;
@@ -88,7 +94,7 @@ async function decodeAudioForAsr(blob) {
       duration: decoded.duration,
     };
   } finally {
-    await audioContext.close().catch(() => {});
+    await audioContext.close().catch(() => { });
   }
 }
 
@@ -200,7 +206,8 @@ function createModelLoadProgressCallback(onProgress) {
   };
 }
 
-async function detectWhisperLanguage(transcriber, audio, preferredLanguage, onProgress) {
+async function detectWhisperLanguage(transcriber, audio, preferredLanguage, onProgress, signal) {
+  throwIfAborted(signal);
   const generationConfig = transcriber?.model?.generation_config;
   const fallbackLanguage = getPreferredWhisperLanguage(preferredLanguage);
   if (!isMultilingualWhisper(transcriber)) {
@@ -220,13 +227,16 @@ async function detectWhisperLanguage(transcriber, audio, preferredLanguage, onPr
   try {
     onProgress?.({ progress: 70, phase: "识别音频语言" });
     const sample = getLanguageDetectionSample(audio);
+    throwIfAborted(signal);
     const features = await transcriber.processor(sample);
+    throwIfAborted(signal);
     const output = await transcriber.model.generate({
       inputs: features.input_features,
       decoder_input_ids: [decoderStartTokenId],
       max_new_tokens: 1,
       return_timestamps: false,
     });
+    throwIfAborted(signal);
     const tokenIds = getGeneratedTokenIds(output);
     const languageTokenId = tokenIds.find((token) => token !== decoderStartTokenId && languageIdMap.has(token));
     const language = languageTokenId === undefined ? null : languageIdMap.get(languageTokenId);
@@ -236,7 +246,9 @@ async function detectWhisperLanguage(transcriber, audio, preferredLanguage, onPr
       detected: Boolean(language),
     };
   } catch (error) {
-    console.warn("Whisper language detection failed, falling back to preferred language.", error);
+    throwIfAborted(signal);
+    if (error?.name === "AbortError") throw error;
+    console.warn("Whisper language detection failed, falling back to preferred language.");
     return { language: fallbackLanguage, detected: false };
   }
 }
@@ -357,6 +369,7 @@ function transcribeAudioInWorker(audio, { onProgress, preferredLanguage, signal,
       onProgress,
     });
     signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) { abort(); return; }
 
     worker.postMessage(
       {
@@ -371,9 +384,12 @@ function transcribeAudioInWorker(audio, { onProgress, preferredLanguage, signal,
   });
 }
 
-async function transcribeAudioOnMainThread(audio, { onProgress, preferredLanguage }) {
+async function transcribeAudioOnMainThread(audio, { onProgress, preferredLanguage, signal }) {
+  throwIfAborted(signal);
   const transcriber = await getTranscriber(onProgress);
-  const languageResult = await detectWhisperLanguage(transcriber, audio, preferredLanguage, onProgress);
+  throwIfAborted(signal);
+  const languageResult = await detectWhisperLanguage(transcriber, audio, preferredLanguage, onProgress, signal);
+  throwIfAborted(signal);
   const languageLabel = WHISPER_LANGUAGE_NAMES[languageResult.language] ?? languageResult.language.toUpperCase();
   onProgress?.({
     progress: 74,
@@ -390,7 +406,10 @@ async function transcribeAudioOnMainThread(audio, { onProgress, preferredLanguag
     transcriptionOptions.language = languageResult.language;
     transcriptionOptions.task = "transcribe";
   }
+  // The main-thread pipeline cannot be forcibly interrupted; discard late work.
+  throwIfAborted(signal);
   const output = await transcriber(audio, transcriptionOptions);
+  throwIfAborted(signal);
 
   return {
     output,
@@ -441,8 +460,9 @@ function resetAsrWorker() {
 
 async function runTranscription(
   blob,
-  { onProgress, preferredLanguage = "zh", timelineOffset = 0, grouping = "phrases", signal, requireWorker = false } = {},
+  { onProgress, language, preferredLanguage = "zh", timelineOffset = 0, grouping = "phrases", signal, requireWorker = false } = {},
 ) {
+  preferredLanguage = language || preferredLanguage;
   throwIfAborted(signal);
   onProgress?.({ progress: 5, phase: "解码原声音频" });
   const { audio, duration } = await decodeAudioForAsr(blob);
@@ -458,9 +478,9 @@ async function runTranscription(
   } catch (error) {
     throwIfAborted(signal);
     if (error?.name === "AbortError" || requireWorker) throw error;
-    console.warn("ASR worker failed, falling back to main thread.", error);
+    console.warn("ASR worker failed, falling back to main thread.");
     onProgress?.({ progress: 8, phase: "Worker 不可用，切换主线程自动字幕" });
-    result = await transcribeAudioOnMainThread(audio, { onProgress, preferredLanguage });
+    result = await transcribeAudioOnMainThread(audio, { onProgress, preferredLanguage, signal });
   }
   throwIfAborted(signal);
 
@@ -468,11 +488,11 @@ async function runTranscription(
     // Agent jobs require a cancellable Worker. Preserve the normal UI fallback,
     // but never start uncancellable inference after a reviewed Worker-only plan.
     if (requireWorker) throw new Error("ASR_UNRELIABLE_TRANSCRIPT");
-    console.warn("ASR worker returned a suspicious transcript, retrying on the WASM main thread.", result.output);
+    console.warn("ASR worker returned an unreliable result; retrying on the WASM main thread.");
     shouldSkipAsrWorker = true;
     resetAsrWorker();
     onProgress?.({ progress: 78, phase: "Worker 结果异常，切换稳定 WASM 重新识别" });
-    result = await transcribeAudioOnMainThread(audio, { onProgress, preferredLanguage });
+    result = await transcribeAudioOnMainThread(audio, { onProgress, preferredLanguage, signal });
   }
   throwIfAborted(signal);
 
@@ -500,10 +520,14 @@ async function runTranscription(
 }
 
 export async function transcribeAudioToCaptionSegments(blob, options = {}) {
+  options = captureTranscriptionPreferences(options);
   if (transcriptionActive) throw Object.assign(new Error("EDITOR_BUSY"), { code: "EDITOR_BUSY" });
   transcriptionActive = true;
   try {
-    return await runTranscription(blob, options);
+    return await transcribeWithProvider(blob, options, {
+      localTranscribe: runTranscription,
+      decodeAudio: decodeAudioForAsr,
+    });
   } finally {
     transcriptionActive = false;
   }

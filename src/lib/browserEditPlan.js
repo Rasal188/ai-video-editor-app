@@ -1,4 +1,5 @@
 import { applyCommandPlan, diffProjects, inspectProject, materializeProjectCaptionTimings } from "./projectCommandEngine.js";
+import { validCaptionTranscriptionMetadata } from "./captionTranscriptionMetadata.js";
 import { applyTimelineRipple } from "./timelineRipple.js";
 import { MAX_TIMELINE_DURATION_SECONDS, MIN_VISUAL_SEGMENT_SECONDS } from "../config/editor.js";
 import { getTimedSegmentLaneStateKey, isTimedSegmentLaneLocked } from "./timeline.js";
@@ -333,7 +334,7 @@ const MEDIA_COLLECTIONS = ["visualSegments", "visualOverlaySegments", "audioSegm
 const CLIP_COLLECTIONS = [...MEDIA_COLLECTIONS, "captionSegments"];
 
 export const BROWSER_OPERATION_FIELDS = Object.freeze({
-  "caption.add": ["clipId", "text", "start", "end", "audioClipId"],
+  "caption.add": ["clipId", "text", "start", "end", "audioClipId", "words", "transcriptionProvider", "transcriptionOutcome"],
   "caption.update": ["clipId", "text", "start", "end"],
   "caption.delete": ["clipId"],
   "caption.set_style": ["scope", "clipId", "style"],
@@ -412,6 +413,7 @@ function validateBrowserOperation(operation) {
   if (!operation || typeof operation !== "object" || Array.isArray(operation)) reject("BROWSER_EDIT_INVALID_PLAN");
   const fields = Object.hasOwn(BROWSER_OPERATION_FIELDS, operation.type) ? BROWSER_OPERATION_FIELDS[operation.type] : null;
   if (!fields || Object.keys(operation).some((field) => field !== "type" && !fields.includes(field))) reject("BROWSER_EDIT_INVALID_PLAN");
+  if (operation.type === "caption.add" && !validCaptionTranscriptionMetadata(operation)) reject("BROWSER_EDIT_INVALID_PLAN");
   for (const field of ["clipId", "sourceClipId", "newClipId", "rightClipId", "assetId", "audioClipId", "markerId"]) {
     if (Object.hasOwn(operation, field)) assertId(operation[field]);
   }

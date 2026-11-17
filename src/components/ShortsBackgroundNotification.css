@@ -1,0 +1,98 @@
+/* Only Shorts background notices use this region; other toast systems are unchanged. */
+.shorts-notification-region {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    max-height: min(20dvh, 160px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: #0d121c;
+}
+
+.shorts-notification-region:empty {
+    display: none;
+}
+
+.app-shell:has(.shorts-notification-region > *) {
+    grid-template-rows: 52px auto minmax(0, 1fr) min(var(--timeline-panel-height), 35dvh);
+    grid-template-areas:
+        "topbar topbar"
+        "notifications notifications"
+        "editor assistant"
+        "timeline assistant";
+}
+
+.shorts-notification-region .shorts-minimized-floating-banner {
+    position: static;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    border-radius: 0;
+    padding: 8px 12px;
+    box-shadow: none;
+    animation: none;
+}
+
+.shorts-notification-region .shorts-minimized-text {
+    font-size: 12px;
+}
+
+.shorts-notification-region .shorts-minimized-text>span {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.shorts-notification-region .shorts-minimized-actions {
+    flex-wrap: wrap;
+}
+
+.shorts-notification-region button:focus-visible {
+    outline: 2px solid #a5b4fc;
+    outline-offset: 2px;
+}
+
+/* Empty-project guidance must yield before the composer in short viewports.
+   Keep it scrollable rather than allowing its intrinsic size to push controls out. */
+@media (max-height: 500px) {
+    .app-shell:has(.shorts-notification-region > *) .ai-assistant-empty-notice {
+        flex-shrink: 1;
+        min-height: 0;
+        overflow: auto;
+        padding-block: 0;
+    }
+
+    .app-shell:has(.shorts-notification-region > *) .ai-assistant-stream {
+        padding-block: 0;
+    }
+}
+
+/* The Assistant becomes a fixed drawer at this existing breakpoint. Use the
+   measured row bottom, including the responsive topbar and safe-area height. */
+@media (max-width: 768px) {
+    .app-shell:has(.shorts-notification-region > *)>.ai-assistant-panel {
+        top: var(--shorts-notification-bottom, 52px);
+        height: calc(100dvh - var(--shorts-notification-bottom, 52px));
+    }
+}
+
+@media (max-width: 760px) {
+    .app-shell:has(.shorts-notification-region > *) {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto minmax(0, 46dvh) minmax(0, 1fr) auto;
+        grid-template-areas: "topbar" "notifications" "preview" "timeline" "rail";
+    }
+
+    .shorts-notification-region .shorts-minimized-floating-banner {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .shorts-notification-region .shorts-minimized-info {
+        flex-basis: 100%;
+    }
+}

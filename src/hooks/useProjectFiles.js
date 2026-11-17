@@ -1,3 +1,4 @@
+import { getTranscriptionPreferences, restoreProjectTranscriptionPreferences } from "../lib/transcriptionPreferences.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_SCRIPT, DEFAULT_TIMELINE_DURATION_SECONDS, normalizeVoiceId, RATIO_OPTIONS, VOICES } from "../config/editor.js";
 import { decodeWaveform, downloadBlob } from "../lib/media.js";
@@ -7,6 +8,7 @@ import { normalizeSmartFrame } from "../lib/smartFrame.js";
 import { normalizeTrackLocks, normalizeTrackVisibility } from "../lib/projectTrackState.js";
 import { normalizeTimelineMarkers } from "../lib/timelineMarkers.js";
 import { PROJECT_IMPORT_COPY } from "../i18nProjectImport.js";
+import { assertAssistantBase, createAssistantProjectClock } from "../lib/assistantSafety.js";
 
 const waitForProjectPaint = () => new Promise((resolve) => {
   requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -15,19 +17,23 @@ const waitForProjectPaint = () => new Promise((resolve) => {
 export function useProjectFiles(deps) {
   const [projectImportProgress, setProjectImportProgress] = useState(null);
   const importingRef = useRef(false);
-  const commandStateRef = useRef({ schemaVersion: 1, revision: 0, appliedOperationIds: [] });
+  const commandClockRef = useRef(null);
+  if (!commandClockRef.current) commandClockRef.current = createAssistantProjectClock();
+  const latestDepsRef = useRef(deps);
+  latestDepsRef.current = deps;
   const [currentCloudProject, setCurrentCloudProject] = useState(deps.initialProject || null);
   const [savingToCloud, setSavingToCloud] = useState(false);
   const initialLoadedRef = useRef(false);
 
 
   const getProjectSnapshot = useCallback(() => {
+    const deps = latestDepsRef.current;
     const visualSegments = deps.visualSegments.map(({ blob, trackFrames, src, cutoutVisual, enhancement: _enhancement, ...segment }) => segment);
     const visualOverlaySegments = deps.visualOverlaySegments.map(({ blob, src, ...segment }) => segment);
     const audioSegments = deps.audioSegments.map(({ blob, url, peaks, ...segment }) => segment);
     const musicSegments = deps.musicSegments.map(({ blob: _blob, src: _src, url: _url, peaks: _peaks, ...segment }) => segment);
-    return {
-      script: deps.script, commandState: commandStateRef.current, selectedVoiceId: deps.selectedVoiceId, speed: deps.speed, volume: deps.volume,
+    const project = {
+      script: deps.script, selectedVoiceId: deps.selectedVoiceId, speed: deps.speed, volume: deps.volume,
       ratioId: deps.ratioId, fitMode: deps.fitMode, captionPosition: deps.captionPosition,
       captionPlacement: deps.captionPlacement, captionSize: deps.captionSize, captionStyle: deps.captionStyle,
       captionStylePresetId: deps.captionStylePresetId, captionStylePresets: deps.captionStylePresets,
@@ -43,10 +49,23 @@ export function useProjectFiles(deps) {
       musicStart: deps.musicStart,
       sourceAudioAssetId: deps.sourceAudioAssetId, sourceAudioLinked: deps.sourceAudioLinked,
     };
-  }, [deps]);
+    project.commandState = commandClockRef.current.observe(project, [
+      ...deps.visualSegments.map(segment => segment.blob || segment.src),
+      ...deps.visualOverlaySegments.map(segment => segment.blob || segment.src),
+      ...deps.audioSegments.map(segment => segment.blob || segment.url),
+      deps.audioBlob, deps.sourceAudioBlob, deps.musicBlob,
+    ]);
+    return project;
+  }, []);
+  // Observe every rendered edit, including undo/redo, not just assistant calls.
+  getProjectSnapshot();
+  const commitProjectCommandState = useCallback((next, plan) => {
+    assertAssistantBase(getProjectSnapshot(), plan);
+    commandClockRef.current.commit(next);
+  }, [getProjectSnapshot]);
 
   const createCurrentArchive = useCallback(() => createProjectArchive({
-    project: getProjectSnapshot(), visualSegments: [...deps.visualSegments, ...deps.visualOverlaySegments],
+    project: { ...getProjectSnapshot(), transcription: getTranscriptionPreferences() }, visualSegments: [...deps.visualSegments, ...deps.visualOverlaySegments],
     audioSegments: deps.audioSegments,
     audio: deps.audioBlob ? { blob: deps.audioBlob, name: "ai-voiceover" } : null,
     sourceAudio: deps.sourceAudioBlob ? { blob: deps.sourceAudioBlob, name: deps.sourceAudioName || "source-audio" } : null,
@@ -103,7 +122,7 @@ export function useProjectFiles(deps) {
               thumbnail,
             },
           }),
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       deps.notify(`正在上传工程版本并存储至云端 (${titleToUse})…`);
@@ -142,7 +161,7 @@ export function useProjectFiles(deps) {
                 storagePath: `storage/assets/${fname}`,
                 sizeBytes: seg.blob?.size || 1024,
               }),
-            }).catch(() => {});
+            }).catch(() => { });
           }
         }
       } catch {
@@ -173,7 +192,8 @@ export function useProjectFiles(deps) {
   const handleNewProject = useCallback(() => {
     if (importingRef.current) return;
     if (!window.confirm("新建工程将清空当前时间线，是否继续？")) return;
-    commandStateRef.current = { schemaVersion: 1, revision: 0, appliedOperationIds: [] };
+    restoreProjectTranscriptionPreferences(null);
+    commandClockRef.current.replace();
     setCurrentCloudProject(null);
     deps.setScript(DEFAULT_SCRIPT); deps.setCaptionSegments(createCaptionSegments(DEFAULT_SCRIPT));
     deps.setSelectedSegmentId(""); deps.clearImageTrack(""); deps.clearAudioTrack("");
@@ -189,6 +209,7 @@ export function useProjectFiles(deps) {
     if (importingRef.current) return;
     if (!file) { deps.projectFileInputRef.current?.click(); return; }
     importingRef.current = true;
+    commandClockRef.current.setChanging(true);
     const createdUrls = new Set();
     let committed = false;
     let importAudioContext = null;
@@ -208,9 +229,11 @@ export function useProjectFiles(deps) {
       // Let the modal paint before starting any decoding or fallback work.
       await waitForProjectPaint();
       let archive;
-      try { archive = await readProjectArchive(file, {
-        onProgress: ({ loaded, total }) => reportProgress("archive", loaded, total),
-      }); }
+      try {
+        archive = await readProjectArchive(file, {
+          onProgress: ({ loaded, total }) => reportProgress("archive", loaded, total),
+        });
+      }
       catch (archiveError) {
         // A damaged ZIP must not be copied into a hundreds-of-MB UTF-16
         // string just to discover that it is not a legacy JSON project.
@@ -314,7 +337,7 @@ export function useProjectFiles(deps) {
       const decodedSource = sourceAudio ? await decodeImportedAudio(sourceAudio) : null;
       const decodedMusic = music ? await decodeImportedAudio(music) : null;
       if (importAudioContext) {
-        await importAudioContext.close().catch(() => {});
+        await importAudioContext.close().catch(() => { });
         importAudioContext = null;
       }
 
@@ -322,7 +345,8 @@ export function useProjectFiles(deps) {
       // have succeeded. Failed imports leave the previous timeline intact.
       reportProgress("ready");
       await waitForProjectPaint();
-      commandStateRef.current = data.commandState || { schemaVersion: 1, revision: 0, appliedOperationIds: [] };
+      commandClockRef.current.replace(data.commandState);
+      restoreProjectTranscriptionPreferences(data);
       deps.setTimelineHorizon(DEFAULT_TIMELINE_DURATION_SECONDS);
       deps.setScript(typeof data.script === "string" ? data.script : DEFAULT_SCRIPT);
       const legacyFontId = data.captionStyle?.fontId || "default";
@@ -386,10 +410,11 @@ export function useProjectFiles(deps) {
       console.error("Project import failed", error);
       deps.notify((PROJECT_IMPORT_COPY[deps.language] || PROJECT_IMPORT_COPY.en).error);
     } finally {
-      if (importAudioContext) await importAudioContext.close().catch(() => {});
+      if (importAudioContext) await importAudioContext.close().catch(() => { });
       if (!committed) createdUrls.forEach((url) => URL.revokeObjectURL(url));
       if (deps.projectFileInputRef.current) deps.projectFileInputRef.current.value = "";
       importingRef.current = false;
+      commandClockRef.current.setChanging(false);
       setProjectImportProgress(null);
     }
   }, [deps]);
@@ -432,5 +457,5 @@ export function useProjectFiles(deps) {
     }
   }, [initialProject, initialImportFile, setRatioId, notify, handleImportProject]);
 
-  return { projectImportProgress, handleExportProject, handleImportProject, handleNewProject, getProjectSnapshot, createCurrentArchive, currentCloudProject, savingToCloud, saveProjectToCloud, handleOpenCloudProject };
+  return { projectImportProgress, handleExportProject, handleImportProject, handleNewProject, getProjectSnapshot, commitProjectCommandState, createCurrentArchive, currentCloudProject, savingToCloud, saveProjectToCloud, handleOpenCloudProject };
 }

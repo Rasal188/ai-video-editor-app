@@ -282,13 +282,27 @@ export function createAudioTrackActions(d) {
   }
 
   async function commitAudioBatch(items, nextStatusText, options = {}) {
+    const assertCanCommit = () => {
+      options.signal?.throwIfAborted();
+      if (options.shouldCommit && !options.shouldCommit()) {
+        throw new DOMException("Audio commit is no longer current", "AbortError");
+      }
+    };
+    assertCanCommit();
     const validItems = (items || []).filter((item) => item?.blob && String(item.script || "").trim());
     if (!validItems.length) return [];
     const decodedItems = await Promise.all(validItems.map(async (item) => ({
       ...item,
       decoded: await decodeWaveform(item.blob),
     })));
+    // Last asynchronous boundary. Everything below is one synchronous mutation batch.
+    // In particular, do not create/revoke URLs or touch captions/history before this guard.
+    assertCanCommit();
     const captionSegment = options.captionSegment;
+    const voiceId = options.voiceId ?? d.selectedVoiceId;
+    const voiceName = options.voiceName ?? (options.cloneVoiceProfileName
+      ? `${options.cloneVoiceProfileName} · ${d.selectedVoice.name}` : d.selectedVoice.name);
+    const name = options.name ?? (options.cloneVoiceProfileName || d.selectedVoice.name);
     const rememberedVoiceEnd = Number(d.generatedVoiceEndRef?.current) || 0;
     let cursor = captionSegment
       ? Math.max(0, Number(captionSegment.start) || 0)
@@ -308,11 +322,9 @@ export function createAudioTrackActions(d) {
           ? captionSegment.audioSegmentId || captionSegment.detachedAudioSegmentId || ""
           : "",
         sourceKind: options.sourceKind || "ai-voice",
-        voiceId: d.selectedVoiceId,
-        voiceName: options.cloneVoiceProfileName
-          ? `${options.cloneVoiceProfileName} · ${d.selectedVoice.name}`
-          : d.selectedVoice.name,
-        name: options.cloneVoiceProfileName || d.selectedVoice.name,
+        voiceId,
+        voiceName,
+        name,
         cloneVoiceProfileId: options.cloneVoiceProfileId || "",
         cloneVoiceProfileName: options.cloneVoiceProfileName || "",
       });
@@ -345,8 +357,8 @@ export function createAudioTrackActions(d) {
       ...created.map((item) => ({
         id: crypto.randomUUID(),
         blob: item.blob,
-        voiceId: d.selectedVoiceId,
-        voiceName: d.selectedVoice.name,
+        voiceId,
+        voiceName: options.voiceName ?? d.selectedVoice.name,
         script: item.script,
         duration: item.decoded.duration || estimateDuration(item.script),
         peaks: item.decoded.peaks,

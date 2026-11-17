@@ -1,5 +1,6 @@
 import { CircleNotch, Play, Scissors, Sparkle, X } from "@phosphor-icons/react";
 import "./RoughCutPanel.css";
+import { workflowTranscriptionStatus } from "../lib/workflowTranscription.js";
 
 const time = (seconds) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
 
@@ -7,6 +8,7 @@ export function RoughCutPanel({ t, tool }) {
   const { segment, supported, locked, settings, draft, stale, job, error } = tool;
   const selected = draft?.candidates.filter((cut) => cut.enabled) || [];
   const savings = selected.reduce((sum, cut) => sum + cut.end - cut.start, 0);
+  const transcriptionStatus = workflowTranscriptionStatus(job) || workflowTranscriptionStatus(draft);
 
   const getErrorText = (code) => {
     if (!code) return "";
@@ -41,6 +43,7 @@ export function RoughCutPanel({ t, tool }) {
         <p className="rough-cut-intro">{t("roughCutIntro", "Analyze pauses and speech filler words to craft a tight first cut.")}</p>
       </div>
 
+      {transcriptionStatus && <p role="status" aria-live="polite">{transcriptionStatus}</p>}
       {segment?.type === "video" ? (
         <strong className="rough-cut-clip" title={segment.name} data-testid="rough-cut-selected-clip">
           {segment.name || t("video")}

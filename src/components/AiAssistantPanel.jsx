@@ -1,3 +1,7 @@
+import { captureTranscriptionPreferences } from "../lib/transcriptionPreferences.js";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "../lib/transcriptionOutcome.js";
+import { workflowTranscriptionOutcome, isTranscriptionCancellation } from "../lib/workflowTranscription.js";
+import { editorTranscriptionStatus } from "../lib/editorTranscription.js";
 import { useState, useRef, useEffect } from "react";
 import {
   Sparkle,
@@ -30,6 +34,7 @@ import { extractMinimalProjectSummary } from "../lib/assistantSummary.js";
 import { classifyUserIntent } from "../lib/intentClassifier.js";
 import { parseNaturalLanguageEditingPlan, resolveTargetClipId } from "../lib/naturalLanguagePlanParser.js";
 import { inspectPunchIns } from "../lib/smartZoom.js";
+import { assertAssistantBase, captureAssistantBase, prepareAssistantProposal, assertDestructiveAssistantTargets, assertAssistantOperationUnlocked, assertAssistantChangedTracksUnlocked } from "../lib/assistantSafety.js";
 function formatFileSize(bytes) {
   if (!bytes || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -278,16 +283,36 @@ export function AiAssistantPanel({
   const messageEndRef = useRef(null);
   const textareaRef = useRef(null);
 
+  const planningRef = useRef(null);
+  const executionRef = useRef(null);
+  const attemptedApprovalsRef = useRef(new Set());
+  const cancelPlanning = () => {
+    planningRef.current?.controller.abort();
+    planningRef.current = null;
+    setLoading(false);
+  };
+  useEffect(() => () => {
+    planningRef.current?.controller.abort();
+    executionRef.current?.controller.abort();
+  }, []);
+  useEffect(() => {
+    if (!isExpanded) {
+      planningRef.current?.controller.abort();
+      planningRef.current = null;
+      setLoading(false);
+    }
+  }, [isExpanded]);
+
   const currentSnapshot = getProjectSnapshot ? getProjectSnapshot() : null;
   const projectSummary = currentSnapshot
     ? extractMinimalProjectSummary(currentSnapshot, {
-        currentTime,
-        selectedClipId: selectedVisualSegmentId || selectedAudioSegmentId || selectedSegmentId,
-        selectedVisualSegmentId,
-        selectedAudioSegmentId,
-        selectedSegmentId,
-        selectedTrack,
-      })
+      currentTime,
+      selectedClipId: selectedVisualSegmentId || selectedAudioSegmentId || selectedSegmentId,
+      selectedVisualSegmentId,
+      selectedAudioSegmentId,
+      selectedSegmentId,
+      selectedTrack,
+    })
     : null;
   const visualCount = projectSummary?.visualClips?.length || 0;
   const captionsCount = projectSummary?.captionsCount || 0;
@@ -301,14 +326,14 @@ export function AiAssistantPanel({
   const activeSuggestions = hasClips
     ? WITH_CLIPS_SUGGESTIONS
     : hasOtherContent
-    ? [
+      ? [
         "Switch aspect ratio to 9:16 vertical",
         "Set caption style to neon",
         "Make captions larger",
         "Add chapter marker at 2 seconds",
         "Set fit mode to contain",
       ]
-    : EMPTY_TIMELINE_SUGGESTIONS;
+      : EMPTY_TIMELINE_SUGGESTIONS;
 
   // Auto scroll to latest message when new messages arrive
   useEffect(() => {
@@ -410,6 +435,11 @@ export function AiAssistantPanel({
   };
 
   const handleExecuteEditingPlan = async (userPromptText, customContext = null) => {
+    cancelPlanning();
+    const request = { id: `assistant-${crypto.randomUUID()}`, controller: new AbortController() };
+    planningRef.current = request;
+    const base = captureAssistantBase(getProjectSnapshot());
+    const isCurrent = () => planningRef.current === request && !request.controller.signal.aborted;
     setLoading(true);
     setError(null);
 
@@ -424,6 +454,7 @@ export function AiAssistantPanel({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
+          signal: request.controller.signal,
           body: JSON.stringify({
             prompt: userPromptText,
             projectId: projectId || undefined,
@@ -442,6 +473,10 @@ export function AiAssistantPanel({
         fetchFailed = true;
       }
 
+      // Abort alone is insufficient: transports may still resolve after abort.
+      // Only the owning request may publish results, errors, or local fallbacks.
+      if (!isCurrent()) return;
+      assertAssistantBase(getProjectSnapshot(), base);
       if (data?.isClarification) {
         setActiveClarification({
           category: data.category || data.ambiguityType,
@@ -496,10 +531,7 @@ export function AiAssistantPanel({
             id: `asst-${Date.now()}`,
             role: "assistant",
             text: localParsed.explanation || "I've prepared an editing plan for your project.",
-            plan: {
-              ...localParsed,
-              baseRevision: currentSnapshot?.commandState?.revision ?? 0,
-            },
+            plan: prepareAssistantProposal(localParsed, base, request.id),
             status: "proposed",
             model: selectedModel || "natural-language-engine",
             timestamp: new Date(),
@@ -593,10 +625,7 @@ export function AiAssistantPanel({
         id: `asst-${Date.now()}`,
         role: "assistant",
         text: data.plan.explanation || "I've prepared an editing plan for your project.",
-        plan: {
-          ...data.plan,
-          baseRevision: currentSnapshot?.commandState?.revision ?? 0,
-        },
+        plan: prepareAssistantProposal(data.plan, base, request.id),
         status: "proposed",
         model: selectedModel,
         timestamp: new Date(),
@@ -604,6 +633,7 @@ export function AiAssistantPanel({
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err) {
+      if (!isCurrent()) return;
       const errorMsg = err.message || "Failed to generate plan.";
       setError(errorMsg);
       setMessages((prev) => [
@@ -617,7 +647,10 @@ export function AiAssistantPanel({
         },
       ]);
     } finally {
-      setLoading(false);
+      if (planningRef.current === request) {
+        planningRef.current = null;
+        setLoading(false);
+      }
     }
   };
 
@@ -662,6 +695,7 @@ export function AiAssistantPanel({
       return;
     }
 
+    cancelPlanning();
     const currentAttachments = [...attachments];
     const userMessage = {
       id: `user-${Date.now()}`,
@@ -797,12 +831,12 @@ export function AiAssistantPanel({
           (intent.ambiguityType === "caption_style"
             ? "style"
             : intent.ambiguityType === "caption_effect"
-            ? "effect"
-            : intent.ambiguityType === "caption_font"
-            ? "font"
-            : intent.ambiguityType === "speed_scope"
-            ? "speed_scope"
-            : "filter");
+              ? "effect"
+              : intent.ambiguityType === "caption_font"
+                ? "font"
+                : intent.ambiguityType === "speed_scope"
+                  ? "speed_scope"
+                  : "filter");
         setActiveClarification({
           category: clarCategory,
           offset: intent.offset || 0,
@@ -881,7 +915,10 @@ export function AiAssistantPanel({
   };
 
   const handleApplyApprovedPlan = async (msgId, plan) => {
-    if (!plan || !plan.actions?.length) return;
+    if (!plan || !plan.actions?.length || executionRef.current || attemptedApprovalsRef.current.has(plan.approvalId)) return;
+    const execution = { controller: new AbortController(), transcription: captureTranscriptionPreferences() };
+    executionRef.current = execution;
+    attemptedApprovalsRef.current.add(plan.approvalId);
     setApplyingPlanId(msgId);
     setError(null);
 
@@ -890,36 +927,52 @@ export function AiAssistantPanel({
       const toolActions = rawActions.filter((a) => a.type?.startsWith("tool."));
       const timelineActions = rawActions.filter((a) => !a.type?.startsWith("tool."));
 
-      // 1. If the plan includes auto-captions generation, invoke the workflow first and await it
-      let generatedCaptions = null;
-      const captionGenAction = rawActions.find((a) => a.type === "tool.generate_captions");
-      if (captionGenAction) {
-        if (typeof onGenerateCaptions !== "function") {
-          throw new Error("Caption generation workflow is not available.");
-        }
-        notify?.("Transcribing audio & generating captions...");
-        const asrResult = await onGenerateCaptions({ skipReview: true, throwOnError: true });
-        if (!asrResult?.segments?.length) {
-          throw new Error("No speech detected in audio. Caption generation could not produce any captions.");
-        }
-        generatedCaptions = asrResult.segments;
-      }
-
-      // Obtain fresh snapshot after any preceding tool actions (e.g. caption generation) have updated state
       const snapshot = getProjectSnapshot();
-      if (generatedCaptions) {
-        snapshot.captionSegments = generatedCaptions;
-        snapshot.captionsEnabled = true;
-        snapshot.script = generatedCaptions.map((c) => c.text).join("\n");
+      assertAssistantBase(snapshot, plan);
+      assertDestructiveAssistantTargets(rawActions, snapshot);
+      const captionGenAction = rawActions.find((a) => a.type === "tool.generate_captions");
+      const workflowActions = toolActions.filter(a => a.type !== "tool.generate_captions");
+      if (rawActions.length > 1 && rawActions.some(action => action.type === "track.set_locked")) {
+        throw new Error("Request lock changes separately from timeline edits.");
       }
+      // Review workflows/export do not expose rollback. Never partially apply a
+      // mixed plan containing one; ask for a separate, independently reviewed plan.
+      if ((workflowActions.length && rawActions.length !== 1) || toolActions.filter(a => a.type === "tool.generate_captions").length > 1) {
+        throw new Error("This plan combines nontransactional tools. Request each review/export workflow separately; no edits were applied.");
+      }
+      for (const action of rawActions) assertAssistantOperationUnlocked(snapshot, { ...action.params, type: action.type });
+      if (captionGenAction && typeof onGenerateCaptions !== "function") throw new Error("Caption generation workflow is not available.");
+      const assertCurrent = () => {
+        if (execution.controller.signal.aborted) throw new DOMException("Cancelled", "AbortError");
+        assertAssistantBase(getProjectSnapshot(), plan);
+      };
+      const stageCaptions = async () => {
+        let result;
+        try {
+          result = await onGenerateCaptions({ ...execution.transcription, stageOnly: true, throwOnError: true, signal: execution.controller.signal });
+        } catch (error) {
+          execution.transcriptionOutcome = workflowTranscriptionOutcome(error, execution.transcription,
+            isTranscriptionCancellation(error, execution.controller.signal) ? "cancelled" : "failed");
+          throw error;
+        }
+        if (execution.controller.signal.aborted) execution.transcriptionOutcome = workflowTranscriptionOutcome(null, execution.transcription, "cancelled");
+        assertCurrent();
+        if (!result?.segments?.length) {
+          execution.transcriptionOutcome = workflowTranscriptionOutcome(null, execution.transcription);
+          throw new Error("No speech detected. No assistant edits were applied.");
+        }
+        execution.transcriptionOutcome = getTranscriptionOutcome(result);
+        const captions = attachTranscriptionOutcome(result.segments, result);
+        return { ...snapshot, captionSegments: captions, captionsEnabled: true, script: captions.map(c => c.text).join("\n") };
+      };
 
       if (timelineActions.length > 0) {
         const mediaOrigins = {};
-        const operations = timelineActions.map((action, idx) => {
+        const operations = timelineActions.map((action) => {
           const op = {
-            id: `assistant-op-${Date.now()}-${idx}`,
-            type: action.type,
             ...action.params,
+            id: action.id,
+            type: action.type,
           };
 
           // Resolve target clipId if missing or shorthand
@@ -955,8 +1008,8 @@ export function AiAssistantPanel({
               targetTrack === "music"
                 ? (snapshot.musicSegments?.[0]?.id || "")
                 : targetTrack === "audio"
-                ? (selectedAudioSegmentId || snapshot.audioSegments?.[0]?.id || "")
-                : (selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id || "");
+                  ? (selectedAudioSegmentId || snapshot.audioSegments?.[0]?.id || "")
+                  : (selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id || "");
             op.clipId = resolveTargetClipId(op.clipId, snapshot, defaultId, targetTrack);
           } else if (action.type === "overlay.set_transform" && (!op.clipId || op.clipId === "selected" || op.clipId === "this" || op.clipId === "current")) {
             const overlayTarget =
@@ -969,7 +1022,7 @@ export function AiAssistantPanel({
 
           if (action.type === "visual.duplicate") {
             if (!op.newClipId) {
-              op.newClipId = `${op.clipId}-dup-${Date.now()}-${idx}`;
+              op.newClipId = `${op.clipId}-dup-${action.id}`;
             }
             if (op.newClipId && op.clipId) {
               mediaOrigins[op.newClipId] = { kind: "clip", id: op.clipId };
@@ -978,7 +1031,7 @@ export function AiAssistantPanel({
 
           if (action.type === "visual.split") {
             if (!op.rightClipId) {
-              op.rightClipId = `${op.clipId}-split-${Date.now()}-${idx}`;
+              op.rightClipId = `${op.clipId}-split-${action.id}`;
             }
             if (op.rightClipId && op.clipId) {
               mediaOrigins[op.rightClipId] = { kind: "clip", id: op.clipId };
@@ -1020,10 +1073,10 @@ export function AiAssistantPanel({
             }
           }
           if (action.type === "marker.add" && !op.markerId) {
-            op.markerId = `marker-${Date.now()}-${idx}`;
+            op.markerId = `marker-${action.id}`;
           }
           if (action.type === "caption.add") {
-            const capId = op.clipId || op.captionId || `caption-${Date.now()}-${idx}`;
+            const capId = op.clipId || op.captionId || `caption-${action.id}`;
             op.clipId = capId;
             op.captionId = capId;
           }
@@ -1119,6 +1172,9 @@ export function AiAssistantPanel({
           }
         }
 
+        if (captionGenAction && validOperations.length !== operations.length) {
+          throw new Error("Caption plans require every timeline action to validate. No edits were applied.");
+        }
         if (operations.length > 0 && validOperations.length === 0) {
           const feedbackMsg = skippedTransitionNotes.length
             ? `No transitions applied: ${skippedTransitionNotes.join("; ")}`
@@ -1143,7 +1199,8 @@ export function AiAssistantPanel({
           operations: validOperations,
         };
 
-        const testRun = applyCommandPlan(snapshot, commandPlan);
+        for (const operation of validOperations) assertAssistantOperationUnlocked(snapshot, operation);
+        let testRun = applyCommandPlan(snapshot, commandPlan);
         if (!testRun.ok) {
           if (testRun.code === "REVISION_CONFLICT") {
             throw Object.assign(
@@ -1160,6 +1217,17 @@ export function AiAssistantPanel({
           );
         }
 
+        assertAssistantChangedTracksUnlocked(snapshot, testRun.project);
+        // Reviewed transition no-ops retain their identities in the ledger.
+        testRun.project.commandState.appliedOperationIds = [...new Set([...testRun.project.commandState.appliedOperationIds, ...operations.map(operation => operation.id)])];
+        if (captionGenAction) {
+          const staged = await stageCaptions();
+          testRun = applyCommandPlan(staged, commandPlan);
+          if (!testRun.ok) throw new Error(`Cannot apply staged caption plan: ${testRun.message || testRun.code}`);
+          testRun.project.commandState.appliedOperationIds.push(captionGenAction.id);
+          assertAssistantChangedTracksUnlocked(snapshot, testRun.project);
+        }
+        assertCurrent();
         await onApplyPlan(testRun.project, { ...plan, mediaOrigins }, mediaOrigins);
 
         if (skippedTransitionNotes.length > 0) {
@@ -1176,39 +1244,71 @@ export function AiAssistantPanel({
         }
       }
 
-      // Execute any integrated AI tool triggers (except generate_captions which was already awaited)
+      if (captionGenAction && timelineActions.length === 0) {
+        const staged = await stageCaptions();
+        staged.commandState = { ...snapshot.commandState, revision: snapshot.commandState.revision + 1, appliedOperationIds: [...snapshot.commandState.appliedOperationIds, captionGenAction.id] };
+        assertAssistantChangedTracksUnlocked(snapshot, staged);
+        assertCurrent();
+        await onApplyPlan(staged, plan, {});
+      }
+      // Only a single nontransactional workflow can reach this dispatch.
       for (const toolAct of toolActions) {
         if (toolAct.type === "tool.generate_captions") {
           continue;
         }
-        const toolOp = { type: toolAct.type, ...toolAct.params };
+        assertCurrent();
+        const toolOp = { ...toolAct.params, type: toolAct.type };
+        const callbacks = {
+          "tool.scene_detection": onOpenSceneDetection, "tool.silence_removal": onOpenSilenceRemoval,
+          "tool.rough_cut": onOpenRoughCut, "tool.smart_pipeline": onOpenSmartPipeline,
+          "tool.smart_frame": onToggleSmartFrame, "tool.export": onExportVideo,
+        };
+        if (typeof callbacks[toolAct.type] !== "function") throw new Error(`Tool unavailable: ${toolAct.type}`);
         if (toolAct.type === "tool.scene_detection") {
           const clipId = resolveTargetClipId(toolOp.clipId, snapshot, selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id);
-          onOpenSceneDetection?.(clipId);
+          await onOpenSceneDetection(clipId);
         } else if (toolAct.type === "tool.silence_removal") {
-          onOpenSilenceRemoval?.();
+          await onOpenSilenceRemoval();
         } else if (toolAct.type === "tool.rough_cut") {
-          onOpenRoughCut?.();
+          await onOpenRoughCut();
         } else if (toolAct.type === "tool.smart_pipeline") {
           const clipId = resolveTargetClipId(toolOp.clipId, snapshot, selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id);
-          onOpenSmartPipeline?.(clipId);
+          await onOpenSmartPipeline(clipId, toolOp);
         } else if (toolAct.type === "tool.smart_frame") {
-          onToggleSmartFrame?.(toolOp.enabled);
+          await onToggleSmartFrame(toolOp.enabled);
         } else if (toolAct.type === "tool.export") {
-          onExportVideo?.();
+          await onExportVideo(toolOp);
         }
       }
 
-      notify?.(plan.explanation || "Applied AI editing plan");
+      const captionCompletion = execution.transcriptionOutcome
+        ? `Captions applied — ${editorTranscriptionStatus(execution.transcriptionOutcome)}` : null;
+      notify?.(captionCompletion || plan.explanation || "Applied AI editing plan");
 
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === msgId ? { ...m, status: "applied" } : m
+          m.id === msgId ? {
+            ...m, status: "applied", ...(captionCompletion ? {
+              transcriptionOutcome: execution.transcriptionOutcome,
+              text: `${m.text || plan.explanation || "Applied AI editing plan"}\n${captionCompletion}`,
+            } : {})
+          } : m
         )
       );
     } catch (err) {
+      if (execution.controller.signal.aborted) {
+        if (execution.transcriptionOutcome?.status === "cancelled") {
+          const text = editorTranscriptionStatus(execution.transcriptionOutcome);
+          setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: "error", text, transcriptionOutcome: execution.transcriptionOutcome } : m));
+          notify?.(text);
+        }
+        return;
+      }
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: "error" } : m));
       console.error("[AiAssistantPanel] Failed to apply plan:", err);
-      const errorMsg = err.message || "Failed to apply plan to timeline.";
+      const transcriptionFailure = execution.transcriptionOutcome && execution.transcriptionOutcome.status !== "succeeded"
+        ? execution.transcriptionOutcome : null;
+      const errorMsg = transcriptionFailure ? editorTranscriptionStatus(transcriptionFailure) : err.message || "Failed to apply plan to timeline.";
       setError(errorMsg);
       setMessages((prev) => [
         ...prev,
@@ -1217,16 +1317,20 @@ export function AiAssistantPanel({
           role: "assistant",
           text: `Failed to apply plan: ${errorMsg}`,
           status: "error",
+          ...(transcriptionFailure ? { transcriptionOutcome: transcriptionFailure } : {}),
           timestamp: new Date(),
         },
       ]);
       notify?.(`Error: ${errorMsg}`);
     } finally {
+      if (executionRef.current === execution) executionRef.current = null;
       setApplyingPlanId(null);
     }
   };
 
   const handleRejectPlan = (msgId) => {
+    const proposal = messages.find(message => message.id === msgId)?.plan;
+    if (proposal) attemptedApprovalsRef.current.add(proposal.approvalId);
     setMessages((prev) =>
       prev.map((m) =>
         m.id === msgId ? { ...m, status: "rejected" } : m
@@ -1236,6 +1340,9 @@ export function AiAssistantPanel({
   };
 
   const handleClearHistory = () => {
+    cancelPlanning();
+    executionRef.current?.controller.abort();
+    setActiveClarification(null);
     setMessages([]);
     setError(null);
     setPrompt("");
@@ -1815,13 +1922,13 @@ export function AiAssistantPanel({
                   hasClips
                     ? "Ask to edit clips, adjust speed, color grade, add captions, duck audio, or add transitions..."
                     : hasOtherContent
-                    ? "Ask to edit captions, audio volume, canvas format, or markers..."
-                    : "Ask to configure canvas ratio, caption styles, markers, or import video clips..."
+                      ? "Ask to edit captions, audio volume, canvas format, or markers..."
+                      : "Ask to configure canvas ratio, caption styles, markers, or import video clips..."
                 }
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={loading}
+                disabled={Boolean(applyingPlanId)}
                 maxLength={5000}
                 data-testid="ai-assistant-prompt-input"
               />
@@ -1853,11 +1960,12 @@ export function AiAssistantPanel({
                 </div>
 
                 <div className="ai-assistant-tray-actions">
+                  {loading && <button type="button" onClick={cancelPlanning} data-testid="ai-assistant-cancel-btn" title="Stop waiting for this plan; provider processing or billing may continue">Cancel planning</button>}
                   <span className="ai-assistant-char-counter">{prompt.length}/5000</span>
                   <button
                     type="submit"
                     className="ai-assistant-send-btn"
-                    disabled={loading || (!prompt.trim() && attachments.length === 0)}
+                    disabled={Boolean(applyingPlanId) || (!prompt.trim() && attachments.length === 0)}
                     data-testid="ai-assistant-generate-btn"
                     title="Send message (Enter)"
                   >

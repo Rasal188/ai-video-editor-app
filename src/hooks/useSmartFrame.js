@@ -31,20 +31,24 @@ export function useSmartFrame({
 
   useEffect(() => {
     const id = selectedSegment?.id || "";
-    if (id === selectedIdRef.current) return;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    selectedIdRef.current = id;
-    startingRatioRef.current = ratioId || "16:9";
     const applied = normalizeSmartFrame(selectedSegment?.smartFrame || selectedSegment?.visualEffects?.smartFrame);
-    setBaseline(applied);
-    setDraft(applied);
-    setAnalysisTrack(applied?.analysisTrack || null);
-    setSettings(applied?.settings || DEFAULT_SETTINGS);
-    setTargetRatioId(applied?.targetRatio || ratioId || "16:9");
-    setCompareMode(applied ? "after" : "original");
-    setJob({ running: false, stage: "idle", progress: 0, phase: "" });
-  }, [ratioId, selectedSegment?.id, selectedSegment?.smartFrame, selectedSegment?.visualEffects?.smartFrame]);
+    if (id !== selectedIdRef.current) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      selectedIdRef.current = id;
+      startingRatioRef.current = ratioId || "16:9";
+      setBaseline(applied);
+      setDraft(applied);
+      setAnalysisTrack(applied?.analysisTrack || null);
+      setSettings(applied?.settings || DEFAULT_SETTINGS);
+      setTargetRatioId(applied?.targetRatio || ratioId || "16:9");
+      setCompareMode(applied ? "after" : "original");
+      setJob({ running: false, stage: "idle", progress: 0, phase: "" });
+    } else if (!job.running) {
+      setBaseline(applied);
+      setDraft(applied);
+    }
+  }, [ratioId, selectedSegment?.id, selectedSegment?.smartFrame, selectedSegment?.visualEffects?.smartFrame, job.running]);
 
   const rebuildDraft = useCallback((track, nextRatioId, nextSettings) => {
     if (!track || !selectedSegment) return null;
@@ -166,7 +170,8 @@ export function useSmartFrame({
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const previewOverride = compareMode === "original" ? false : draft || baseline || undefined;
+  const dirty = Boolean(draft && (!baseline || JSON.stringify(draft) !== JSON.stringify(baseline)));
+  const previewOverride = compareMode === "original" ? false : (dirty ? draft : undefined);
   return useMemo(() => ({
     segment: selectedSegment,
     draft,
@@ -176,7 +181,7 @@ export function useSmartFrame({
     compareMode,
     job,
     previewOverride,
-    dirty: Boolean(draft && (!baseline || JSON.stringify(draft) !== JSON.stringify(baseline))),
+    dirty,
     analyze,
     apply,
     cancel,

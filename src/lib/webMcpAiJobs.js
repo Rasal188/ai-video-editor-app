@@ -1,10 +1,15 @@
+import { captureTranscriptionPreferences } from "./transcriptionPreferences.js";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "./transcriptionOutcome.js";
+import { workflowTranscriptionOutcome, isTranscriptionCancellation } from "./workflowTranscription.js";
+import { editorTranscriptionStatus } from "./editorTranscription.js";
 import { MAX_TIMELINE_DURATION_SECONDS, VOICES } from "../config/editor.js";
 import { AUTOMATIC_CAPTION_MODEL_ID } from "../config/models.js";
 import { VOICE_MODEL_HUGGING_FACE_REVISION, VOICE_MODEL_MODELSCOPE_REVISION } from "../config/voiceModels.js";
 import { DEFAULT_GENERATED_VOICE_GAP } from "./generatedVoicePlacement.js";
 import { prepareTextForVoice, splitTextAtSentenceEnd } from "./ttsText.js";
 
-const LANGUAGES = ["zh", "en", "ja", "ko", "es", "fr", "de", "pt", "th", "vi", "ru", "it", "id"];
+const LANGUAGES = ["zh", "en", "ja", "ko", "es", "fr", "de", "pt", "th", "vi", "ru", "it", "id", "hi", "ar"];
+const CLOUD_LANGUAGES = ["en", "es", "fr", "de", "pt", "ru", "hi", "zh", "ar"];
 const VOICE_LANGUAGES = { 中文: "zh", English: "en", 日本語: "ja", 한국어: "ko", Español: "es", Français: "fr", Deutsch: "de", Português: "pt", ไทย: "th", "Tiếng Việt": "vi", Русский: "ru", Italiano: "it", "Bahasa Indonesia": "id" };
 const MAX_TEXT = 2000;
 const MAX_SEGMENTS = 80;
@@ -83,7 +88,7 @@ function browserSupport(voice) {
  * The host owns preview/fingerprint validation and the atomic My assets commit.
  * No timeline mutation, model-cache probing, or download occurs during prepare.
  */
-export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID(), onUpdate = () => {} } = {}) {
+export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID(), onUpdate = () => { } } = {}) {
   const jobs = new Map();
   const requests = new Map();
   let active = null;
@@ -97,6 +102,10 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
     createdAt: job.createdAt, startedAt: job.startedAt, finishedAt: job.finishedAt,
     ...(job.segment ? { segment: job.segment } : {}),
     ...(job.result ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}),
+    ...(job.transcriptionOutcome ? {
+      transcriptionOutcome: job.transcriptionOutcome,
+      transcriptionStatus: editorTranscriptionStatus(job.transcriptionOutcome),
+    } : {}),
   });
   const publish = (job) => { try { onUpdate(describe(job)); } catch { /* Observers cannot interrupt inference/commits. */ } };
   const update = (job, phaseKey, progress, segment) => {
@@ -117,8 +126,9 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
   const capabilities = (input = {}) => {
     guard(); object(input, ["language"]);
     if (input.language !== undefined && !LANGUAGES.includes(input.language)) fail("INVALID_ARGUMENT");
+    const preferences = captureTranscriptionPreferences();
     return {
-      execution: "browser-local", modelReadiness: "not-probed", modelDownload: "on-demand-at-start",
+      execution: "provider-dependent", modelReadiness: "not-probed", modelDownload: "on-demand-at-start",
       requiresPrepare: true, requiresAllowModelDownload: true, maxConcurrentJobs: 1,
       voiceover: {
         available: browserSupport() && typeof getEditor().commitAiVoiceAssets === "function",
@@ -133,11 +143,16 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
         })),
       },
       transcription: {
-        available: browserSupport() && typeof globalThis.Worker === "function", modelId: AUTOMATIC_CAPTION_MODEL_ID,
+        available: browserSupport() && typeof globalThis.Worker === "function", modelId: preferences.provider === "local" ? AUTOMATIC_CAPTION_MODEL_ID : "ollalink-language-selected",
+        localFallbackModelId: AUTOMATIC_CAPTION_MODEL_ID,
         source: "ready-local-audio-asset", timeMapping: "source-range-seconds-plus-timeline-offset",
-        maxDuration: MAX_TRANSCRIPTION_SECONDS, languages: LANGUAGES, languageSelection: "automatic-with-preferred-language",
+        maxDuration: MAX_TRANSCRIPTION_SECONDS,
+        languages: preferences.provider === "ollalink" ? CLOUD_LANGUAGES : LANGUAGES,
+        provider: preferences.provider, language: preferences.language,
+        uploadsAudio: preferences.provider === "ollalink", fallback: preferences.provider === "ollalink" ? "local-on-temporary-outage-once" : "none",
+        languageSelection: "explicit-request-or-shared-spoken-language",
         delivery: "caption.add-operations-for-edit-preview", timelineInsertion: false,
-        cancellation: "terminate-worker-after-audio-decode", speedCurveMapping: false,
+        cancellation: "abort-request-or-worker-and-discard-late-results", speedCurveMapping: false,
       },
     };
   };
@@ -175,14 +190,26 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
       const sourceStart = number(raw.sourceStart ?? 0, 0, asset.duration);
       const duration = number(raw.duration ?? Math.min(MAX_TRANSCRIPTION_SECONDS, asset.duration - sourceStart), MIN_CAPTION_SECONDS, MAX_TRANSCRIPTION_SECONDS);
       if (sourceStart + duration > asset.duration + 0.001 || timelineOffset + duration > MAX_TIMELINE_DURATION_SECONDS) fail("INVALID_ARGUMENT");
-      const language = raw.language ?? (LANGUAGES.includes(getEditor().language) ? getEditor().language : "en");
-      if (!LANGUAGES.includes(language)) fail("INVALID_ARGUMENT");
+      const preferenceSnapshot = captureTranscriptionPreferences();
+      const language = raw.language ?? preferenceSnapshot.language;
+      const supported = preferenceSnapshot.provider === "ollalink" ? CLOUD_LANGUAGES : LANGUAGES;
+      if (!supported.includes(language)) fail("INVALID_ARGUMENT");
+      const transcription = captureTranscriptionPreferences({ ...preferenceSnapshot, language });
       return {
+        preferenceSnapshot, transcription,
+        execution: transcription.provider === "ollalink" ? "ollalink-cloud" : "browser-local",
+        uploadPolicy: {
+          uploadsAudio: transcription.provider === "ollalink", destination: transcription.provider === "ollalink" ? "Ollalink" : "on-device",
+          fallback: transcription.provider === "ollalink" ? "local-on-temporary-outage-once" : "none",
+          noFallbackOn: ["cancellation", "authentication", "invalid-input", "invalid-response", "unsupported-language"],
+        },
         request: { kind: "transcription", assetId: raw.assetId, language, sourceStart, duration, timelineOffset },
         source: { assetId: raw.assetId, name: String(asset.name || ""), duration: asset.duration }, downloadPolicy,
-        modelId: AUTOMATIC_CAPTION_MODEL_ID, delivery: "caption.add-operations-for-edit-preview", timelineInsertion: false,
-        languageSelection: "automatic-with-preferred-language", timeMapping: "source-range-seconds-plus-timeline-offset",
-        cancellation: "terminate-worker-after-audio-decode",
+        modelId: transcription.provider === "local" ? AUTOMATIC_CAPTION_MODEL_ID : "ollalink-language-selected",
+        localFallbackModelId: AUTOMATIC_CAPTION_MODEL_ID,
+        delivery: "caption.add-operations-for-edit-preview", timelineInsertion: false,
+        languageSelection: "explicit-request-or-shared-spoken-language", timeMapping: "source-range-seconds-plus-timeline-offset",
+        cancellation: "abort-request-or-worker-and-discard-late-results",
       };
     }
     fail("INVALID_ARGUMENT");
@@ -257,15 +284,19 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
     aborted(job.controller.signal); update(job, "aiTranscribing", null);
     const result = await transcribeAudioToCaptionSegments(blob, {
       preferredLanguage: request.language, timelineOffset: request.timelineOffset,
+      ...job.transcription,
       signal: job.controller.signal, requireWorker: true,
       onProgress: ({ progress, phase }) => update(job, /下载|初始化/.test(phase) ? "aiPreparing" : /解码/.test(phase) ? "aiDecoding" : "aiTranscribing", progress),
     });
     aborted(job.controller.signal);
+    job.transcriptionOutcome = getTranscriptionOutcome(result);
     const rangeEnd = Math.min(MAX_TIMELINE_DURATION_SECONDS, request.timelineOffset + result.duration);
-    const rawCaptions = result.segments.map((segment) => ({
+    const rawCaptions = attachTranscriptionOutcome(result.segments.map((segment) => ({
       clipId: `ai-caption-${makeId()}`, text: segment.text,
       start: Math.max(request.timelineOffset, segment.start), end: Math.min(rangeEnd, segment.end),
-    })).filter((segment) => segment.end > segment.start);
+      ...(Array.isArray(segment.words) ? { words: segment.words } : {}),
+      ...(segment.transcriptionProvider ? { transcriptionProvider: segment.transcriptionProvider } : {}),
+    })).filter((segment) => segment.end > segment.start), result);
     // Whisper may emit a word clipped to the last few samples. Keep its words
     // by merging adjacent short fragments rather than returning an operation
     // that the shared caption command's 0.2-second minimum would reject.
@@ -276,19 +307,22 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
         const separator = ["zh", "ja"].includes(result.language) ? "" : " ";
         previous.text = `${previous.text}${separator}${caption.text}`;
         previous.end = Math.max(previous.end, caption.end);
+        if (previous.words || caption.words) previous.words = [...(previous.words || []), ...(caption.words || [])];
       } else captions.push(caption);
     }
     if (captions.some((caption) => caption.end - caption.start < MIN_CAPTION_SECONDS - 1e-9)) fail("AI_FAILED");
     if (!captions.length || captions.length > 500) fail("AI_FAILED");
-    return {
+    return attachTranscriptionOutcome({
       delivery: "caption.add-operations-for-edit-preview", assetId: request.assetId,
+      provider: result.provider, fallbackFrom: result.fallbackFrom,
+      fallbackReasonCode: result.fallbackReasonCode,
       language: result.language, languageDetected: result.languageDetected, text: result.text,
       duration: result.duration, captions, operations: captions.map((caption) => ({ type: "caption.add", ...caption })),
       timelineInserted: false,
-    };
+    }, result);
   };
   const start = (input, { signal } = {}) => {
-    guard(); object(input, ["stateToken", "requestId", "request", "allowModelDownload"]);
+    guard(); object(input, ["stateToken", "requestId", "request", "allowModelDownload", "preparedPreferences"]);
     const stateToken = string(input.stateToken);
     const requestId = string(input.requestId);
     if (input.allowModelDownload !== true) fail("AI_MODEL_DOWNLOAD_REQUIRED");
@@ -304,6 +338,9 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
     aborted(signal);
     if (active || getEditor().isBusy?.()) fail("EDITOR_BUSY");
     const plan = prepare({ request: input.request });
+    if (plan.transcription && input.preparedPreferences
+      && (plan.preferenceSnapshot.provider !== input.preparedPreferences.provider
+        || plan.preferenceSnapshot.language !== input.preparedPreferences.language)) fail("STALE_STATE");
     if (requests.size >= MAX_REQUESTS) fail("AI_JOB_LIMIT");
     if (jobs.size >= MAX_JOBS) {
       const oldest = [...jobs.values()].find((job) => terminal(job.status));
@@ -313,6 +350,7 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
     const sourceBlob = plan.request.kind === "transcription" ? findAsset(plan.request.assetId).blob : null;
     const job = {
       jobId: makeId(), requestId, stateToken, plan, controller: new AbortController(),
+      transcription: plan.transcription,
       status: "running", progress: null, phaseKey: "aiPreparing", cancelRequested: false,
       createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), finishedAt: null,
     };
@@ -329,7 +367,11 @@ export function createWebMcpAiJobs(getEditor, { makeId = () => crypto.randomUUID
       // A late cancellation cannot remove an already committed asset batch.
       job.result = result; finish(job, "succeeded");
     }).catch((error) => {
-      if (error?.name !== "AbortError" && !job.controller.signal.aborted) console.warn("[WebMCP AI] Local job failed.", error);
+      if (job.plan.request.kind === "transcription") {
+        job.transcriptionOutcome = workflowTranscriptionOutcome(error, job.transcription,
+          isTranscriptionCancellation(error, job.controller.signal) ? "cancelled" : "failed");
+      }
+      if (error?.name !== "AbortError" && !job.controller.signal.aborted) console.warn("[WebMCP AI] Job failed.", error);
       finish(job, error?.name === "AbortError" || job.controller.signal.aborted ? "cancelled" : "failed",
         error?.name === "AbortError" || job.controller.signal.aborted ? undefined : error?.code === "EDITOR_BUSY" ? "EDITOR_BUSY" : "AI_FAILED");
     });

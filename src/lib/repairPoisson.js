@@ -9,7 +9,8 @@ export async function blendRepairPoisson({ original, repaired, model, crop, rect
   const scale = Math.min(1, 96 / Math.max(rect.width, rect.height));
   const w = Math.max(3, Math.round(rect.width * scale)) + 2, h = Math.max(3, Math.round(rect.height * scale)) + 2;
   const guide = new Float32Array(w * h * 3), correction = new Float32Array(w * h * 3);
-  const sample = (pixels, stride, x, y, c) => pixels[(y * stride + x) * 4 + c] + (pixels === model ? modelOffset[c] : 0);
+  const sampleOrig = (x, y, c) => original[(y * width + x) * 4 + c];
+  const sampleRepaired = (x, y, c) => repaired[(y * rect.width + x) * 4 + c];
   const check = () => { if (signal?.aborted) throw new DOMException("Repair canceled", "AbortError"); };
   check();
   let anchors = 0;
@@ -18,28 +19,16 @@ export async function blendRepairPoisson({ original, repaired, model, crop, rect
     const rx = clamp(Math.round((x - 1) * (rect.width - 1) / (w - 3)), 0, rect.width - 1);
     const ry = clamp(Math.round((y - 1) * (rect.height - 1) / (h - 3)), 0, rect.height - 1);
     const outside = !x || !y || x === w - 1 || y === h - 1;
-    const sx = rect.x + (!x ? -1 : x === w - 1 ? rect.width : rx);
-    const sy = rect.y + (!y ? -1 : y === h - 1 ? rect.height : ry);
-    const valid = (px, py) => px >= 0 && py >= 0 && px < width && py < height
-      && px >= crop.x && py >= crop.y && px < crop.x + crop.width && py < crop.y + crop.height;
-    for (let c = 0; c < 3; c++) guide[i * 3 + c] = outside && valid(sx, sy)
-      ? sample(model, crop.width, sx - crop.x, sy - crop.y, c) : sample(repaired, rect.width, rx, ry, c);
-    if (!outside || !valid(sx, sy)) continue;
-    // Only known exterior pixels constrain the solve, never source lettering in
-    // the mask. Robust local samples reduce contamination by crossing text/edges.
-    const differences = [[], [], []];
-    for (let offset = -2; offset <= 2; offset++) {
-      const px = sx + ((!y || y === h - 1) ? offset : 0), py = sy + ((!x || x === w - 1) ? offset : 0);
-      if (!valid(px, py) || (px >= rect.x && py >= rect.y && px < rect.x + rect.width && py < rect.y + rect.height)) continue;
-      let change = 0;
-      for (let c = 0; c < 3; c++) change += Math.abs(sample(model, crop.width, px - crop.x, py - crop.y, c) - guide[i * 3 + c]);
-      if (change > 45) continue;
-      for (let c = 0; c < 3; c++) differences[c].push(sample(original, width, px, py, c) - sample(model, crop.width, px - crop.x, py - crop.y, c));
-    }
-    if (differences[0].length < 3) continue;
+    const sx = clamp(rect.x + (!x ? -1 : x === w - 1 ? rect.width : rx), 0, width - 1);
+    const sy = clamp(rect.y + (!y ? -1 : y === h - 1 ? rect.height : ry), 0, height - 1);
+    // Guide uses true original outside rect and repaired inside:
     for (let c = 0; c < 3; c++) {
-      const values = differences[c].sort((a, b) => a - b);
-      correction[i * 3 + c] = clamp(values[Math.floor(values.length / 2)], -24, 24);
+      guide[i * 3 + c] = outside ? sampleOrig(sx, sy, c) : sampleRepaired(rx, ry, c);
+    }
+    if (!outside) continue;
+    // Boundary constraint: difference between true original exterior and repaired edge
+    for (let c = 0; c < 3; c++) {
+      correction[i * 3 + c] = clamp(sampleOrig(sx, sy, c) - sampleRepaired(rx, ry, c), -16, 16);
     }
     anchors++;
   }
@@ -90,7 +79,7 @@ export async function blendRepairPoisson({ original, repaired, model, crop, rect
     for (let c = 0; c < 3; c++) {
       let value = 0;
       for (let k = 0; k < 4; k++) value += correction[nodes[k] * 3 + c] * weights[k];
-      repaired[i + c] += strength * value / total;
+      repaired[i + c] = clamp(Math.round(repaired[i + c] + strength * value / total), 0, 255);
     }
   }
   return true;

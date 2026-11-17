@@ -1,3 +1,6 @@
+import { captureTranscriptionPreferences } from "../lib/transcriptionPreferences.js";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "../lib/transcriptionOutcome.js";
+import { cancelledWorkflowTranscription, isTranscriptionCancellation, workflowTranscriptionOutcome, workflowTranscriptionStatus } from "../lib/workflowTranscription.js";
 /**
  * @file useShortsStudio.js
  * React hook managing the AI Shorts Studio lifecycle:
@@ -152,8 +155,12 @@ export function useShortsStudio({
   }, []);
 
   const open = (sourceId) => {
-    if (sourceId) setSelectedSourceId(sourceId);
-    else if (!selectedSourceId && activeSource) setSelectedSourceId(activeSource.id);
+    const targetSourceId = sourceId || selectedSourceId || activeSource?.id;
+    if (targetSourceId) setSelectedSourceId(targetSourceId);
+    const targetSource = availableSources.find((s) => s.id === targetSourceId) || activeSource;
+    if (targetSource?.source && Number.isFinite(targetSource.source.cropX)) {
+      setSettings((s) => ({ ...s, cropX: targetSource.source.cropX }));
+    }
     setError(null);
     setIsMinimized(false);
     setStage(candidates.length ? "review" : "configure");
@@ -162,13 +169,12 @@ export function useShortsStudio({
 
   const close = () => {
     stopAudition();
-    abortRef.current?.abort();
+    if (abortRef.current) cancelAnalysis();
     exportAbortRef.current?.abort();
     targetedAbortControllersRef.current?.forEach((ctrl) => ctrl.abort());
     targetedAbortControllersRef.current?.clear();
     analyzingCandidatesRef.current?.clear();
     setTargetedAnalysis({ candidateId: null, running: false, status: "idle", error: null });
-    setJob({ running: false, progress: 0, phase: "" });
     setExportJob({ running: false, progress: 0, current: 0, total: 0, title: "", phase: "", error: null });
     setIsMinimized(false);
     setIsOpen(false);
@@ -184,8 +190,13 @@ export function useShortsStudio({
   };
 
   const cancelAnalysis = () => {
-    abortRef.current?.abort();
-    setJob({ running: false, progress: 0, phase: "" });
+    const controller = abortRef.current;
+    controller?.abort();
+    abortRef.current = null;
+    setJob((current) => attachTranscriptionOutcome(
+      { ...current, running: false, progress: 0, phase: "" },
+      cancelledWorkflowTranscription(controller, controller?.transcriptionPreferences)
+    ));
     setStage(candidates.length ? "review" : "configure");
     notify?.(t("shortsAnalysisCancelled", "Analysis cancelled."));
   };
@@ -254,8 +265,12 @@ export function useShortsStudio({
     }
 
     abortRef.current?.abort();
+    const transcription = captureTranscriptionPreferences();
     const abortController = new AbortController();
     abortRef.current = abortController;
+
+    abortController.transcriptionPreferences = transcription;
+    let outcome = null;
 
     setError(null);
     setStage("analyzing");
@@ -274,10 +289,15 @@ export function useShortsStudio({
         timelineCaptionSegments: captionSegments,
       });
 
+      outcome = getTranscriptionOutcome(sourceCaptions);
+      sourceCaptions = attachTranscriptionOutcome(sourceCaptions, outcome);
+      abortController.transcriptionOutcome = outcome;
+
       // If speech transcript is empty, attempt audio extraction and transcription if speech is preferred
       if (!sourceCaptions.length && activeSource.source.blob && settings.contentType !== "gaming" && settings.contentType !== "sports") {
         setJob({ running: true, progress: 20, phase: t("shortsExtractingAudio", "Extracting source audio for speech recognition…") });
         try {
+          abortController.transcriptionStarted = true;
           // FIX 2: Safe audio extraction - reuse existing pre-extracted audio blobs or guard against memory exhaustion
           let audioBlob = null;
           if (activeSource.source.compatibilityAudioBlob instanceof Blob) {
@@ -298,24 +318,31 @@ export function useShortsStudio({
             }
           }
 
-          if (abortController.signal.aborted) {
-            return;
-          }
+          abortController.signal.throwIfAborted();
 
           if (audioBlob) {
-            setJob({ running: true, progress: 35, phase: t("shortsTranscribing", "Analyzing speech sentences and timestamps (Whisper ASR)…") });
+            setJob({ running: true, progress: 35, phase: t("shortsTranscribing", "Analyzing speech sentences and timestamps…") });
             const asrRes = await transcribeAudioToCaptionSegments(audioBlob, {
+              ...transcription,
               signal: abortController.signal,
               onProgress: ({ progress }) => {
-                setJob((j) => ({ ...j, progress: Math.min(65, 35 + (progress || 0) * 0.3) }));
+                if (!abortController.signal.aborted) setJob((j) => ({ ...j, progress: Number.isFinite(progress) ? Math.min(65, 35 + progress * 0.3) : j.progress }));
               },
             });
+            abortController.signal.throwIfAborted();
+            outcome = getTranscriptionOutcome(asrRes);
             if (asrRes?.segments?.length) {
-              sourceCaptions = asrRes.segments;
+              sourceCaptions = attachTranscriptionOutcome(asrRes.segments, outcome);
             }
+          } else {
+            outcome = workflowTranscriptionOutcome(null, transcription);
           }
+          abortController.transcriptionOutcome = outcome;
         } catch (err) {
-          if (abortController.signal.aborted) return;
+          outcome = workflowTranscriptionOutcome(err, transcription,
+            isTranscriptionCancellation(err, abortController.signal) ? "cancelled" : "failed");
+          abortController.transcriptionOutcome = outcome;
+          if (isTranscriptionCancellation(err, abortController.signal)) throw err;
           console.warn("Speech transcription fallback skipped:", err?.message);
         }
       }
@@ -363,12 +390,13 @@ export function useShortsStudio({
             }
           }
         } catch (err) {
-          if (abortController.signal.aborted) return;
+          if (abortController.signal.aborted) throw err;
           console.warn("[ShortsStudio] Local face detection pass skipped:", err?.message);
         }
       }
 
-      setJob({ running: true, progress: 85, phase: t("shortsFindingMoments", "Evaluating hooks, conversational bounds, and visual action…") });
+      abortController.signal.throwIfAborted();
+      setJob(attachTranscriptionOutcome({ running: true, progress: 85, phase: t("shortsFindingMoments", "Evaluating hooks, conversational bounds, and visual action…") }, outcome));
 
       const discovery = discoverShortCandidates({
         sourceMedia: activeSource.source,
@@ -383,22 +411,28 @@ export function useShortsStudio({
         throw new Error(discovery.message || t("shortsNoMomentsFound", "Could not discover candidate moments matching criteria."));
       }
 
-      setCandidates(discovery.candidates);
+      abortController.signal.throwIfAborted();
+      if (abortRef.current !== abortController) return;
+      setCandidates(attachTranscriptionOutcome(discovery.candidates, outcome));
       setActiveCandidateId(discovery.candidates[0]?.id || "");
       setSelectedCandidateIds(new Set(discovery.candidates.map((c) => c.id)));
       setStage("review");
-      setJob({ running: false, progress: 100, phase: "" });
-      notify?.(t("shortsDiscoveredSuccess", `Discovered ${discovery.candidates.length} candidate shorts!`));
+      setJob(attachTranscriptionOutcome({ running: false, progress: 100, phase: "" }, outcome));
+      notify?.([t("shortsDiscoveredSuccess", `Discovered ${discovery.candidates.length} candidate shorts!`), workflowTranscriptionStatus(outcome)].filter(Boolean).join(" "));
     } catch (err) {
       console.error("[ShortsStudio] startAnalysis caught error:", err);
-      if (err?.name === "AbortError" || abortController.signal.aborted) {
-        setJob({ running: false, progress: 0, phase: "" });
+      if (abortRef.current !== abortController) return;
+      outcome = getTranscriptionOutcome(err) || outcome;
+      if (isTranscriptionCancellation(err, abortController.signal)) {
+        setJob(attachTranscriptionOutcome({ running: false, progress: 0, phase: "" }, outcome));
         setStage("configure");
         return;
       }
       setError(err?.message || String(err));
       setStage("configure");
-      setJob({ running: false, progress: 0, phase: "" });
+      setJob(attachTranscriptionOutcome({ running: false, progress: 0, phase: "" }, outcome));
+    } finally {
+      if (abortRef.current === abortController) abortRef.current = null;
     }
   };
 
@@ -909,7 +943,7 @@ export function useShortsStudio({
       aspectRatio: targetCandidate.aspectRatio || settings.aspectRatio,
       captionPresetId: settings.captionPresetId,
       autoReframing: targetCandidate.framingMode || settings.autoReframing,
-      cropX: targetCandidate.cropX ?? settings.cropX ?? 0.5,
+      cropX: targetCandidate.cropX ?? settings.cropX ?? (Number.isFinite(activeSource?.source?.cropX) ? activeSource.source.cropX : 0.5),
       captionSegments: activeSourceCaptions,
       faceDetections: sourceFaceDetections,
     });

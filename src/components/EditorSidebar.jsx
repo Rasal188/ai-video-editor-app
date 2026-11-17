@@ -138,6 +138,11 @@ export function EditorSidebar({ model: d }) {
             segments={d.segments}
             currentSegmentIndex={d.currentSegmentIndex}
             captionSegments={d.captionSegments}
+            captionTrackLocked={d.trackLocks?.caption}
+            getCaptionTextProjectIdentity={() => {
+              const state = d.getProjectSnapshot?.().commandState;
+              return state ? `${state.projectIdentity}:${Boolean(state.changing)}` : undefined;
+            }}
             captionTargetDuration={d.captionTargetDuration}
             selectedCaptionSegment={d.selectedCaptionSegment}
             selectedSegmentId={d.selectedSegmentId}
@@ -184,6 +189,8 @@ export function EditorSidebar({ model: d }) {
             setSourceAudioVolume={d.setSourceAudioVolume}
             clearSourceAudioTrack={d.clearSourceAudioTrack}
             generateCaptionsFromSourceAudio={d.generateCaptionsFromSourceAudio}
+            cancelCaptionTranscription={d.cancelCaptionTranscription}
+            transcriptionStatusText={d.statusText}
             isGeneratingCaptions={d.status === "captioning"}
             automaticCaptionProgress={d.status === "captioning" ? d.progress : 0}
             separateSourceVocals={d.separateSourceVocals}

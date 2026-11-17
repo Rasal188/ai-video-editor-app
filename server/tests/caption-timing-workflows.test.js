@@ -1,3 +1,6 @@
+import { encodeCloudWav } from "../../src/lib/cloudTranscriptionAudio.js";
+// Stage 2 capability checks require real decodable media, not size/type stubs.
+const captionMediaFixture = () => encodeCloudWav(new Float32Array(16000));
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { captionSegmentsFromWords } from "../../src/lib/captionSegmentation.js";
@@ -411,8 +414,8 @@ describe("Caption Timing Across All Workflows (Deterministic Regression Suite)",
   // -------------------------------------------------------------------------
   describe("7. Normal Auto Captions source resolution", () => {
     it("resolves target video clip properly and is not hijacked by sourceAudioBlob", async () => {
-      const mockVideoBlob = new Blob(["video-media"], { type: "video/mp4" });
-      const mockSourceAudioBlob = new Blob(["source-audio"], { type: "audio/wav" });
+      const mockVideoBlob = captionMediaFixture();
+      const mockSourceAudioBlob = captionMediaFixture();
 
       const d = {
         visualSegments: [

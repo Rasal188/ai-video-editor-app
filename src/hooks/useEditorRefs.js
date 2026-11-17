@@ -16,6 +16,7 @@ export function useEditorRefs() {
     musicRef: useRef(null),
     musicUrlRef: useRef(""),
     pointerAssetDragRef: useRef(null),
+    playbackSessionRef: useRef({ playing: false }),
     previewCanvasRef: useRef(null),
     previewShellRef: useRef(null),
     previewVideoRef: useRef(null),

@@ -42,6 +42,8 @@ import { resolveSmartFrameCropAtTime } from "../lib/smartFrame.js";
 import { isCandidateFallbackDueToMissingDetections } from "../lib/shortsReframing.js";
 import { BUILTIN_CAPTION_STYLE_PRESETS } from "../lib/captionStyles.js";
 import "./AiShortsStudioModal.css";
+import { workflowTranscriptionStatus } from "../lib/workflowTranscription.js";
+import { ShortsBackgroundNotification } from "./ShortsBackgroundNotification.jsx";
 
 export function AiShortsStudioModal({
   isOpen,
@@ -101,6 +103,7 @@ export function AiShortsStudioModal({
   } = studio;
 
   const activeCandidate = candidates.find((c) => c.id === activeCandidateId) || candidates[0] || null;
+  const transcriptionStatus = workflowTranscriptionStatus(job);
 
   const isSubjectTracking = ["smart-subject", "smart-zoom"].includes(activeCandidate?.framingMode || settings.autoReframing);
   const isAnalyzingTarget = Boolean(
@@ -159,7 +162,7 @@ export function AiShortsStudioModal({
       if (video.currentTime < activeCandidate.startTime || video.currentTime >= activeCandidate.endTime) {
         video.currentTime = activeCandidate.startTime;
       }
-      video.play().then(() => setIsPlayingPreview(true)).catch(() => {});
+      video.play().then(() => setIsPlayingPreview(true)).catch(() => { });
     }
   };
 
@@ -168,47 +171,23 @@ export function AiShortsStudioModal({
   // Minimized Background Mode (Requirement 7)
   if (isMinimized) {
     const isJobActive = job.running || exportJob?.running;
-    return (
-      <div className="shorts-minimized-floating-banner" role="status" aria-live="polite">
-        <div className="shorts-minimized-info">
-          {isJobActive && <div className="shorts-spinner-sm" />}
-          <div className="shorts-minimized-text">
-            <strong>
-              {job.running
-                ? t("shortsAnalyzingMini", "AI Shorts Studio — Analyzing")
-                : exportJob?.running
-                  ? t("shortsExportingMini", `Exporting Short (${exportJob.current}/${exportJob.total})`)
-                  : t("shortsReadyMini", "AI Shorts Studio")}
-            </strong>
-            <span className="shorts-minimized-phase">
-              {job.running
-                ? `${job.phase || "Discovering moments…"} (${Math.round(job.progress)}%)`
-                : exportJob?.running
-                  ? `${exportJob.title ? `"${exportJob.title}" — ` : ""}${exportJob.phase || "Rendering"} (${Math.round(exportJob.progress)}%)`
-                  : t("shortsCandidatesReady", `${candidates.length} candidate moments ready`)}
-            </span>
-          </div>
-        </div>
-        <div className="shorts-minimized-actions">
-          <button
-            type="button"
-            className="shorts-btn shorts-btn-ghost-sm"
-            onClick={restore}
-          >
-            {isJobActive ? t("shortsViewProgress", "View Progress") : t("shortsReview", "Review")}
-          </button>
-          {isJobActive && (
-            <button
-              type="button"
-              className="shorts-btn shorts-btn-ghost-sm shorts-btn-danger-sm"
-              onClick={job.running ? cancelAnalysis : cancelExport}
-            >
-              {t("cancel", "Cancel")}
-            </button>
-          )}
-        </div>
-      </div>
-    );
+    return <ShortsBackgroundNotification
+      running={Boolean(isJobActive)}
+      title={job.running
+        ? t("shortsAnalyzingMini", "AI Shorts Studio — Analyzing")
+        : exportJob?.running
+          ? t("shortsExportingMini", `Exporting Short (${exportJob.current}/${exportJob.total})`)
+          : t("shortsReadyMini", "AI Shorts Studio")}
+      phase={job.running
+        ? `${job.phase || "Discovering moments…"} (${Math.round(job.progress)}%)`
+        : exportJob?.running
+          ? `${exportJob.title ? `"${exportJob.title}" — ` : ""}${exportJob.phase || "Rendering"} (${Math.round(exportJob.progress)}%)`
+          : t("shortsCandidatesReady", `${candidates.length} candidate moments ready`)}
+      transcriptionStatus={transcriptionStatus}
+      onReview={restore}
+      onCancel={job.running ? cancelAnalysis : cancelExport}
+      t={t}
+    />;
   }
   const renderConfigStage = () => (
     <div className="shorts-config-grid">
@@ -637,9 +616,8 @@ export function AiShortsStudioModal({
               {/* Subject Tracking Mode Indicator Pill */}
               {isSubjectTracking && (
                 <div
-                  className={`shorts-preview-status-pill ${
-                    isAnalyzingTarget ? "analyzing" : (isFallbackTrack ? "fallback" : "tracked")
-                  }`}
+                  className={`shorts-preview-status-pill ${isAnalyzingTarget ? "analyzing" : (isFallbackTrack ? "fallback" : "tracked")
+                    }`}
                   role="status"
                   aria-label="Tracking state"
                 >
@@ -976,6 +954,7 @@ export function AiShortsStudioModal({
         </header>
 
         <div className="shorts-studio-content">
+          {transcriptionStatus && <p role="status" aria-live="polite">{transcriptionStatus}</p>}
           {error && <div className="shorts-error-banner">{error}</div>}
           {stage === "configure" && renderConfigStage()}
           {stage === "analyzing" && renderAnalyzingStage()}

@@ -5,6 +5,10 @@ import { cookieParserMiddleware } from "./middleware/auth.js";
 import healthRouter from "./routes/health.js";
 import apiRouter from "./routes/api.js";
 
+import subtitleToolsRouter from "./routes/subtitleTools.js";
+import ttsRouter from "./routes/tts.js";
+import diarizationRouter from "./routes/diarization.js";
+
 export function createApp() {
   const app = express();
 
@@ -25,9 +29,14 @@ export function createApp() {
     })
   );
 
-  // Body parsing & Cookie parsing
-  app.use(express.json({ limit: "10mb" }));
+  // Paid text tools have their own bounded, sanitized parser after authentication.
   app.use(cookieParserMiddleware);
+  app.use("/api/subtitle-tools", subtitleToolsRouter);
+  app.use("/api/tts", ttsRouter);
+  app.use("/api/diarization", diarizationRouter);
+
+  // Body parsing for existing routes remains unchanged.
+  app.use(express.json({ limit: "10mb" }));
 
   // Routes
   app.use(healthRouter);

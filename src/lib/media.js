@@ -150,13 +150,13 @@ export function getVideoTrackSampleCount(duration, maxFrames = VIDEO_TRACK_FRAME
       ? 1 / 30
       : safeDuration <= 30
         ? 1 / 20
-      : safeDuration <= 60
-        ? 0.1
-      : safeDuration <= 120
-        ? 0.2
-        : safeDuration <= 600
-          ? 0.5
-          : 1.5;
+        : safeDuration <= 60
+          ? 0.1
+          : safeDuration <= 120
+            ? 0.2
+            : safeDuration <= 600
+              ? 0.5
+              : 1.5;
 
   return Math.max(1, Math.min(maxFrames, Math.ceil(safeDuration / targetStep)));
 }
@@ -251,14 +251,14 @@ async function extractVideoTrackFramesWithWebCodecs(src, sampleTimes, options) {
     const source = src instanceof Blob
       ? new BlobSource(src)
       : new UrlSource(String(src), {
-          requestInit: {
-            cache: "no-store",
-            credentials: "omit",
-            referrerPolicy: "strict-origin-when-cross-origin",
-          },
-          maxCacheSize: 16 * 1024 * 1024,
-          parallelism: 2,
-        });
+        requestInit: {
+          cache: "no-store",
+          credentials: "omit",
+          referrerPolicy: "strict-origin-when-cross-origin",
+        },
+        maxCacheSize: 16 * 1024 * 1024,
+        parallelism: 2,
+      });
     if (signal?.aborted) throw signal.reason || new DOMException("Aborted", "AbortError");
     input = new Input({ source, formats: ALL_FORMATS });
     const track = await input.getPrimaryVideoTrack();
@@ -540,7 +540,7 @@ export async function decodeWaveform(blob, barCount = 118, options = {}) {
       peaks: peaks.map((peak) => Math.max(0.04, Math.min(1, Math.pow(peak / strongest, 0.72)))),
     };
   } finally {
-    if (!borrowedAudioContext) await audioContext.close().catch(() => {});
+    if (!borrowedAudioContext) await audioContext.close().catch(() => { });
   }
 }
 
@@ -596,7 +596,7 @@ export async function sliceAudioBlob(blob, start = 0, duration = Infinity) {
     }
     return encodeAudioBufferAsWav(sliced);
   } finally {
-    await context.close().catch(() => {});
+    await context.close().catch(() => { });
   }
 }
 
@@ -624,7 +624,7 @@ export async function concatenateAudioBlobs(blobs = []) {
     }
     return encodeAudioBufferAsWav(await offline.startRendering());
   } finally {
-    await decoder.close().catch(() => {});
+    await decoder.close().catch(() => { });
   }
 }
 
@@ -642,7 +642,7 @@ export async function reverseAudioBlob(blob) {
     }
     return encodeAudioBufferAsWav(reversed);
   } finally {
-    await context.close().catch(() => {});
+    await context.close().catch(() => { });
   }
 }
 
@@ -808,11 +808,11 @@ export function createTemporalMaskCache(urls, maxEntries = 8) {
       if (entry?.image) {
         entries.delete(url);
         entries.set(url, entry);
-        prefetchAround(url).catch(() => {});
+        prefetchAround(url).catch(() => { });
         lastReadyImage = entry.image;
         return entry.image;
       }
-      prefetchAround(url).catch(() => {});
+      prefetchAround(url).catch(() => { });
       return lastReadyImage;
     },
     dispose() {
@@ -1551,20 +1551,20 @@ export function drawPreviewFrame(context, visual, canvas, options) {
   visibleStickers.forEach((activeSticker, index) => {
     const activeStickerImage = stickerImages[index] ?? (activeSticker === sticker ? stickerImage : null);
     if (activeSticker?.src && activeStickerImage) {
-    const geometry = getStickerRenderGeometry(activeSticker, activeStickerImage, canvas);
-    context.save();
-    context.globalAlpha = geometry.opacity;
-    context.translate(geometry.centerX, geometry.centerY);
-    context.rotate((geometry.rotation * Math.PI) / 180);
-    context.drawImage(activeStickerImage, -geometry.width / 2, -geometry.height / 2, geometry.width, geometry.height);
-    context.restore();
+      const geometry = getStickerRenderGeometry(activeSticker, activeStickerImage, canvas);
+      context.save();
+      context.globalAlpha = geometry.opacity;
+      context.translate(geometry.centerX, geometry.centerY);
+      context.rotate((geometry.rotation * Math.PI) / 180);
+      context.drawImage(activeStickerImage, -geometry.width / 2, -geometry.height / 2, geometry.width, geometry.height);
+      context.restore();
     } else if (activeSticker?.text) {
-    context.fillStyle = "rgba(53, 240, 221, 0.92)";
-    context.fillRect(width - 246, 54, 172, 54);
-    context.fillStyle = "#061515";
-    context.font = "800 24px Inter, system-ui, sans-serif";
-    context.textAlign = "center";
-    context.fillText(activeSticker.text, width - 160, 90);
+      context.fillStyle = "rgba(53, 240, 221, 0.92)";
+      context.fillRect(width - 246, 54, 172, 54);
+      context.fillStyle = "#061515";
+      context.font = "800 24px Inter, system-ui, sans-serif";
+      context.textAlign = "center";
+      context.fillText(activeSticker.text, width - 160, 90);
     }
   });
 
@@ -1683,7 +1683,7 @@ export async function exportBrowserVideo({
   }
 
   if (document.fonts?.ready) {
-    await document.fonts.ready.catch(() => {});
+    await document.fonts.ready.catch(() => { });
   }
   throwIfExportAborted(signal);
 
@@ -1709,8 +1709,8 @@ export async function exportBrowserVideo({
       }
       const shouldUseCutout = Boolean(
         segment.type === "image" &&
-          (segment.vision?.options?.removeBackground || hasSubjectEffect(segment.subjectEffect)) &&
-          segment.vision?.cutoutUrl,
+        (segment.vision?.options?.removeBackground || hasSubjectEffect(segment.subjectEffect)) &&
+        segment.vision?.cutoutUrl,
       );
       const cutoutVisual = shouldUseCutout
         ? await loadImage(segment.vision.cutoutUrl).catch(() => null)
@@ -1720,12 +1720,12 @@ export async function exportBrowserVideo({
           segment.vision?.options?.removeBackground || hasSubjectEffect(segment.subjectEffect)
         )
           ? Array.from(
-              new Set(
-                (segment.vision?.samples ?? [])
-                  .map((sample) => sample.cutoutUrl)
-                  .filter(Boolean),
-              ),
-            )
+            new Set(
+              (segment.vision?.samples ?? [])
+                .map((sample) => sample.cutoutUrl)
+                .filter(Boolean),
+            ),
+          )
           : [];
       const temporalMaskCache = temporalMaskUrls.length
         ? createTemporalMaskCache(temporalMaskUrls)
@@ -1825,17 +1825,17 @@ export async function exportBrowserVideo({
       : null,
     ...(sourceAudioBlob && sourceAudioSegments.length
       ? sourceAudioSegments.map((segment) => ({
-          blob: sourceAudioBlob,
-          volume: segment.volume ?? sourceAudioVolume,
-          role: "source",
-          start: Math.max(0, segment.start || 0),
-          sourceOffset: Math.max(0, segment.sourceStart || 0),
-          sourceDuration: Math.max(0, segment.sourceDuration || 0),
-          playbackRate: normalizeVisualPlaybackRate(segment.playbackRate),
-          outputDuration: Math.max(0, segment.duration || 0),
-          spatialEffect: segment.spatialEffect ?? sourceAudioSpatialEffect,
-          spatialAmount: segment.spatialAmount ?? sourceAudioSpatialAmount,
-        }))
+        blob: sourceAudioBlob,
+        volume: segment.volume ?? sourceAudioVolume,
+        role: "source",
+        start: Math.max(0, segment.start || 0),
+        sourceOffset: Math.max(0, segment.sourceStart || 0),
+        sourceDuration: Math.max(0, segment.sourceDuration || 0),
+        playbackRate: normalizeVisualPlaybackRate(segment.playbackRate),
+        outputDuration: Math.max(0, segment.duration || 0),
+        spatialEffect: segment.spatialEffect ?? sourceAudioSpatialEffect,
+        spatialAmount: segment.spatialAmount ?? sourceAudioSpatialAmount,
+      }))
       : sourceAudioBlob
         ? [{ blob: sourceAudioBlob, volume: sourceAudioVolume, role: "source", start: Math.max(0, sourceAudioStart || 0), spatialEffect: sourceAudioSpatialEffect, spatialAmount: sourceAudioSpatialAmount }]
         : []),
@@ -1885,10 +1885,10 @@ export async function exportBrowserVideo({
         const preservePitch = Math.abs(playbackRate - 1) > 0.0001;
         const prepared = preservePitch
           ? createPitchPreservedAudioBuffer(audioContext, decoded, {
-              sourceOffset: trimmedSourceOffset,
-              sourceDuration: trimmedSourceDuration,
-              playbackRate,
-            })
+            sourceOffset: trimmedSourceOffset,
+            sourceDuration: trimmedSourceDuration,
+            playbackRate,
+          })
           : decoded;
         const fadeInRemaining = Math.max(0, (input.fadeIn || 0) - trimOutput);
         const tailTrim = Math.max(0, input.start + originalOutputDuration - visibleEnd);
@@ -2013,7 +2013,7 @@ export async function exportBrowserVideo({
       if (Math.abs(video.currentTime - expectedTime) > 0.03) {
         video.currentTime = expectedTime;
       }
-      video.play().catch(() => {});
+      video.play().catch(() => { });
     } else if (!video.seeking && Math.abs(video.currentTime - expectedTime) > 0.35) {
       video.currentTime = expectedTime;
     }
@@ -2044,7 +2044,7 @@ export async function exportBrowserVideo({
       const expectedTime = sourceTime;
       if (!visual.seeking && Math.abs((visual.currentTime || 0) - expectedTime) > 0.12) visual.currentTime = expectedTime;
       visual.playbackRate = getVisualPlaybackRateAtTime(segment, Math.max(0, timelineTime - segment.start));
-      visual.play().catch(() => {});
+      visual.play().catch(() => { });
     });
   };
   const draw = () => {
@@ -2071,11 +2071,13 @@ export async function exportBrowserVideo({
         ...item,
         renderSegment: {
           ...item.segment,
-          ...(vision ? { vision: {
-            ...vision,
-            options: item.segment.vision?.options || vision.options,
-            maskVisual: item.temporalMaskCache?.get(vision.cutoutUrl) || null,
-          } } : {}),
+          ...(vision ? {
+            vision: {
+              ...vision,
+              options: item.segment.vision?.options || vision.options,
+              maskVisual: item.temporalMaskCache?.get(vision.cutoutUrl) || null,
+            }
+          } : {}),
           ...(depthSample ? { depth: getDepthFrame(item.depthCache, depthSample) } : {}),
         },
       };
@@ -2099,12 +2101,12 @@ export async function exportBrowserVideo({
     );
     const frameVision = resolvedVision
       ? {
-          ...resolvedVision,
-          options: visualItem.segment.vision?.options ?? resolvedVision.options,
-          maskVisual: resolvedVision.cutoutUrl
-            ? visualItem.temporalMaskCache?.get(resolvedVision.cutoutUrl) ?? null
-            : null,
-        }
+        ...resolvedVision,
+        options: visualItem.segment.vision?.options ?? resolvedVision.options,
+        maskVisual: resolvedVision.cutoutUrl
+          ? visualItem.temporalMaskCache?.get(resolvedVision.cutoutUrl) ?? null
+          : null,
+      }
       : null;
     const resolvedDepth = resolveDepthAnalysisAtTime(visualItem.segment.depth ?? null, visualSourceTime);
     if (resolvedDepth?.depthUrl) void prepareDepthFrame(visualItem.depthCache, resolvedDepth);
@@ -2185,12 +2187,12 @@ export async function exportBrowserVideo({
     );
     const finalFrameVision = finalResolvedVision
       ? {
-          ...finalResolvedVision,
-          options: finalVisualItem.segment.vision?.options ?? finalResolvedVision.options,
-          maskVisual: finalResolvedVision.cutoutUrl
-            ? finalVisualItem.temporalMaskCache?.get(finalResolvedVision.cutoutUrl) ?? null
-            : null,
-        }
+        ...finalResolvedVision,
+        options: finalVisualItem.segment.vision?.options ?? finalResolvedVision.options,
+        maskVisual: finalResolvedVision.cutoutUrl
+          ? finalVisualItem.temporalMaskCache?.get(finalResolvedVision.cutoutUrl) ?? null
+          : null,
+      }
       : null;
     const finalResolvedDepth = resolveDepthAnalysisAtTime(finalVisualItem.segment.depth ?? null, finalVisualSourceTime);
     if (finalResolvedDepth?.depthUrl) await prepareDepthFrame(finalVisualItem.depthCache, finalResolvedDepth);
@@ -2252,7 +2254,7 @@ export async function exportBrowserVideo({
     });
     canvasStream.getTracks().forEach((track) => track.stop());
     destination?.stream.getTracks().forEach((track) => track.stop());
-    await audioContext?.close().catch(() => {});
+    await audioContext?.close().catch(() => { });
     visualItems.forEach((item) => {
       item.temporalMaskCache?.dispose();
       if (item.segment.type === "video") {
@@ -2288,8 +2290,8 @@ async function getFfmpeg() {
 }
 
 function runFfmpegTask(task) {
-  const nextTask = ffmpegTaskQueue.catch(() => {}).then(task);
-  ffmpegTaskQueue = nextTask.catch(() => {});
+  const nextTask = ffmpegTaskQueue.catch(() => { }).then(task);
+  ffmpegTaskQueue = nextTask.catch(() => { });
   return nextTask;
 }
 
@@ -2412,7 +2414,7 @@ export async function encodeRepairedVideoRanges({
     } finally {
       signal?.removeEventListener("abort", abort);
       ffmpeg?.off("progress", progress);
-      if (ffmpeg && !terminated) await Promise.all(files.map((name) => ffmpeg.deleteFile(name).catch(() => {})));
+      if (ffmpeg && !terminated) await Promise.all(files.map((name) => ffmpeg.deleteFile(name).catch(() => { })));
     }
   });
 }
@@ -2483,9 +2485,9 @@ export async function encodePngFrameSequence({
     } finally {
       signal?.removeEventListener("abort", abort);
       if (!terminated && ffmpeg) {
-        await Promise.all(frameNames.map((name) => ffmpeg.deleteFile(name).catch(() => {})));
-        if (audioSourceBlob instanceof Blob) await ffmpeg.deleteFile(audioInputName).catch(() => {});
-        await ffmpeg.deleteFile(outputName).catch(() => {});
+        await Promise.all(frameNames.map((name) => ffmpeg.deleteFile(name).catch(() => { })));
+        if (audioSourceBlob instanceof Blob) await ffmpeg.deleteFile(audioInputName).catch(() => { });
+        await ffmpeg.deleteFile(outputName).catch(() => { });
       }
     }
   });
@@ -2543,7 +2545,7 @@ export async function transcodeWebmToMp4(webmBlob, {
         ]);
       } catch {
         if (signal?.aborted) throw createAbortError("Export canceled");
-        await ffmpeg.deleteFile(outputName).catch(() => {});
+        await ffmpeg.deleteFile(outputName).catch(() => { });
         await ffmpeg.exec([
           "-i", inputName,
           ...(generationMetadata ? [
@@ -2564,8 +2566,8 @@ export async function transcodeWebmToMp4(webmBlob, {
     } finally {
       signal?.removeEventListener("abort", abort);
       if (!terminated && ffmpeg) {
-        await ffmpeg.deleteFile(inputName).catch(() => {});
-        await ffmpeg.deleteFile(outputName).catch(() => {});
+        await ffmpeg.deleteFile(inputName).catch(() => { });
+        await ffmpeg.deleteFile(outputName).catch(() => { });
       }
     }
   });
@@ -2590,7 +2592,7 @@ export async function normalizeVideoForEditing(videoBlob, filename = "source-vid
           "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "faststart", outputName,
         ]);
       } catch {
-        await ffmpeg.deleteFile(outputName).catch(() => {});
+        await ffmpeg.deleteFile(outputName).catch(() => { });
         await ffmpeg.exec([
           ...inputArgs, "-map", "0:v:0", ...audioMap,
           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
@@ -2600,9 +2602,9 @@ export async function normalizeVideoForEditing(videoBlob, filename = "source-vid
       const data = await ffmpeg.readFile(outputName);
       return new Blob([data], { type: "video/mp4" });
     } finally {
-      await ffmpeg.deleteFile(inputName).catch(() => {});
-      if (decodedAudioBlob) await ffmpeg.deleteFile(audioInputName).catch(() => {});
-      await ffmpeg.deleteFile(outputName).catch(() => {});
+      await ffmpeg.deleteFile(inputName).catch(() => { });
+      if (decodedAudioBlob) await ffmpeg.deleteFile(audioInputName).catch(() => { });
+      await ffmpeg.deleteFile(outputName).catch(() => { });
     }
   });
 }
@@ -2648,8 +2650,8 @@ export async function transcodeAudioToMp3(audioBlob, { signal, onProgress, audio
       signal?.removeEventListener("abort", abort);
       if (ffmpeg) ffmpeg.off("progress", progress);
       if (ffmpeg && !terminated) {
-        await ffmpeg.deleteFile(inputName).catch(() => {});
-        await ffmpeg.deleteFile(outputName).catch(() => {});
+        await ffmpeg.deleteFile(inputName).catch(() => { });
+        await ffmpeg.deleteFile(outputName).catch(() => { });
       }
     }
   });
@@ -2668,8 +2670,8 @@ export async function transcodeAudioToWav(audioBlob, filename = "source-audio.bi
       const data = await ffmpeg.readFile(outputName);
       return new Blob([data], { type: "audio/wav" });
     } finally {
-      await ffmpeg.deleteFile(inputName).catch(() => {});
-      await ffmpeg.deleteFile(outputName).catch(() => {});
+      await ffmpeg.deleteFile(inputName).catch(() => { });
+      await ffmpeg.deleteFile(outputName).catch(() => { });
     }
   });
 }
@@ -2699,8 +2701,8 @@ export async function extractAudioFromVideo(videoBlob, filename = "source-video.
       const data = await ffmpeg.readFile(outputName);
       return new Blob([data], { type: "audio/wav" });
     } finally {
-      await ffmpeg.deleteFile(inputName).catch(() => {});
-      await ffmpeg.deleteFile(outputName).catch(() => {});
+      await ffmpeg.deleteFile(inputName).catch(() => { });
+      await ffmpeg.deleteFile(outputName).catch(() => { });
     }
   });
 }

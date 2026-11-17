@@ -183,13 +183,31 @@ export async function repairMiganClip({
       // Encode an alpha patch, never a full sampled screenshot. Native source
       // frames retain their own presentation time and pixels outside the masks.
       const patchCanvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
-      const patchContext = patchCanvas.getContext("2d");
+      const patchContext = patchCanvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
       const repairedBitmap = await createImageBitmap(result.blob);
       try {
         patchContext.beginPath();
         for (const rect of repairedRects) patchContext.rect(rect.x, rect.y, rect.width, rect.height);
         patchContext.clip();
         patchContext.drawImage(repairedBitmap, 0, 0);
+        for (const rect of repairedRects) {
+          if (rect.width < 4 || rect.height < 4) continue;
+          const patchImageData = patchContext.getImageData(rect.x, rect.y, rect.width, rect.height);
+          const data = patchImageData.data;
+          const feather = Math.min(Math.max(2, Math.floor((Math.min(rect.width, rect.height) - 1) / 2)), 8);
+          for (let y = 0; y < rect.height; y++) {
+            for (let x = 0; x < rect.width; x++) {
+              const dist = Math.min(x, y, rect.width - 1 - x, rect.height - 1 - y);
+              if (dist < feather) {
+                const t = dist / feather;
+                const alphaFactor = t * t * (3 - 2 * t);
+                const idx = (y * rect.width + x) * 4 + 3;
+                data[idx] = Math.round(data[idx] * alphaFactor);
+              }
+            }
+          }
+          patchContext.putImageData(patchImageData, rect.x, rect.y);
+        }
       } finally { repairedBitmap.close(); }
       repairedFrames.push({ blob: await patchCanvas.convertToBlob({ type: "image/png" }), time: frame.time, duration: frame.duration });
       await onFrame?.({ blob: result.blob, index: completed, totalFrames: selectedFrames.length, time: timelineTime, repaired: true });

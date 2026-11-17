@@ -1,4 +1,6 @@
 import { MAX_TIMELINE_MARKER_SECONDS, TIMELINE_MARKER_COLORS, TIMELINE_MARKER_TYPES, normalizeTimelineMarkers } from "./timelineMarkers.js";
+import { validCaptionTranscriptionMetadata } from "./captionTranscriptionMetadata.js";
+import { getTranscriptionOutcome } from "./transcriptionOutcome.js";
 import { getCaptionTimeline, getTimedSegmentsEnd, hasExplicitCaptionTiming } from "./timeline.js";
 import { CAPTION_FONT_CATALOG, findCaptionFontInCatalog } from "./captionFonts.js";
 import { resolveColorToHex } from "./captionStyles.js";
@@ -585,6 +587,7 @@ function updateCaption(project, operation) {
 }
 
 function addCaption(project, operation) {
+  if (!validCaptionTranscriptionMetadata(operation)) throw Object.assign(new Error("Invalid caption transcription metadata"), { code: "INVALID_ARGUMENT" });
   const existingCaptions = Array.isArray(project.captionSegments) ? project.captionSegments : [];
   if (existingCaptions.some(hasExplicitCaptionTiming)) {
     project.captionSegments = materializeProjectCaptionTimings(project).captionSegments;
@@ -613,6 +616,9 @@ function addCaption(project, operation) {
     end,
     fontId: operation.fontId || previousCaption?.fontId || project.captionStyle?.fontId || "default",
     ...(audioSegmentId ? { audioSegmentId } : {}),
+    ...(Array.isArray(operation.words) ? { words: structuredClone(operation.words) } : {}),
+    ...(operation.transcriptionProvider ? { transcriptionProvider: operation.transcriptionProvider } : {}),
+    ...(getTranscriptionOutcome(operation) ? { transcriptionOutcome: getTranscriptionOutcome(operation) } : {}),
   }].sort((left, right) => (Number(left.start) || 0) - (Number(right.start) || 0));
   project.script = project.captionSegments.map((item) => item.text).join("\n");
   project.captionsEnabled = true;

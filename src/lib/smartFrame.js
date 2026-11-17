@@ -405,6 +405,7 @@ export function normalizeSmartFrame(value) {
       cut: Boolean(frame.cut || frame.isCut),
       isCut: Boolean(frame.cut || frame.isCut),
       ...(Number.isFinite(frame.panFactor) ? { panFactor: frame.panFactor } : {}),
+      ...(Number.isFinite(frame.baseX) ? { baseX: frame.baseX } : {}),
     }))
     .sort((left, right) => left.time - right.time);
   const storedVersion = Math.max(1, Number(target.version) || 1);

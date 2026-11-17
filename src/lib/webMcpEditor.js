@@ -60,7 +60,7 @@ function properties(clip) {
 }
 
 /** A page-scoped session. Callers provide the actual live editor actions, not reducers. */
-export function createWebMcpEditorSession(getEditor, { publish = () => {}, publishAi = () => {}, commit = (action) => action(), makeId = () => crypto.randomUUID() } = {}) {
+export function createWebMcpEditorSession(getEditor, { publish = () => { }, publishAi = () => { }, commit = (action) => action(), makeId = () => crypto.randomUUID() } = {}) {
   let closed = false;
   let busy = false;
   let pointerActive = false;
@@ -82,9 +82,11 @@ export function createWebMcpEditorSession(getEditor, { publish = () => {}, publi
     if (!mediaIds.has(value)) mediaIds.set(value, ++mediaSequence);
     return mediaIds.get(value);
   };
-  const runtimeProject = (editor, project) => editor.getRuntimeProject?.() || { ...project, ...Object.fromEntries([
-    "visualSegments", "visualOverlaySegments", "audioSegments", "musicSegments", "musicBlob", "musicUrl", "musicPeaks", "sourceAudioBlob", "audioBlob",
-  ].filter((key) => key in editor).map((key) => [key, editor[key]])) };
+  const runtimeProject = (editor, project) => editor.getRuntimeProject?.() || {
+    ...project, ...Object.fromEntries([
+      "visualSegments", "visualOverlaySegments", "audioSegments", "musicSegments", "musicBlob", "musicUrl", "musicPeaks", "sourceAudioBlob", "audioBlob",
+    ].filter((key) => key in editor).map((key) => [key, editor[key]]))
+  };
   const fingerprint = (editor, project) => JSON.stringify({
     project: browserProjectFingerprint(project, editor.rippleEditing, editor.visualSegments, runtimeProject(editor, project)),
     historyVersion: editor.historyVersion,
@@ -266,8 +268,11 @@ export function createWebMcpEditorSession(getEditor, { publish = () => {}, publi
           guard(signal, true);
           if (!aiPreview || aiPreview.id !== input.aiId) fail("PREVIEW_NOT_FOUND");
           if (aiPreview.fingerprint !== state.fingerprint) fail("STALE_STATE");
-          result = aiJobs.start({ stateToken: state.stateToken, requestId: input.requestId,
-            request: aiPreview.prepared.request, allowModelDownload: true }, { signal });
+          result = aiJobs.start({
+            stateToken: state.stateToken, requestId: input.requestId,
+            request: aiPreview.prepared.request, preparedPreferences: aiPreview.prepared.preferenceSnapshot,
+            allowModelDownload: true
+          }, { signal });
           aiRequests.set(input.requestId, { aiId: input.aiId, jobId: result.jobId });
           break;
         }
@@ -414,7 +419,7 @@ export function createWebMcpTools(session, t) {
     ["timeline_edit_apply", "Apply", schema({ previewId: stringSchema }, ["previewId"]), false],
     ["timeline_preview_seek", "Seek", schema({ time: { type: "number", minimum: 0, description: t("seekTimeDescription") } }, ["time"]), false],
     ["timeline_media_sample", "MediaSample", WEB_MCP_MEDIA_SAMPLE_SCHEMA, true],
-    ["timeline_ai_capabilities", "AiCapabilities", schema({ language: { type: "string", enum: ["zh", "en", "ja", "ko", "es", "fr", "de", "pt", "th", "vi", "ru", "it", "id"] } }), true],
+    ["timeline_ai_capabilities", "AiCapabilities", schema({ language: { type: "string", enum: ["zh", "en", "ja", "ko", "es", "fr", "de", "pt", "th", "vi", "ru", "it", "id", "hi", "ar"] } }), true],
     ["timeline_ai_prepare", "AiPrepare", schema({ stateToken: stringSchema, request: WEB_MCP_AI_REQUEST_SCHEMA }, ["stateToken", "request"]), true],
     ["timeline_ai_start", "AiStart", schema({ aiId: stringSchema, requestId: stringSchema, allowModelDownload: { type: "boolean", const: true } }, ["aiId", "requestId", "allowModelDownload"]), false],
     ["timeline_ai_inspect", "AiInspect", schema({ jobId: stringSchema }, ["jobId"]), true],
@@ -443,7 +448,7 @@ export function registerEditorWebMcpTools(documentObject, navigatorObject, tools
   const context = current?.registerTool ? current : navigatorObject?.modelContext;
   const legacy = context !== current && typeof context?.unregisterTool === "function";
   if (typeof context?.registerTool !== "function") {
-    return { supported: false, ready: Promise.resolve(false), dispose() {} };
+    return { supported: false, ready: Promise.resolve(false), dispose() { } };
   }
   let shared = webMcpRegistrationContexts.get(context);
   if (!shared) {
@@ -452,7 +457,7 @@ export function registerEditorWebMcpTools(documentObject, navigatorObject, tools
   }
   const enqueue = (action) => {
     const result = shared.tail.then(action);
-    shared.tail = result.then(() => {}, () => {});
+    shared.tail = result.then(() => { }, () => { });
     return result;
   };
   const controller = new AbortController();

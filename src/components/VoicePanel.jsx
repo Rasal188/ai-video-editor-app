@@ -1,4 +1,7 @@
+import { TranscriptionStatus } from "./TranscriptionStatus.jsx";
 import { CaptionGroupingControl } from "./CaptionGroupingControl.jsx";
+import { TranscriptionProviderControl } from "./TranscriptionProviderControl.jsx";
+import { useTranscriptionPreferences } from "../hooks/useTranscriptionPreferences.js";
 import {
   Armchair,
   ArrowCounterClockwise,
@@ -472,7 +475,7 @@ function CaptionContextPanel({
   toggleCaptionSegmentHidden,
   deleteCaptionSegment,
   seekTo,
-  sourceAudioBlob,
+  canGenerateCaptions,
   generateCaptionsFromSourceAudio,
   isGeneratingCaptions,
   automaticCaptionProgress,
@@ -485,6 +488,7 @@ function CaptionContextPanel({
   setCaptionSegments,
 }) {
   const [captionGrouping, setCaptionGrouping] = useState("phrases");
+  const [transcription, setTranscription] = useTranscriptionPreferences();
   const srtInputRef = useRef(null);
   const focusNewCaptionRef = useRef(false);
   const [pendingSrt, setPendingSrt] = useState(null);
@@ -686,19 +690,20 @@ function CaptionContextPanel({
 
       {!captionSegments.length ? (
         <>
+          <TranscriptionProviderControl value={transcription} onChange={setTranscription} disabled={isGeneratingCaptions} />
           <CaptionGroupingControl value={captionGrouping} onChange={setCaptionGrouping} disabled={isGeneratingCaptions} t={t} />
           <button
             className="audio-entry-card caption-entry-card"
             type="button"
-            disabled={!sourceAudioBlob || isGeneratingCaptions}
-            onClick={() => generateCaptionsFromSourceAudio({ grouping: captionGrouping })}
+            disabled={!canGenerateCaptions || isGeneratingCaptions}
+            onClick={() => generateCaptionsFromSourceAudio({ grouping: captionGrouping, ...transcription })}
           >
             <ClosedCaptioning size={24} weight="duotone" />
             <span>
               <strong>{isGeneratingCaptions ? t("autoCaptionsRunning") : t("autoCaptionsTitle")}</strong>
-              <em>{sourceAudioBlob ? t("autoCaptionsDesc") : t("autoCaptionsNeedsSource")}</em>
+              <em>{canGenerateCaptions ? t("autoCaptionsDesc") : t("autoCaptionsNeedsSource")}</em>
             </span>
-            {isGeneratingCaptions ? (
+            {isGeneratingCaptions && Number.isFinite(automaticCaptionProgress) ? (
               <span className="inline-progress" aria-hidden="true">
                 <span style={{ width: `${automaticCaptionProgress}%` }} />
               </span>
@@ -749,9 +754,8 @@ function CaptionContextPanel({
           captionSegments.map((segment, index) => (
             <button
               type="button"
-              className={`${index === currentSegmentIndex ? "is-current" : ""} ${
-                segment.id === selectedSegmentId ? "is-selected" : ""
-              } ${segment.hidden ? "is-hidden" : ""}`}
+              className={`${index === currentSegmentIndex ? "is-current" : ""} ${segment.id === selectedSegmentId ? "is-selected" : ""
+                } ${segment.hidden ? "is-hidden" : ""}`}
               key={segment.id}
               onClick={() => {
                 setSelectedSegmentId(segment.id);
@@ -892,66 +896,66 @@ function AudioClipContextPanel({ t, segment, updateAudioSegment, toggleAudioSegm
         {canVoiceColor ? <button className={shownTab === "voice-color" ? "is-active" : ""} type="button" role="tab" aria-selected={shownTab === "voice-color"} onClick={() => setActiveTab("voice-color")}>{t("voiceColorTab", "音色")}</button> : null}
       </div> : null}
       <div ref={tabBodyRef} className="audio-context-tab-body">
-      {shownTab === "audio" ? <div className="audio-context-section">
-        {segment.canChangeStart !== false ? <label className="audio-property-row">
-          <span>{t("audioClipStart")}</span>
-          <input type="number" min="0" step="0.1" value={Number(segment.start.toFixed(1))} onChange={(event) => updateAudioSegment(segment.id, { start: Math.max(0, Number(event.target.value) || 0) })} />
-        </label> : null}
-        <label className="audio-property-slider">
-          <span><b>{t("volume")}</b><em>{Math.round((segment.volume ?? 1) * 100)}%</em></span>
-          <input type="range" min="0" max="4" step="0.01" value={segment.volume ?? 1} onChange={(event) => updateAudioSegment(segment.id, { volume: Number(event.target.value) })} />
-        </label>
-        {segment.canChangeSpeed !== false ? <div className="audio-property-slider">
-          <span><b>{t("visualSpeed")}</b><em>{(segment.playbackRate ?? 1).toFixed((segment.playbackRate ?? 1) % 1 ? 2 : 0)}×</em></span>
-          <div className="visual-speed-presets" aria-label={t("visualSpeed")}>
-            {[0.5, 1, 1.5, 2, 3, 4].map((rate) => (
-              <button type="button" className={Math.abs((segment.playbackRate ?? 1) - rate) < 0.001 ? "is-active" : ""} key={rate} onClick={() => updateAudioSegment(segment.id, { playbackRate: rate })}>{rate}×</button>
-            ))}
-          </div>
-          <input aria-label={t("visualSpeed")} type="range" min="0.25" max="4" step="0.05" value={segment.playbackRate ?? 1} onChange={(event) => updateAudioSegment(segment.id, { playbackRate: Number(event.target.value) })} />
-        </div> : null}
-      </div> : null}
-      {shownTab === "fade" && canFade ? <div className="audio-context-section audio-fade-section">
-        <p>{t("audioFadeHint")}</p>
-        <label className="audio-property-slider">
-          <span><b>{t("fadeIn")}</b><em>{(segment.fadeIn ?? 0).toFixed(1)}s</em></span>
-          <input aria-label={t("fadeIn")} type="range" min="0" max={Math.min(3, segment.duration / 2)} step="0.1" value={segment.fadeIn ?? 0} onChange={(event) => updateAudioSegment(segment.id, { fadeIn: Number(event.target.value) })} />
-        </label>
-        <label className="audio-property-slider">
-          <span><b>{t("fadeOut")}</b><em>{(segment.fadeOut ?? 0).toFixed(1)}s</em></span>
-          <input aria-label={t("fadeOut")} type="range" min="0" max={Math.min(3, segment.duration / 2)} step="0.1" value={segment.fadeOut ?? 0} onChange={(event) => updateAudioSegment(segment.id, { fadeOut: Number(event.target.value) })} />
-        </label>
-      </div> : null}
-      {shownTab === "spatial" && canSpatial ? <div className="audio-context-section audio-spatial-section">
-        <p>{t("audioSpaceHint")}</p>
-        <div className="audio-spatial-picker">
-          <div className="audio-spatial-grid" role="radiogroup" aria-label={t("audioSpaceTab")}>
-            {AUDIO_SPATIAL_EFFECTS.map((preset) => {
-              const selected = normalizeAudioSpatialEffect(segment.spatialEffect) === preset.id;
-              const { Icon, Signal } = AUDIO_SPATIAL_PRESENTATION[preset.id] || AUDIO_SPATIAL_PRESENTATION.original;
-              return <button type="button" role="radio" aria-checked={selected} className={selected ? "is-active" : ""} key={preset.id} onClick={() => updateAudioSegment(segment.id, { spatialEffect: preset.id })}>
-                <RadioButton className="audio-spatial-radio" size={15} weight={selected ? "fill" : "regular"} aria-hidden="true" />
-                <Icon className="audio-spatial-scene-icon" size={18} weight="duotone" aria-hidden="true" />
-                <span>{t(preset.labelKey)}</span>
-                <Signal className="audio-spatial-signal" size={18} weight="fill" aria-hidden="true" />
-              </button>;
-            })}
-          </div>
-          {normalizeAudioSpatialEffect(segment.spatialEffect) !== "original" ? <label className="audio-property-slider audio-spatial-strength">
-            <span><b>{t("audioSpaceStrength")}</b><em>{Math.round(normalizeAudioSpatialAmount(segment.spatialAmount) * 100)}%</em></span>
-            <input aria-label={t("audioSpaceStrength")} type="range" min="0" max="1" step="0.01" value={normalizeAudioSpatialAmount(segment.spatialAmount)} onChange={(event) => updateAudioSegment(segment.id, { spatialAmount: Number(event.target.value) })} />
+        {shownTab === "audio" ? <div className="audio-context-section">
+          {segment.canChangeStart !== false ? <label className="audio-property-row">
+            <span>{t("audioClipStart")}</span>
+            <input type="number" min="0" step="0.1" value={Number(segment.start.toFixed(1))} onChange={(event) => updateAudioSegment(segment.id, { start: Math.max(0, Number(event.target.value) || 0) })} />
           </label> : null}
-        </div>
-      </div> : null}
-      {shownTab === "voice-color" && canVoiceColor ? <AudioVoiceColorSection t={t} segment={segment} voiceProfiles={voiceProfiles} onAssetReady={onVoiceColorAssetReady} onApply={onApplyVoiceColor} onRestore={onRestoreVoiceColor} /> : null}
-      {shownTab === "audio" && !segment.embeddedVideo ? <div className="audio-context-actions">
-        {isVoiceClip ? <button className={`panel-secondary ${segment.reversed ? "is-active" : ""}`} type="button" disabled={segment.reversing} onClick={() => toggleAudioSegmentReverse(segment.id)}>
-          {segment.reversing ? t("audioReversing") : segment.reversed ? t("audioReverseRestore") : t("audioReverse")}
-        </button> : null}
-        <AudioClipExportControl segment={segment} t={t} downloadBlob={downloadBlob}>
-          <button className="panel-secondary is-danger" type="button" onClick={() => deleteAudioSegment(segment.id)}><Trash size={15} />{t("deleteAudioClip")}</button>
-        </AudioClipExportControl>
-      </div> : null}
+          <label className="audio-property-slider">
+            <span><b>{t("volume")}</b><em>{Math.round((segment.volume ?? 1) * 100)}%</em></span>
+            <input type="range" min="0" max="4" step="0.01" value={segment.volume ?? 1} onChange={(event) => updateAudioSegment(segment.id, { volume: Number(event.target.value) })} />
+          </label>
+          {segment.canChangeSpeed !== false ? <div className="audio-property-slider">
+            <span><b>{t("visualSpeed")}</b><em>{(segment.playbackRate ?? 1).toFixed((segment.playbackRate ?? 1) % 1 ? 2 : 0)}×</em></span>
+            <div className="visual-speed-presets" aria-label={t("visualSpeed")}>
+              {[0.5, 1, 1.5, 2, 3, 4].map((rate) => (
+                <button type="button" className={Math.abs((segment.playbackRate ?? 1) - rate) < 0.001 ? "is-active" : ""} key={rate} onClick={() => updateAudioSegment(segment.id, { playbackRate: rate })}>{rate}×</button>
+              ))}
+            </div>
+            <input aria-label={t("visualSpeed")} type="range" min="0.25" max="4" step="0.05" value={segment.playbackRate ?? 1} onChange={(event) => updateAudioSegment(segment.id, { playbackRate: Number(event.target.value) })} />
+          </div> : null}
+        </div> : null}
+        {shownTab === "fade" && canFade ? <div className="audio-context-section audio-fade-section">
+          <p>{t("audioFadeHint")}</p>
+          <label className="audio-property-slider">
+            <span><b>{t("fadeIn")}</b><em>{(segment.fadeIn ?? 0).toFixed(1)}s</em></span>
+            <input aria-label={t("fadeIn")} type="range" min="0" max={Math.min(3, segment.duration / 2)} step="0.1" value={segment.fadeIn ?? 0} onChange={(event) => updateAudioSegment(segment.id, { fadeIn: Number(event.target.value) })} />
+          </label>
+          <label className="audio-property-slider">
+            <span><b>{t("fadeOut")}</b><em>{(segment.fadeOut ?? 0).toFixed(1)}s</em></span>
+            <input aria-label={t("fadeOut")} type="range" min="0" max={Math.min(3, segment.duration / 2)} step="0.1" value={segment.fadeOut ?? 0} onChange={(event) => updateAudioSegment(segment.id, { fadeOut: Number(event.target.value) })} />
+          </label>
+        </div> : null}
+        {shownTab === "spatial" && canSpatial ? <div className="audio-context-section audio-spatial-section">
+          <p>{t("audioSpaceHint")}</p>
+          <div className="audio-spatial-picker">
+            <div className="audio-spatial-grid" role="radiogroup" aria-label={t("audioSpaceTab")}>
+              {AUDIO_SPATIAL_EFFECTS.map((preset) => {
+                const selected = normalizeAudioSpatialEffect(segment.spatialEffect) === preset.id;
+                const { Icon, Signal } = AUDIO_SPATIAL_PRESENTATION[preset.id] || AUDIO_SPATIAL_PRESENTATION.original;
+                return <button type="button" role="radio" aria-checked={selected} className={selected ? "is-active" : ""} key={preset.id} onClick={() => updateAudioSegment(segment.id, { spatialEffect: preset.id })}>
+                  <RadioButton className="audio-spatial-radio" size={15} weight={selected ? "fill" : "regular"} aria-hidden="true" />
+                  <Icon className="audio-spatial-scene-icon" size={18} weight="duotone" aria-hidden="true" />
+                  <span>{t(preset.labelKey)}</span>
+                  <Signal className="audio-spatial-signal" size={18} weight="fill" aria-hidden="true" />
+                </button>;
+              })}
+            </div>
+            {normalizeAudioSpatialEffect(segment.spatialEffect) !== "original" ? <label className="audio-property-slider audio-spatial-strength">
+              <span><b>{t("audioSpaceStrength")}</b><em>{Math.round(normalizeAudioSpatialAmount(segment.spatialAmount) * 100)}%</em></span>
+              <input aria-label={t("audioSpaceStrength")} type="range" min="0" max="1" step="0.01" value={normalizeAudioSpatialAmount(segment.spatialAmount)} onChange={(event) => updateAudioSegment(segment.id, { spatialAmount: Number(event.target.value) })} />
+            </label> : null}
+          </div>
+        </div> : null}
+        {shownTab === "voice-color" && canVoiceColor ? <AudioVoiceColorSection t={t} segment={segment} voiceProfiles={voiceProfiles} onAssetReady={onVoiceColorAssetReady} onApply={onApplyVoiceColor} onRestore={onRestoreVoiceColor} /> : null}
+        {shownTab === "audio" && !segment.embeddedVideo ? <div className="audio-context-actions">
+          {isVoiceClip ? <button className={`panel-secondary ${segment.reversed ? "is-active" : ""}`} type="button" disabled={segment.reversing} onClick={() => toggleAudioSegmentReverse(segment.id)}>
+            {segment.reversing ? t("audioReversing") : segment.reversed ? t("audioReverseRestore") : t("audioReverse")}
+          </button> : null}
+          <AudioClipExportControl segment={segment} t={t} downloadBlob={downloadBlob}>
+            <button className="panel-secondary is-danger" type="button" onClick={() => deleteAudioSegment(segment.id)}><Trash size={15} />{t("deleteAudioClip")}</button>
+          </AudioClipExportControl>
+        </div> : null}
       </div>
     </div>
   );
@@ -1222,6 +1226,7 @@ export function VoicePanel({
   captionVoiceFocusRequest = 0,
   status,
   statusText,
+  cancelCaptionTranscription,
   voiceTab,
   setVoiceTab,
   script,
@@ -1241,6 +1246,7 @@ export function VoicePanel({
   progressPercent,
   audioBlob,
   generateVoiceover,
+  beginOllalinkSpeech,
   downloadBlob,
   favoriteVoiceIds,
   setFavoriteVoiceIds,
@@ -1282,6 +1288,7 @@ export function VoicePanel({
   seekTo,
   sourceAudioBlob,
   sourceAudioLinked,
+  canGenerateCaptions,
   generateCaptionsFromSourceAudio,
   isGeneratingCaptions,
   automaticCaptionProgress,
@@ -1331,11 +1338,14 @@ export function VoicePanel({
   setSelectedFilterId,
   trOption,
   selectedVisualOverlay,
+  visualOverlayCount = 1,
   updateVisualOverlaySegment,
   updateVisualOverlayEffects,
   setVisualCanvasEditMode,
   deleteVisualOverlay,
   applyVisualOverlayPreset,
+  saveVisualOverlayTemplate,
+  visualOverlayTemplateSaveState,
   alignCaptionToAudio,
   linkCaptionAudio,
   unlinkCaptionAudio,
@@ -1407,6 +1417,11 @@ export function VoicePanel({
     currentTime - (selectedVisualOverlay?.start ?? 0),
   ));
   const selectedCaptionAudioSegment = getCaptionVoiceSegment(audioSegments, selectedCaptionSegment);
+  // Cloud batch commits deliberately keep caption audio detached. Resolve only
+  // cloud output here; the existing local attached-audio contract stays unchanged.
+  const selectedCaptionCloudAudioSegment = selectedCaptionSegment?.detachedAudioSegmentId
+    ? audioSegments.find((segment) => segment.id === selectedCaptionSegment.detachedAudioSegmentId
+      && segment.sourceKind === "ollalink-voiceover") ?? null : null;
   const localizedStatusText = statusText?.startsWith?.("tts") ? t(statusText) : statusText;
   const focusedSectionTitle = {
     transform: t("visualTabTransform"),
@@ -1434,36 +1449,36 @@ export function VoicePanel({
   const panelStatusText = isSmartPipelineContext ? t("smartPipelineHint") : isSceneDetectContext ? t("sceneDetectHint") : isRoughCutContext ? t("roughCutHint") : isSilenceRemovalContext ? t("pauseHint") : isFaceSwapContext
     ? faceSwap?.job?.running ? `${faceSwap.job.progress}%` : hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")
     : isOpticalFlowContext ? t("effectFlowExperimental")
-    : isCinematicDepthContext ? cinematicDepth?.job?.running
-      ? `${Math.round(cinematicDepth.job.progress || 0)}%`
-      : cinematicDepth?.record?.complete ? t("depthAnalysisComplete") : t("depthAnalysisNeeded")
-    : isPhotoParallaxContext ? photoParallaxDepth?.job?.running
-      ? `${Math.round(photoParallaxDepth.job.progress || 0)}%`
-      : photoParallaxDepth?.record?.complete ? t("parallaxLayersReady") : t("depthAnalysisNeeded")
-    : isPluginsContext ? (selectedPluginConnection?.state === "connected" ? getPluginCopy(uiLanguage).connected : getPluginCopy(uiLanguage).available)
-    : isEffectsContext ? (effectRunning
-    ? `${Math.round(effectProgress || 0)}%`
-    : effectAnalysis?.complete
-      ? t(effectAnalysis?.targetKind === "object" ? "effectObjectAnalysisComplete" : "effectAnalysisComplete")
-      : effectAnalysis
-        ? t("effectAnalysisPartial")
-        : t(effectAnalysis?.targetKind === "object" ? "effectObjectAnalysisNeeded" : "effectAnalysisNeeded")) : isAiMusicContext ? (aiMusic?.job?.state === "running" ? `${Math.round((aiMusic.job.progress || 0) * 100)}%` : aiMusic?.job?.state === "complete" ? t("complete") : t("modelReady")) : isSmartFrameContext ? (hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")) : isSmartZoomContext ? (hasVisual ? t("smartVisualReady", uiLanguage === "zh" ? "片段就绪" : "Visual ready") : t("smartWaitingVisual", uiLanguage === "zh" ? "待选片段" : "Waiting for visual")) : isCaptionContext
-    ? captionSegments.length
-      ? `${captionSegments.length} ${t("captionSegmentsUnit", "条字幕")}`
-      : t("noCaptionSegments")
-    : isStickerContext
-      ? `${selectedStickerSegment.start.toFixed(2)}s · ${selectedStickerSegment.duration.toFixed(2)}s`
-    : isOverlayContext
-      ? `${selectedVisualOverlay.start.toFixed(2)}s · ${selectedVisualOverlay.duration.toFixed(2)}s · L${selectedVisualOverlay.layer || 1}`
-    : isVisualContext
-      ? selectedVisualSegment
-        ? `${visualLocalTime.toFixed(2)}s · ${normalizeVisualKeyframes(selectedVisualSegment.keyframes).length} ${t("visualFrames")}`
-        : t("visualSelectClip")
-    : isAudioClipContext
-      ? `${formatTime(audioPropertySegment.duration)} · ${audioPropertySegment.start.toFixed(1)}s`
-    : statusText === "模型待命"
-      ? t("modelReady")
-    : localizedStatusText;
+      : isCinematicDepthContext ? cinematicDepth?.job?.running
+        ? `${Math.round(cinematicDepth.job.progress || 0)}%`
+        : cinematicDepth?.record?.complete ? t("depthAnalysisComplete") : t("depthAnalysisNeeded")
+        : isPhotoParallaxContext ? photoParallaxDepth?.job?.running
+          ? `${Math.round(photoParallaxDepth.job.progress || 0)}%`
+          : photoParallaxDepth?.record?.complete ? t("parallaxLayersReady") : t("depthAnalysisNeeded")
+          : isPluginsContext ? (selectedPluginConnection?.state === "connected" ? getPluginCopy(uiLanguage).connected : getPluginCopy(uiLanguage).available)
+            : isEffectsContext ? (effectRunning
+              ? `${Math.round(effectProgress || 0)}%`
+              : effectAnalysis?.complete
+                ? t(effectAnalysis?.targetKind === "object" ? "effectObjectAnalysisComplete" : "effectAnalysisComplete")
+                : effectAnalysis
+                  ? t("effectAnalysisPartial")
+                  : t(effectAnalysis?.targetKind === "object" ? "effectObjectAnalysisNeeded" : "effectAnalysisNeeded")) : isAiMusicContext ? (aiMusic?.job?.state === "running" ? `${Math.round((aiMusic.job.progress || 0) * 100)}%` : aiMusic?.job?.state === "complete" ? t("complete") : t("modelReady")) : isSmartFrameContext ? (hasVisual ? t("smartVisualReady") : t("smartWaitingVisual")) : isSmartZoomContext ? (hasVisual ? t("smartVisualReady", uiLanguage === "zh" ? "片段就绪" : "Visual ready") : t("smartWaitingVisual", uiLanguage === "zh" ? "待选片段" : "Waiting for visual")) : isCaptionContext
+                    ? captionSegments.length
+                      ? `${captionSegments.length} ${t("captionSegmentsUnit", "条字幕")}`
+                      : t("noCaptionSegments")
+                    : isStickerContext
+                      ? `${selectedStickerSegment.start.toFixed(2)}s · ${selectedStickerSegment.duration.toFixed(2)}s`
+                      : isOverlayContext
+                        ? `${selectedVisualOverlay.start.toFixed(2)}s · ${selectedVisualOverlay.duration.toFixed(2)}s · L${selectedVisualOverlay.layer || 1}`
+                        : isVisualContext
+                          ? selectedVisualSegment
+                            ? `${visualLocalTime.toFixed(2)}s · ${normalizeVisualKeyframes(selectedVisualSegment.keyframes).length} ${t("visualFrames")}`
+                            : t("visualSelectClip")
+                          : isAudioClipContext
+                            ? `${formatTime(audioPropertySegment.duration)} · ${audioPropertySegment.start.toFixed(1)}s`
+                            : statusText === "模型待命"
+                              ? t("modelReady")
+                              : localizedStatusText;
 
   useEffect(() => {
     if (!captionVoiceFocusRequest || !isCaptionContext) return;
@@ -1497,6 +1512,8 @@ export function VoicePanel({
           </span>
         )}
       </div>
+
+      <TranscriptionStatus active={isGeneratingCaptions} statusText={statusText} progress={automaticCaptionProgress} onCancel={cancelCaptionTranscription} t={t} />
 
       {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext ? (
         <div className="tabs compact">
@@ -1669,6 +1686,9 @@ export function VoicePanel({
             vectorEditor={isVectorOverlay ? <VectorControls t={t} segment={selectedVisualOverlay} onUpdate={updateVisualOverlaySegment} /> : null}
             onApplyPreset={applyVisualOverlayPreset}
             onDelete={deleteVisualOverlay}
+            onSaveTemplate={saveVisualOverlayTemplate}
+            overlayCount={visualOverlayCount}
+            templateSaveState={visualOverlayTemplateSaveState}
             requestedTab={mobileInspectorSection}
             singleSection={mobileInspectorSection}
           />
@@ -1737,7 +1757,7 @@ export function VoicePanel({
             audioSegments={audioSegments}
             setCaptionSegments={setCaptionSegments}
             seekTo={seekTo}
-            sourceAudioBlob={sourceAudioBlob}
+            canGenerateCaptions={canGenerateCaptions}
             generateCaptionsFromSourceAudio={generateCaptionsFromSourceAudio}
             isGeneratingCaptions={isGeneratingCaptions}
             automaticCaptionProgress={automaticCaptionProgress}
@@ -1753,6 +1773,9 @@ export function VoicePanel({
             </p>
             <VoiceSynthesisPanel
               script={selectedCaptionSegment?.text ?? ""}
+              captionSegment={selectedCaptionSegment}
+              selectionKey={selectedSegmentId}
+              beginOllalinkSpeech={beginOllalinkSpeech}
               updateScript={(text) => selectedCaptionSegment && updateCaptionSegmentText(selectedCaptionSegment.id, text)}
               selectedVoiceId={selectedVoiceId}
               setSelectedVoiceId={setSelectedVoiceId}
@@ -1771,6 +1794,7 @@ export function VoicePanel({
               progressPercent={progressPercent}
               audioBlob={selectedCaptionAudioSegment?.blob ?? null}
               audioUrl={selectedCaptionAudioSegment?.url ?? ""}
+              cloudAudioSegment={selectedCaptionCloudAudioSegment}
               generateVoiceover={() => selectedCaptionSegment && generateVoiceover(selectedCaptionSegment)}
               downloadBlob={downloadBlob}
               favoriteVoiceIds={favoriteVoiceIds}
@@ -1791,6 +1815,8 @@ export function VoicePanel({
         {!isSmartContext && !isPluginsContext && !isEffectsContext && !isCaptionContext && !isAudioClipContext && !isVisualContext && !isStickerContext && !isOverlayContext && voiceTab === "synthesis" ? (
           <VoiceSynthesisPanel
             script={script}
+            selectionKey={selectedSegmentId}
+            beginOllalinkSpeech={beginOllalinkSpeech}
             updateScript={updateScript}
             selectedVoiceId={selectedVoiceId}
             setSelectedVoiceId={setSelectedVoiceId}

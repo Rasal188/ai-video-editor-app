@@ -1,4 +1,11 @@
+import { useTranscriptionPreferences } from "../hooks/useTranscriptionPreferences.js";
+import { DiarizationPanel } from "./DiarizationPanel.jsx";
+import { OllalinkTtsPanel } from "./OllalinkTtsPanel.jsx";
+import { SubtitleTextTools } from "./SubtitleTextTools.jsx";
+import { downloadCaptionSrt } from "../lib/captionSrtDownload.js";
+import { TranscriptionStatus } from "./TranscriptionStatus.jsx";
 import { CaptionGroupingControl } from "./CaptionGroupingControl.jsx";
+import { TranscriptionProviderControl } from "./TranscriptionProviderControl.jsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 
@@ -577,13 +584,13 @@ function AiVectorDesignDialog({ language, onClose, onGenerated }) {
   const statusText = phase === "checking" ? copy.checking
     : phase === "unsupported" ? (translationUnavailable ? copy.translationUnsupported : copy.unsupported)
       : phase === "detectingLanguage" ? copy.detecting
-      : phase === "translationDownloading" ? copy.translationDownloading
-        : phase === "translating" ? copy.translating
-      : phase === "downloading" || phase === "model" ? copy.downloading
-        : phase === "generating" ? copy.generating
-          : phase === "validating" ? copy.validating
-            : !requiresDownload ? copy.ready
-              : copy.downloadable;
+        : phase === "translationDownloading" ? copy.translationDownloading
+          : phase === "translating" ? copy.translating
+            : phase === "downloading" || phase === "model" ? copy.downloading
+              : phase === "generating" ? copy.generating
+                : phase === "validating" ? copy.validating
+                  : !requiresDownload ? copy.ready
+                    : copy.downloadable;
 
   return (
     <div className="ai-vector-backdrop" role="presentation" onPointerDown={(event) => {
@@ -1039,6 +1046,7 @@ function AssetRow({ asset, selected, t, downloadState }) {
 
 export function ToolPanel(props) {
   const [captionGrouping, setCaptionGrouping] = useState("phrases");
+  const [transcription, setTranscription] = useTranscriptionPreferences();
   const {
     activeTool,
     uiLanguage,
@@ -1097,6 +1105,8 @@ export function ToolPanel(props) {
     generateCaptionsFromSourceAudio,
     isGeneratingCaptions,
     automaticCaptionProgress,
+    transcriptionStatusText,
+    cancelCaptionTranscription,
     separateSourceVocals,
     selectedAudioToolTarget,
     separateSelectedAudioVocals,
@@ -1277,6 +1287,20 @@ export function ToolPanel(props) {
           <div><h2>{t("captionStyle")}</h2><p>{t("captionStyleSystemHint")}</p></div>
           <label className="caption-visibility-toggle"><input type="checkbox" checked={captionsEnabled} onChange={(event) => setCaptionsEnabled(event.target.checked)} /><span>{t("showCaptions")}</span></label>
         </div>
+        <button type="button" className="secondary-button" onClick={() => {
+          try {
+            const requested = downloadCaptionSrt(captionSegments, captionTargetDuration);
+            notify(requested ? t("srtDownloadRequested", "SRT download requested") : t("srtEmpty", "No captions to download"));
+          } catch { notify(t("srtDownloadFailed", "Could not prepare SRT download. Please try again.")); }
+        }}>{t("downloadSrt", "Download SRT")}</button>
+        <SubtitleTextTools
+          captions={captionSegments}
+          selectedCaptionId={selectedCaptionSegment?.id}
+          locked={Boolean(props.captionTrackLocked)}
+          getProjectIdentity={props.getCaptionTextProjectIdentity}
+          setCaptions={setCaptionSegments}
+          updateScript={updateScript}
+        />
         <div className="caption-style-library">
           <button className="caption-style-library-trigger" type="button" aria-expanded={captionStyleMenuOpen} onClick={() => setCaptionStyleMenuOpen((open) => !open)}>
             <span><small>{t("captionDefaultStyle")}</small><strong>{presetLabel}</strong></span><CaretDown size={16} weight="bold" />
@@ -1546,14 +1570,26 @@ export function ToolPanel(props) {
           </span>
           {vocalSeparationJob.running ? <span className="inline-progress" aria-hidden="true"><span style={{ width: `${vocalSeparationJob.progress}%` }} /></span> : null}
         </button>
+        <DiarizationPanel source={selectedAudioToolTarget} captions={captionSegments} locked={Boolean(props.captionTrackLocked)} setCaptions={setCaptionSegments} />
+        <TranscriptionStatus active={isGeneratingCaptions} statusText={transcriptionStatusText} progress={automaticCaptionProgress} onCancel={cancelCaptionTranscription} t={t} />
+        <TranscriptionProviderControl value={transcription} onChange={setTranscription} disabled={isGeneratingCaptions} />
         <CaptionGroupingControl value={captionGrouping} onChange={setCaptionGrouping} disabled={isGeneratingCaptions} t={t} />
         <button
           className="audio-entry-card caption-entry-card"
           type="button"
-          disabled={!selectedAudioToolTarget || isGeneratingCaptions}
+          disabled={!props.canGenerateAudioCaptions || isGeneratingCaptions}
           onClick={() => selectedAudioToolTarget && generateCaptionsFromSourceAudio({
             blob: selectedAudioToolTarget.blob,
+            mediaBlob: selectedAudioToolTarget.mediaBlob,
+            mediaFile: selectedAudioToolTarget.mediaFile,
+            src: selectedAudioToolTarget.src,
+            sourceUrl: selectedAudioToolTarget.sourceUrl,
+            url: selectedAudioToolTarget.url,
+            hasAudio: selectedAudioToolTarget.hasAudio,
+            isMuted: selectedAudioToolTarget.isMuted,
+            volume: selectedAudioToolTarget.volume,
             grouping: captionGrouping,
+            ...transcription,
             start: selectedAudioToolTarget.start,
             sourceStart: selectedAudioToolTarget.sourceStart,
             duration: selectedAudioToolTarget.duration,
@@ -1565,7 +1601,7 @@ export function ToolPanel(props) {
             <strong>{isGeneratingCaptions ? t("autoCaptionsRunning") : t("autoCaptionsTitle")}</strong>
             <em>{selectedAudioToolTarget ? t("autoCaptionsDesc") : t("autoCaptionsNeedsSource")}</em>
           </span>
-          {isGeneratingCaptions ? (
+          {isGeneratingCaptions && Number.isFinite(automaticCaptionProgress) ? (
             <span className="inline-progress" aria-hidden="true">
               <span style={{ width: `${automaticCaptionProgress}%` }} />
             </span>
@@ -2093,6 +2129,9 @@ export function VisualEffectsPanel({
   vectorEditor = null,
   onApplyPreset = null,
   onDelete = null,
+  onSaveTemplate = null,
+  overlayCount = 1,
+  templateSaveState = null,
   onCanvasEditModeChange,
   requestedTab = "",
   singleSection = "",
@@ -2102,6 +2141,9 @@ export function VisualEffectsPanel({
   const tabsRef = useRef(null);
   const [animationSection, setAnimationSection] = useState("in");
   const [hoveredAnimation, setHoveredAnimation] = useState(null);
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [templateScope, setTemplateScope] = useState("selected");
   const keyframes = normalizeVisualKeyframes(segment?.keyframes ?? []);
   const transform = resolveVisualTransform(keyframes, localTime, segment?.baseTransform);
   const mask = segment?.mask ?? { type: "none", feather: 0, inverted: false };
@@ -2114,7 +2156,25 @@ export function VisualEffectsPanel({
   const playbackRate = Math.max(0.25, Math.min(4, Number(segment?.playbackRate) || 1));
   const clipAnimation = normalizeVisualClipAnimation(segment?.animation);
   const activeAnimation = clipAnimation[animationSection];
+  const templateSaving = templateSaveState?.status === "loading";
+  const templateScopeCount = templateScope === "selected" ? 1 : Math.max(1, Number(overlayCount) || 1);
+  const templateKindLabel = isVector
+    ? t("overlayTemplateKindVector", "Vector")
+    : isVideo
+      ? t("overlayTemplateKindVideo", "Video")
+      : t("overlayTemplateKindImage", "Image");
+  const openTemplateEditor = () => {
+    setTemplateName((current) => current || `${segment?.name || t("pictureInPicture", "Overlay")} ${t("overlayTemplateNameSuffix", "template")}`);
+    setTemplateEditorOpen(true);
+  };
+  const submitTemplate = () => {
+    const name = templateName.trim();
+    if (!name || templateSaving || !onSaveTemplate) return;
+    onSaveTemplate({ name, scope: templateScope });
+  };
   const sourceDuration = Math.max(0, Number(segment?.sourceDuration) || (Number(segment?.duration) || 0) * playbackRate);
+  const currentCropX = Number.isFinite(segment?.cropX) ? Math.max(0, Math.min(1, segment.cropX)) : 0.5;
+  const supportsHorizontalPan = !isVector && !isOverlay && (isVideo || segment?.type === "video" || segment?.smartFrame || segment?.cropX !== undefined);
   const updateTransform = (key, value) => onChange?.(
     hasVisualPropertyKeyframe(keyframes, localTime, key)
       ? { propertyKeyframe: { time: localTime, key, value } }
@@ -2255,104 +2315,188 @@ export function VisualEffectsPanel({
           ) : null}
         </div> : null}
         <div className="visual-context-tab-body">
-        {activeTab === "transform" ?
-        <section className="visual-editor-card visual-transform-card">
-          <div className="visual-editor-heading"><span><Diamond size={16} weight="fill" />{t("visualKeyframes")}</span><em>{localTime.toFixed(2)}s · {keyframes.length} {t("visualFrames")}</em></div>
-          <button className="panel-secondary visual-add-all-keyframes" type="button" onClick={() => onChange?.({ keyframe: { time: localTime, ...transform } })}><Diamond size={14} weight="fill" />{t("visualAddAllKeyframes")}</button>
-          {keyframes.length ? <div className="visual-keyframe-times" aria-label={t("visualKeyframes")}>{keyframes.map((frame) => <button type="button" aria-label={`${frame.time.toFixed(2)}s · ${t("visualKeyframes")}`} className={Math.abs(frame.time - localTime) <= 0.04 ? "is-current" : ""} key={frame.time} onClick={() => onSeek?.(frame.time)}>{frame.time.toFixed(2)}s</button>)}</div> : null}
-          {[['scale', t('visualScale'), 0.2, 3, 0.01, 100], ['x', t('visualPositionX'), -100, 100, 1, 1], ['y', t('visualPositionY'), -100, 100, 1, 1], ['rotation', t('visualRotation'), -180, 180, 1, 1], ['opacity', t('visualOpacity'), 0, 1, 0.01, 100]].map(([key, label, min, max, step, displayScale]) => {
-            const keyed = hasVisualPropertyKeyframe(keyframes, localTime, key);
-            const displayValue = Math.round(transform[key] * displayScale * 100) / 100;
-            return <div className="slider-field compact-slider visual-keyframe-property" key={key}><div><label>{label}</label><span className="visual-property-value"><label className="visual-number-field"><input aria-label={`${label} · ${t("visualKeyframes")}`} type="number" min={min * displayScale} max={max * displayScale} step={step * displayScale} value={displayValue} onChange={(event) => updateTransform(key, Number(event.target.value) / displayScale)} /><i>{key === 'rotation' ? '°' : '%'}</i></label><button className={keyed ? "is-active" : ""} type="button" aria-label={`${keyed ? t("visualRemovePropertyKeyframe") : t("visualAddPropertyKeyframe")} · ${label}`} onClick={() => keyed ? onChange?.({ removePropertyKeyframe: { time: localTime, key } }) : onChange?.({ propertyKeyframe: { time: localTime, key, value: transform[key] } })}><Diamond size={13} weight={keyed ? "fill" : "regular"} /></button></span></div><input aria-label={`${label} · slider`} type="range" min={min} max={max} step={step} value={transform[key]} onChange={(event) => updateTransform(key, Number(event.target.value))} /></div>;
-          })}
-          <button className="panel-secondary" type="button" onClick={() => onChange?.({ removeKeyframeAt: localTime })}>{t("visualDeleteKeyframe")}</button>
-        </section> : null}
-        {activeTab === "mask" ?
-        <section className="visual-editor-card">
-          {!singleSection ? <div className="visual-editor-heading"><strong>{t("visualMask")}</strong><em>{t("visualClipScoped")}</em></div> : null}
-          <div className="mask-choice-grid">{[['none',t('visualMaskNone')],['rectangle',t('visualMaskRectangle')],['rounded',t('visualMaskRounded')],['circle',t('visualMaskCircle')]].map(([id,label]) => <button type="button" key={id} className={mask.type === id ? 'is-active' : ''} onClick={() => onChange?.({ mask: { ...mask, type: id, ...(id === 'circle' && !Number.isFinite(mask.size) ? { size: 72 } : {}), ...(id === 'rounded' && !Number.isFinite(mask.cornerRadius) ? { cornerRadius: 12 } : {}) } })}>{label}</button>)}</div>
-          {hasMask ? <>
-            <div className="slider-field compact-slider"><div><label>{t("visualFeather")}</label><span>{mask.feather || 0}%</span></div><input type="range" min="0" max="40" value={mask.feather || 0} onChange={(event) => onChange?.({ mask: { ...mask, feather: Number(event.target.value) } })} /></div>
-            {[['centerX',t('visualHorizontal'),0,100,50],['centerY',t('visualVertical'),0,100,50]].map(([key,label,min,max,fallback]) => <div className="slider-field compact-slider" key={key}><div><label>{label}</label><span>{Number.isFinite(mask[key]) ? Math.round(mask[key]) : fallback}%</span></div><input type="range" min={min} max={max} value={Number.isFinite(mask[key]) ? mask[key] : fallback} onChange={(event) => onChange?.({ mask: { ...mask, [key]: Number(event.target.value) } })} /></div>)}
-            {isCircleMask ? <div className="slider-field compact-slider"><div><label>{t("visualDiameter")}</label><span>{Number.isFinite(mask.size) ? Math.round(mask.size) : 72}%</span></div><input type="range" min="8" max="100" value={Number.isFinite(mask.size) ? mask.size : 72} onChange={(event) => onChange?.({ mask: { ...mask, size: Number(event.target.value) } })} /></div> : [['width',t('visualWidth'),8,100,80],['height',t('visualHeight'),8,100,80]].map(([key,label,min,max,fallback]) => <div className="slider-field compact-slider" key={key}><div><label>{label}</label><span>{Number.isFinite(mask[key]) ? Math.round(mask[key]) : fallback}%</span></div><input type="range" min={min} max={max} value={Number.isFinite(mask[key]) ? mask[key] : fallback} onChange={(event) => onChange?.({ mask: { ...mask, [key]: Number(event.target.value) } })} /></div>)}
-            {mask.type === "rounded" ? <div className="slider-field compact-slider"><div><label>{t("visualCornerRadius")}</label><span>{Number.isFinite(mask.cornerRadius) ? Math.round(mask.cornerRadius) : 12}%</span></div><input type="range" min="0" max="50" value={Number.isFinite(mask.cornerRadius) ? mask.cornerRadius : 12} onChange={(event) => onChange?.({ mask: { ...mask, cornerRadius: Number(event.target.value) } })} /></div> : null}
-            <label className="switch-row"><input type="checkbox" checked={Boolean(mask.inverted)} onChange={(event) => onChange?.({ mask: { ...mask, inverted: event.target.checked } })} />{t("visualInvertMask")}</label>
-          </> : <p className="mask-empty-hint">{t("visualMaskNoneHint")}</p>}
-        </section> : null}
-        {activeTab === "speed" ? <section className="visual-editor-card visual-speed-card">
-          {!singleSection ? <div className="visual-editor-heading"><strong>{t("visualSpeed")}</strong><em>{t("visualClipScoped")}</em></div> : null}
-          {isVideo ? <>
-            <div className="visual-speed-presets" aria-label={t("visualSpeed")}>{[0.25, 0.5, 1, 1.5, 2, 3, 4].map((rate) => <button type="button" className={Math.abs(playbackRate - rate) < 0.001 ? "is-active" : ""} key={rate} onClick={() => onChange?.({ playbackRate: rate })}>{rate}×</button>)}</div>
-            <div className="slider-field compact-slider"><div><label>{t("visualSpeed")}</label><strong>{playbackRate.toFixed(playbackRate % 1 ? 2 : 0)}×</strong></div><input aria-label={t("visualSpeed")} type="range" min="0.25" max="4" step="0.05" value={playbackRate} onChange={(event) => onChange?.({ playbackRate: Number(event.target.value) })} /></div>
-            <div className="visual-speed-summary"><span><em>{t("visualSourceDuration")}</em><strong>{sourceDuration.toFixed(2)}s</strong></span><span><em>{t("visualTimelineDuration")}</em><strong>{Number(segment.duration).toFixed(2)}s</strong></span></div>
-            <p className="visual-speed-hint">{sourceAudioLinked ? t("sourceAudioSynced") : t("visualSpeedVisualOnlyHint")}</p>
-          </> : <div className="empty-state visual-speed-empty">{t("visualSpeedImageHint")}</div>}
-        </section> : null}
-        {activeTab === "audio" ? audioEditor : null}
-        {activeTab === "speedCurve" ? <VisualSpeedCurvePanel t={t} segment={segment} localTime={localTime} onChange={onChange} /> : null}
-        {activeTab === "filters" ? <VisualChoicePanel title={t("visualEffects")} hideTitle={Boolean(singleSection)} previewImage={getSegmentFilterPreview(segment)} allowFallbackPreview={false} kind="filter" options={FILTER_OPTIONS} selectedId={selectedFilterId} trOption={trOption} onSelect={onSelectFilter} /> : null}
-        {activeTab === "animation" ? <section className="visual-editor-card visual-animation-card">
-          {!singleSection ? <div className="visual-editor-heading"><strong>{t("visualAnimation")}</strong><em>{t("visualAnimationHoverHint")}</em></div> : null}
-          <div className="visual-animation-sections" role="tablist" aria-label={t("visualAnimation")}>
-            {[['in', t('visualAnimationIn')], ['out', t('visualAnimationOut')]].map(([id, label]) => <button type="button" role="tab" aria-selected={animationSection === id} className={animationSection === id ? 'is-active' : ''} key={id} onClick={() => setAnimationSection(id)}>{label}</button>)}
-          </div>
-          <div className="visual-animation-grid">
-            {VISUAL_CLIP_ANIMATION_OPTIONS.map((option) => <button
-              type="button"
-              className={activeAnimation.id === option.id ? "is-active" : ""}
-              key={option.id}
-              onPointerEnter={() => option.id !== "none" && setHoveredAnimation({ phase: animationSection, id: option.id })}
-              onPointerLeave={() => setHoveredAnimation(null)}
-              onFocus={() => option.id !== "none" && setHoveredAnimation({ phase: animationSection, id: option.id })}
-              onBlur={() => setHoveredAnimation(null)}
-              onClick={() => onChange?.({ animation: { ...clipAnimation, [animationSection]: { ...activeAnimation, id: option.id } } })}
-            ><span className={`visual-animation-swatch is-${option.id}`} aria-hidden="true"><i /></span><strong>{t(option.labelKey)}</strong></button>)}
-          </div>
-          {activeAnimation.id !== "none" ? <div className="slider-field compact-slider visual-animation-duration"><div><label>{t("visualAnimationDuration")}</label><strong>{activeAnimation.duration.toFixed(1)}s</strong></div><input aria-label={t("visualAnimationDuration")} type="range" min="0.1" max={Math.min(3, Math.max(0.1, Number(segment.duration) || 0.1))} step="0.1" value={activeAnimation.duration} onChange={(event) => onChange?.({ animation: { ...clipAnimation, [animationSection]: { ...activeAnimation, duration: Number(event.target.value) } } })} /></div> : null}
-        </section> : null}
-        {activeTab === "colorWheels" ? <ColorWheelsPanel t={t} value={segment.colorGrade} keyframes={keyframes} localTime={localTime} onChange={onChange} /> : null}
-        {activeTab === "vector" ? <section className="visual-editor-card visual-vector-card">{vectorEditor}</section> : null}
-        {activeTab === "timing" ? <section className="visual-editor-card visual-overlay-timing-card">
-          {!singleSection ? <div className="visual-editor-heading"><strong>{t("overlayTiming", "Timing & layer")}</strong><em>{t("visualClipScoped")}</em></div> : null}
-          <section className="visual-overlay-presets"><strong>{t("layoutPresets")}</strong><div>
-            {[["top-left", "↖"], ["top-right", "↗"], ["bottom-left", "↙"], ["bottom-right", "↘"], ["center", "●"], ["full", "□"]].map(([id, label]) => <button type="button" key={id} title={id} aria-label={`${t("layoutPresets")} ${id}`} onClick={() => onApplyPreset?.(id)}>{label}</button>)}
-          </div></section>
-          <label><span>{t("clipStart", "Start time")}</span><input type="number" min="0" step="0.1" value={segment.start} onChange={(event) => onChange?.({ timing: { start: Math.max(0, Number(event.target.value) || 0) } })} /></label>
-          <label><span>{t("clipDuration", "Duration")}</span><input type="number" min="0.1" step="0.1" value={segment.duration} onChange={(event) => onChange?.({ timing: { duration: Math.max(0.1, Number(event.target.value) || 0.1) } })} /></label>
-          <label><span>{t("layer", "Layer")}</span><input type="number" min="1" step="1" value={segment.layer || 1} onChange={(event) => onChange?.({ timing: { layer: Math.max(1, Math.round(Number(event.target.value) || 1)) } })} /></label>
-          {isVideo ? <label className="switch-row"><input type="checkbox" checked={segment.muted === true} onChange={(event) => onChange?.({ timing: { muted: event.target.checked } })} />{t("overlayMute", "Mute video audio")}</label> : null}
-          <button className="panel-secondary visual-overlay-delete" type="button" onClick={onDelete}><Trash size={14} />{t("delete")}</button>
-        </section> : null}
-        {activeTab === "repair" ? <section className="visual-editor-card repair-card repair-hub">
-          {!singleSection ? <div className="visual-editor-heading">
-            <span><MagicWand size={17} weight="duotone" />{t("repairHubTitle")}</span>
-            <em>{t("repairLocalBadge")}</em>
-          </div> : null}
-          <div className={`repair-hub-summary ${singleSection ? "is-focused" : ""}`}>
-            <p className="repair-intro">{t("repairHubIntro")}</p>
-            {singleSection ? <em>{t("repairLocalBadge")}</em> : null}
-          </div>
-          <div className="repair-capability-list">
-            <article className="repair-capability is-available is-featured">
-              <span><MagicWand size={18} weight="duotone" /></span>
-              <div><strong>{t("repairWatermarkCapability")}</strong><small>{t("repairWatermarkCapabilityHint")}</small></div>
-              <button className="panel-primary" type="button" onClick={miganRepair?.openDialog}>{segment?.repair ? t("repairEditAgain") : t("repairOpenEditor")}</button>
-            </article>
-            <article className="repair-capability is-available">
-              <span><Waveform size={18} weight="duotone" /></span>
-              <div><strong>{t("denoiseCapability")}</strong><small>{t("denoiseCapabilityHint")}</small></div>
-              <button className="panel-primary" type="button" onClick={smartDenoise?.openDialog}>{segment?.enhancement?.mode === "smart-denoise-drunet" ? t("repairEditAgain") : t("repairOpenEditor")}</button>
-            </article>
-            <article className="repair-capability is-available">
-              <span><Scan size={18} weight="duotone" /></span>
-              <div><strong>{t("repairHdCapability")}</strong><small>{t("repairHdCapabilityHint")}</small></div>
-              <button className="panel-primary" type="button" onClick={hdRestoration?.openDialog}>{segment?.enhancement?.mode === "nanovsr-644k" ? t("repairEditAgain") : t("repairOpenEditor")}</button>
-            </article>
-          </div>
-          {segment?.repair ? <label className="switch-row repair-result-toggle"><input type="checkbox" checked={segment.repair.enabled !== false} onChange={(event) => onChange?.({ repairEnabled: event.target.checked })} />{t("repairUseResult")}</label> : null}
-          {segment?.enhancement?.mode === "nanovsr-644k" ? <label className="switch-row repair-result-toggle"><input type="checkbox" checked={segment.enhancement.enabled !== false} onChange={(event) => onChange?.({ enhancementEnabled: event.target.checked })} />{t("hdRestoreUseResult")}</label> : null}
-          {segment?.enhancement?.mode === "smart-denoise-drunet" ? <label className="switch-row repair-result-toggle"><input type="checkbox" checked={segment.enhancement.enabled !== false} onChange={(event) => onChange?.({ enhancementEnabled: event.target.checked })} />{t("denoiseUseResult")}</label> : null}
-        </section> : null}
+          {activeTab === "transform" ?
+            <section className="visual-editor-card visual-transform-card">
+              <div className="visual-editor-heading"><span><Diamond size={16} weight="fill" />{t("visualKeyframes")}</span><em>{localTime.toFixed(2)}s · {keyframes.length} {t("visualFrames")}</em></div>
+              <button className="panel-secondary visual-add-all-keyframes" type="button" onClick={() => onChange?.({ keyframe: { time: localTime, ...transform } })}><Diamond size={14} weight="fill" />{t("visualAddAllKeyframes")}</button>
+              {keyframes.length ? <div className="visual-keyframe-times" aria-label={t("visualKeyframes")}>{keyframes.map((frame) => <button type="button" aria-label={`${frame.time.toFixed(2)}s · ${t("visualKeyframes")}`} className={Math.abs(frame.time - localTime) <= 0.04 ? "is-current" : ""} key={frame.time} onClick={() => onSeek?.(frame.time)}>{frame.time.toFixed(2)}s</button>)}</div> : null}
+              {[['scale', t('visualScale'), 0.2, 3, 0.01, 100], ['x', t('visualPositionX'), -100, 100, 1, 1], ['y', t('visualPositionY'), -100, 100, 1, 1], ['rotation', t('visualRotation'), -180, 180, 1, 1], ['opacity', t('visualOpacity'), 0, 1, 0.01, 100]].map(([key, label, min, max, step, displayScale]) => {
+                const keyed = hasVisualPropertyKeyframe(keyframes, localTime, key);
+                const displayValue = Math.round(transform[key] * displayScale * 100) / 100;
+                return <div className="slider-field compact-slider visual-keyframe-property" key={key}><div><label>{label}</label><span className="visual-property-value"><label className="visual-number-field"><input aria-label={`${label} · ${t("visualKeyframes")}`} type="number" min={min * displayScale} max={max * displayScale} step={step * displayScale} value={displayValue} onChange={(event) => updateTransform(key, Number(event.target.value) / displayScale)} /><i>{key === 'rotation' ? '°' : '%'}</i></label><button className={keyed ? "is-active" : ""} type="button" aria-label={`${keyed ? t("visualRemovePropertyKeyframe") : t("visualAddPropertyKeyframe")} · ${label}`} onClick={() => keyed ? onChange?.({ removePropertyKeyframe: { time: localTime, key } }) : onChange?.({ propertyKeyframe: { time: localTime, key, value: transform[key] } })}><Diamond size={13} weight={keyed ? "fill" : "regular"} /></button></span></div><input aria-label={`${label} · slider`} type="range" min={min} max={max} step={step} value={transform[key]} onChange={(event) => updateTransform(key, Number(event.target.value))} /></div>;
+              })}
+              {supportsHorizontalPan ? (
+                <div className="slider-field compact-slider visual-horizontal-pan-group">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <label>{t("shortsPanPosition", "Horizontal Pan Offset")}</label>
+                    <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className={`shorts-quick-pan-btn ${Math.abs(currentCropX - 0.2) < 0.01 ? "is-active" : ""}`}
+                        onClick={() => onChange?.({ cropX: 0.2 })}
+                      >
+                        Left
+                      </button>
+                      <button
+                        type="button"
+                        className={`shorts-quick-pan-btn ${Math.abs(currentCropX - 0.5) < 0.01 ? "is-active" : ""}`}
+                        onClick={() => onChange?.({ cropX: 0.5 })}
+                      >
+                        Center
+                      </button>
+                      <button
+                        type="button"
+                        className={`shorts-quick-pan-btn ${Math.abs(currentCropX - 0.8) < 0.01 ? "is-active" : ""}`}
+                        onClick={() => onChange?.({ cropX: 0.8 })}
+                      >
+                        Right
+                      </button>
+                      <span className="visual-property-value" style={{ minWidth: "2.8rem", textAlign: "right", justifyContent: "flex-end" }}>
+                        {Math.round(currentCropX * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                  <input
+                    aria-label={`${t("shortsPanPosition", "Horizontal Pan Offset")} · slider`}
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    className="shorts-range-slider"
+                    value={currentCropX}
+                    onChange={(event) => onChange?.({ cropX: Number(event.target.value) })}
+                  />
+                </div>
+              ) : null}
+              <button className="panel-secondary" type="button" onClick={() => onChange?.({ removeKeyframeAt: localTime })}>{t("visualDeleteKeyframe")}</button>
+            </section> : null}
+          {activeTab === "mask" ?
+            <section className="visual-editor-card">
+              {!singleSection ? <div className="visual-editor-heading"><strong>{t("visualMask")}</strong><em>{t("visualClipScoped")}</em></div> : null}
+              <div className="mask-choice-grid">{[['none', t('visualMaskNone')], ['rectangle', t('visualMaskRectangle')], ['rounded', t('visualMaskRounded')], ['circle', t('visualMaskCircle')]].map(([id, label]) => <button type="button" key={id} className={mask.type === id ? 'is-active' : ''} onClick={() => onChange?.({ mask: { ...mask, type: id, ...(id === 'circle' && !Number.isFinite(mask.size) ? { size: 72 } : {}), ...(id === 'rounded' && !Number.isFinite(mask.cornerRadius) ? { cornerRadius: 12 } : {}) } })}>{label}</button>)}</div>
+              {hasMask ? <>
+                <div className="slider-field compact-slider"><div><label>{t("visualFeather")}</label><span>{mask.feather || 0}%</span></div><input type="range" min="0" max="40" value={mask.feather || 0} onChange={(event) => onChange?.({ mask: { ...mask, feather: Number(event.target.value) } })} /></div>
+                {[['centerX', t('visualHorizontal'), 0, 100, 50], ['centerY', t('visualVertical'), 0, 100, 50]].map(([key, label, min, max, fallback]) => <div className="slider-field compact-slider" key={key}><div><label>{label}</label><span>{Number.isFinite(mask[key]) ? Math.round(mask[key]) : fallback}%</span></div><input type="range" min={min} max={max} value={Number.isFinite(mask[key]) ? mask[key] : fallback} onChange={(event) => onChange?.({ mask: { ...mask, [key]: Number(event.target.value) } })} /></div>)}
+                {isCircleMask ? <div className="slider-field compact-slider"><div><label>{t("visualDiameter")}</label><span>{Number.isFinite(mask.size) ? Math.round(mask.size) : 72}%</span></div><input type="range" min="8" max="100" value={Number.isFinite(mask.size) ? mask.size : 72} onChange={(event) => onChange?.({ mask: { ...mask, size: Number(event.target.value) } })} /></div> : [['width', t('visualWidth'), 8, 100, 80], ['height', t('visualHeight'), 8, 100, 80]].map(([key, label, min, max, fallback]) => <div className="slider-field compact-slider" key={key}><div><label>{label}</label><span>{Number.isFinite(mask[key]) ? Math.round(mask[key]) : fallback}%</span></div><input type="range" min={min} max={max} value={Number.isFinite(mask[key]) ? mask[key] : fallback} onChange={(event) => onChange?.({ mask: { ...mask, [key]: Number(event.target.value) } })} /></div>)}
+                {mask.type === "rounded" ? <div className="slider-field compact-slider"><div><label>{t("visualCornerRadius")}</label><span>{Number.isFinite(mask.cornerRadius) ? Math.round(mask.cornerRadius) : 12}%</span></div><input type="range" min="0" max="50" value={Number.isFinite(mask.cornerRadius) ? mask.cornerRadius : 12} onChange={(event) => onChange?.({ mask: { ...mask, cornerRadius: Number(event.target.value) } })} /></div> : null}
+                <label className="switch-row"><input type="checkbox" checked={Boolean(mask.inverted)} onChange={(event) => onChange?.({ mask: { ...mask, inverted: event.target.checked } })} />{t("visualInvertMask")}</label>
+              </> : <p className="mask-empty-hint">{t("visualMaskNoneHint")}</p>}
+            </section> : null}
+          {activeTab === "speed" ? <section className="visual-editor-card visual-speed-card">
+            {!singleSection ? <div className="visual-editor-heading"><strong>{t("visualSpeed")}</strong><em>{t("visualClipScoped")}</em></div> : null}
+            {isVideo ? <>
+              <div className="visual-speed-presets" aria-label={t("visualSpeed")}>{[0.25, 0.5, 1, 1.5, 2, 3, 4].map((rate) => <button type="button" className={Math.abs(playbackRate - rate) < 0.001 ? "is-active" : ""} key={rate} onClick={() => onChange?.({ playbackRate: rate })}>{rate}×</button>)}</div>
+              <div className="slider-field compact-slider"><div><label>{t("visualSpeed")}</label><strong>{playbackRate.toFixed(playbackRate % 1 ? 2 : 0)}×</strong></div><input aria-label={t("visualSpeed")} type="range" min="0.25" max="4" step="0.05" value={playbackRate} onChange={(event) => onChange?.({ playbackRate: Number(event.target.value) })} /></div>
+              <div className="visual-speed-summary"><span><em>{t("visualSourceDuration")}</em><strong>{sourceDuration.toFixed(2)}s</strong></span><span><em>{t("visualTimelineDuration")}</em><strong>{Number(segment.duration).toFixed(2)}s</strong></span></div>
+              <p className="visual-speed-hint">{sourceAudioLinked ? t("sourceAudioSynced") : t("visualSpeedVisualOnlyHint")}</p>
+            </> : <div className="empty-state visual-speed-empty">{t("visualSpeedImageHint")}</div>}
+          </section> : null}
+          {activeTab === "audio" ? audioEditor : null}
+          {activeTab === "speedCurve" ? <VisualSpeedCurvePanel t={t} segment={segment} localTime={localTime} onChange={onChange} /> : null}
+          {activeTab === "filters" ? <VisualChoicePanel title={t("visualEffects")} hideTitle={Boolean(singleSection)} previewImage={getSegmentFilterPreview(segment)} allowFallbackPreview={false} kind="filter" options={FILTER_OPTIONS} selectedId={selectedFilterId} trOption={trOption} onSelect={onSelectFilter} /> : null}
+          {activeTab === "animation" ? <section className="visual-editor-card visual-animation-card">
+            {!singleSection ? <div className="visual-editor-heading"><strong>{t("visualAnimation")}</strong><em>{t("visualAnimationHoverHint")}</em></div> : null}
+            <div className="visual-animation-sections" role="tablist" aria-label={t("visualAnimation")}>
+              {[['in', t('visualAnimationIn')], ['out', t('visualAnimationOut')]].map(([id, label]) => <button type="button" role="tab" aria-selected={animationSection === id} className={animationSection === id ? 'is-active' : ''} key={id} onClick={() => setAnimationSection(id)}>{label}</button>)}
+            </div>
+            <div className="visual-animation-grid">
+              {VISUAL_CLIP_ANIMATION_OPTIONS.map((option) => <button
+                type="button"
+                className={activeAnimation.id === option.id ? "is-active" : ""}
+                key={option.id}
+                onPointerEnter={() => option.id !== "none" && setHoveredAnimation({ phase: animationSection, id: option.id })}
+                onPointerLeave={() => setHoveredAnimation(null)}
+                onFocus={() => option.id !== "none" && setHoveredAnimation({ phase: animationSection, id: option.id })}
+                onBlur={() => setHoveredAnimation(null)}
+                onClick={() => onChange?.({ animation: { ...clipAnimation, [animationSection]: { ...activeAnimation, id: option.id } } })}
+              ><span className={`visual-animation-swatch is-${option.id}`} aria-hidden="true"><i /></span><strong>{t(option.labelKey)}</strong></button>)}
+            </div>
+            {activeAnimation.id !== "none" ? <div className="slider-field compact-slider visual-animation-duration"><div><label>{t("visualAnimationDuration")}</label><strong>{activeAnimation.duration.toFixed(1)}s</strong></div><input aria-label={t("visualAnimationDuration")} type="range" min="0.1" max={Math.min(3, Math.max(0.1, Number(segment.duration) || 0.1))} step="0.1" value={activeAnimation.duration} onChange={(event) => onChange?.({ animation: { ...clipAnimation, [animationSection]: { ...activeAnimation, duration: Number(event.target.value) } } })} /></div> : null}
+          </section> : null}
+          {activeTab === "colorWheels" ? <ColorWheelsPanel t={t} value={segment.colorGrade} keyframes={keyframes} localTime={localTime} onChange={onChange} /> : null}
+          {activeTab === "vector" ? <section className="visual-editor-card visual-vector-card">{vectorEditor}</section> : null}
+          {activeTab === "timing" ? <section className="visual-editor-card visual-overlay-timing-card">
+            {!singleSection ? <div className="visual-editor-heading"><strong>{t("overlayTiming", "Timing & layer")}</strong><em>{t("visualClipScoped")}</em></div> : null}
+            <section className="visual-overlay-presets"><strong>{t("layoutPresets")}</strong><div>
+              {[["top-left", "↖"], ["top-right", "↗"], ["bottom-left", "↙"], ["bottom-right", "↘"], ["center", "●"], ["full", "□"]].map(([id, label]) => <button type="button" key={id} title={id} aria-label={`${t("layoutPresets")} ${id}`} onClick={() => onApplyPreset?.(id)}>{label}</button>)}
+            </div></section>
+            <section className={`overlay-template-save ${templateEditorOpen ? "is-open" : ""}`}>
+              <button
+                className="panel-secondary overlay-template-save-trigger"
+                type="button"
+                aria-expanded={templateEditorOpen}
+                onClick={() => templateEditorOpen ? setTemplateEditorOpen(false) : openTemplateEditor()}
+              >
+                <CloudArrowUp size={15} weight="bold" />
+                {t("overlayTemplateSaveAction", "Save as Template")}
+              </button>
+              {templateEditorOpen ? (
+                <div className="overlay-template-save-editor">
+                  <label className="overlay-template-name-field">
+                    <span>{t("overlayTemplateName", "Template name")}</span>
+                    <input
+                      type="text"
+                      maxLength="120"
+                      value={templateName}
+                      placeholder={t("overlayTemplateNamePlaceholder", "My overlay template")}
+                      onChange={(event) => setTemplateName(event.target.value)}
+                      disabled={templateSaving}
+                    />
+                  </label>
+                  <div className="overlay-template-scope" role="radiogroup" aria-label={t("overlayTemplateScope", "Save scope")}>
+                    <button type="button" role="radio" aria-checked={templateScope === "selected"} className={templateScope === "selected" ? "is-active" : ""} disabled={templateSaving} onClick={() => setTemplateScope("selected")}>{t("overlayTemplateSelected", "Selected overlay")}</button>
+                    <button type="button" role="radio" aria-checked={templateScope === "all"} className={templateScope === "all" ? "is-active" : ""} disabled={templateSaving} onClick={() => setTemplateScope("all")}>{t("overlayTemplateAll", "All overlays")}</button>
+                  </div>
+                  <div className="overlay-template-summary">
+                    <span>{templateScopeCount}</span>
+                    <div>
+                      <strong>{templateScope === "selected" ? t("overlayTemplateSelectedSummary", "Selected overlay") : t("overlayTemplateAllSummary", "Overlays in this edit")}</strong>
+                      <small>{templateScope === "selected" ? `${templateKindLabel} · ${Number(segment.duration || 0).toFixed(1)}s` : t("overlayTemplatePortableHint", "Portable media and vector overlays will be included")}</small>
+                    </div>
+                  </div>
+                  {templateSaveState?.message ? <p className={`overlay-template-save-status is-${templateSaveState.status || "idle"}`} role="status" aria-live="polite">{templateSaveState.message}</p> : null}
+                  <button className="panel-primary overlay-template-save-confirm" type="button" disabled={!templateName.trim() || templateSaving || !onSaveTemplate} onClick={submitTemplate}>
+                    {templateSaving ? t("overlayTemplateSaving", "Saving…") : t("overlayTemplateSaveConfirm", "Save Template")}
+                  </button>
+                </div>
+              ) : null}
+            </section>
+            <label><span>{t("clipStart", "Start time")}</span><input type="number" min="0" step="0.1" value={segment.start} onChange={(event) => onChange?.({ timing: { start: Math.max(0, Number(event.target.value) || 0) } })} /></label>
+            <label><span>{t("clipDuration", "Duration")}</span><input type="number" min="0.1" step="0.1" value={segment.duration} onChange={(event) => onChange?.({ timing: { duration: Math.max(0.1, Number(event.target.value) || 0.1) } })} /></label>
+            <label><span>{t("layer", "Layer")}</span><input type="number" min="1" step="1" value={segment.layer || 1} onChange={(event) => onChange?.({ timing: { layer: Math.max(1, Math.round(Number(event.target.value) || 1)) } })} /></label>
+            {isVideo ? <label className="switch-row"><input type="checkbox" checked={segment.muted === true} onChange={(event) => onChange?.({ timing: { muted: event.target.checked } })} />{t("overlayMute", "Mute video audio")}</label> : null}
+            <button className="panel-secondary visual-overlay-delete" type="button" onClick={onDelete}><Trash size={14} />{t("delete")}</button>
+          </section> : null}
+          {activeTab === "repair" ? <section className="visual-editor-card repair-card repair-hub">
+            {!singleSection ? <div className="visual-editor-heading">
+              <span><MagicWand size={17} weight="duotone" />{t("repairHubTitle")}</span>
+              <em>{t("repairLocalBadge")}</em>
+            </div> : null}
+            <div className={`repair-hub-summary ${singleSection ? "is-focused" : ""}`}>
+              <p className="repair-intro">{t("repairHubIntro")}</p>
+              {singleSection ? <em>{t("repairLocalBadge")}</em> : null}
+            </div>
+            <div className="repair-capability-list">
+              <article className="repair-capability is-available is-featured">
+                <span><MagicWand size={18} weight="duotone" /></span>
+                <div><strong>{t("repairWatermarkCapability")}</strong><small>{t("repairWatermarkCapabilityHint")}</small></div>
+                <button className="panel-primary" type="button" onClick={miganRepair?.openDialog}>{segment?.repair ? t("repairEditAgain") : t("repairOpenEditor")}</button>
+              </article>
+              <article className="repair-capability is-available">
+                <span><Waveform size={18} weight="duotone" /></span>
+                <div><strong>{t("denoiseCapability")}</strong><small>{t("denoiseCapabilityHint")}</small></div>
+                <button className="panel-primary" type="button" onClick={smartDenoise?.openDialog}>{segment?.enhancement?.mode === "smart-denoise-drunet" ? t("repairEditAgain") : t("repairOpenEditor")}</button>
+              </article>
+              <article className="repair-capability is-available">
+                <span><Scan size={18} weight="duotone" /></span>
+                <div><strong>{t("repairHdCapability")}</strong><small>{t("repairHdCapabilityHint")}</small></div>
+                <button className="panel-primary" type="button" onClick={hdRestoration?.openDialog}>{segment?.enhancement?.mode === "nanovsr-644k" ? t("repairEditAgain") : t("repairOpenEditor")}</button>
+              </article>
+            </div>
+            {segment?.repair ? <label className="switch-row repair-result-toggle"><input type="checkbox" checked={segment.repair.enabled !== false} onChange={(event) => onChange?.({ repairEnabled: event.target.checked })} />{t("repairUseResult")}</label> : null}
+            {segment?.enhancement?.mode === "nanovsr-644k" ? <label className="switch-row repair-result-toggle"><input type="checkbox" checked={segment.enhancement.enabled !== false} onChange={(event) => onChange?.({ enhancementEnabled: event.target.checked })} />{t("hdRestoreUseResult")}</label> : null}
+            {segment?.enhancement?.mode === "smart-denoise-drunet" ? <label className="switch-row repair-result-toggle"><input type="checkbox" checked={segment.enhancement.enabled !== false} onChange={(event) => onChange?.({ enhancementEnabled: event.target.checked })} />{t("denoiseUseResult")}</label> : null}
+          </section> : null}
         </div>
       </>}
     </div>
@@ -2367,9 +2511,8 @@ function VisualChoicePanel({ title, hideTitle = false, previewImage = SAMPLE_IMA
       <div className="visual-choice-grid">
         {options.map((option) => (
           <button
-            className={`visual-choice-card is-${kind} preview-${option.id} ${
-              selectedId === option.id ? "is-selected" : ""
-            }`}
+            className={`visual-choice-card is-${kind} preview-${option.id} ${selectedId === option.id ? "is-selected" : ""
+              }`}
             type="button"
             key={option.id}
             draggable={option.id !== "none"}
@@ -2505,27 +2648,27 @@ function StickerPanel({
           };
 
           return (
-          <button
-            className={`sticker-tile ${selectedId === option.id ? "is-selected" : ""}`}
-            type="button"
-            key={option.id}
-            onPointerDown={(event) => onStickerPointerDown?.(event, dragAsset)}
-            onClick={(event) => {
-              if (onStickerClick) {
-                onStickerClick(event, option);
-                return;
-              }
-              onSelect(option.id);
-            }}
-          >
-            <span className="sticker-tile-thumb" aria-hidden="true">
-              <img src={option.src} alt="" loading="lazy" draggable={false} />
-            </span>
-            <span className="sticker-tile-label">
-              <span>{trOption(option.name, option)}</span>
-              {selectedId === option.id ? <Check size={13} weight="bold" /> : null}
-            </span>
-          </button>
+            <button
+              className={`sticker-tile ${selectedId === option.id ? "is-selected" : ""}`}
+              type="button"
+              key={option.id}
+              onPointerDown={(event) => onStickerPointerDown?.(event, dragAsset)}
+              onClick={(event) => {
+                if (onStickerClick) {
+                  onStickerClick(event, option);
+                  return;
+                }
+                onSelect(option.id);
+              }}
+            >
+              <span className="sticker-tile-thumb" aria-hidden="true">
+                <img src={option.src} alt="" loading="lazy" draggable={false} />
+              </span>
+              <span className="sticker-tile-label">
+                <span>{trOption(option.name, option)}</span>
+                {selectedId === option.id ? <Check size={13} weight="bold" /> : null}
+              </span>
+            </button>
           );
         })}
       </div>
@@ -2557,6 +2700,9 @@ function StickerPanel({
 }
 
 export function VoiceSynthesisPanel({
+  beginOllalinkSpeech,
+  captionSegment,
+  selectionKey,
   script,
   updateScript,
   selectedVoiceId,
@@ -2576,6 +2722,7 @@ export function VoiceSynthesisPanel({
   progressPercent,
   audioBlob,
   audioUrl,
+  cloudAudioSegment,
   generateVoiceover,
   downloadBlob,
   favoriteVoiceIds,
@@ -2588,6 +2735,9 @@ export function VoiceSynthesisPanel({
   clearSelectedVoiceProfile,
   t,
 }) {
+  const [provider, setProvider] = useState("local");
+  const resultBlob = provider === "ollalink" && cloudAudioSegment ? cloudAudioSegment.blob : audioBlob;
+  const resultUrl = provider === "ollalink" && cloudAudioSegment ? cloudAudioSegment.url : audioUrl;
   const voiceLanguages = useMemo(() => [...new Set(VOICES.map((voice) => voice.language))], []);
   const voiceSampleRef = useRef(null);
   const previousVoiceSampleIdRef = useRef(selectedVoiceId);
@@ -2632,6 +2782,12 @@ export function VoiceSynthesisPanel({
 
   return (
     <>
+      <label className="field-label">Speech provider
+        <select aria-label="Speech provider" value={provider} onChange={event => setProvider(event.target.value)}>
+          <option value="local">Local TTS (default)</option>
+          <option value="ollalink">Ollalink (cloud, opt-in)</option>
+        </select>
+      </label>
       <label className="field-label" htmlFor="script-input">
         {t("inputScript")}
       </label>
@@ -2646,148 +2802,158 @@ export function VoiceSynthesisPanel({
         </div>
       </div>
 
-      <div className="voice-header">
-        <label className="field-label">{t("chooseVoice")}</label>
-        <div className="menu-anchor">
-          <button className="voice-filter" type="button" onClick={() => setShowVoiceFilter((open) => !open)}>
-            {voiceFilter === "all" ? t("allVoices") : voiceFilter} <CaretDown size={14} />
-          </button>
-          {showVoiceFilter ? (
-            <Popover closeLabel={t("close")} onClose={() => setShowVoiceFilter(false)}>
-              <div className="menu-list">
-                {["all", ...voiceLanguages].map((filter) => (
-                  <button
-                    type="button"
-                    className={voiceFilter === filter ? "is-selected" : ""}
-                    key={filter}
-                    onClick={() => {
-                      setVoiceFilter(filter);
-                      if (filter !== "all") {
-                        const firstVoiceForLanguage = VOICES.find((voice) => voice.language === filter);
-                        if (firstVoiceForLanguage) selectAndPlayVoiceSample(firstVoiceForLanguage, true);
-                      }
-                      setShowVoiceFilter(false);
-                    }}
-                  >
-                    {filter === "all" ? t("allVoices") : filter}
-                  </button>
-                ))}
-              </div>
-            </Popover>
-          ) : null}
+      {provider === "ollalink" ? (
+        <OllalinkTtsPanel script={script} captionSegment={captionSegment} selectionKey={selectionKey} status={status}
+          beginOllalinkSpeech={beginOllalinkSpeech} useLocal={() => setProvider("local")} />
+      ) : <>
+        <div className="voice-header">
+          <label className="field-label">{t("chooseVoice")}</label>
+          <div className="menu-anchor">
+            <button className="voice-filter" type="button" onClick={() => setShowVoiceFilter((open) => !open)}>
+              {voiceFilter === "all" ? t("allVoices") : voiceFilter} <CaretDown size={14} />
+            </button>
+            {showVoiceFilter ? (
+              <Popover closeLabel={t("close")} onClose={() => setShowVoiceFilter(false)}>
+                <div className="menu-list">
+                  {["all", ...voiceLanguages].map((filter) => (
+                    <button
+                      type="button"
+                      className={voiceFilter === filter ? "is-selected" : ""}
+                      key={filter}
+                      onClick={() => {
+                        setVoiceFilter(filter);
+                        if (filter !== "all") {
+                          const firstVoiceForLanguage = VOICES.find((voice) => voice.language === filter);
+                          if (firstVoiceForLanguage) selectAndPlayVoiceSample(firstVoiceForLanguage, true);
+                        }
+                        setShowVoiceFilter(false);
+                      }}
+                    >
+                      {filter === "all" ? t("allVoices") : filter}
+                    </button>
+                  ))}
+                </div>
+              </Popover>
+            ) : null}
+          </div>
         </div>
-      </div>
 
-      <div className="voice-list">
-        {voiceProfiles.map((profile) => (
+        <div className="voice-list">
+          {voiceProfiles.map((profile) => (
+            <button
+              className={`voice-card clone-voice-card ${profile.id === selectedVoiceProfileId ? "is-selected" : ""}`}
+              type="button"
+              key={profile.id}
+              onClick={() => selectCloneProfile(profile)}
+            >
+              <span className="avatar"><Waveform size={17} weight="bold" /></span>
+              <span>
+                <strong>{profile.name}</strong>
+                <em>{t("cloneVoiceMultilingual", "多语言 · 克隆音色")}</em>
+              </span>
+            </button>
+          ))}
+          {filteredVoices.map((voice) => (
+            <button
+              className={`voice-card ${voice.id === selectedVoiceId && !selectedVoiceProfile ? "is-selected" : ""}`}
+              type="button"
+              key={voice.id}
+              onClick={() => selectAndPlayVoiceSample(voice)}
+            >
+              <span className="avatar voice-avatar" aria-hidden="true">
+                <img src={voice.avatarUrl} alt="" loading="lazy" />
+              </span>
+              <span>
+                <strong>{voice.name}</strong>
+                <em>
+                  {voice.language} · {voice.gender}
+                </em>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="model-row">
+          <span title={selectedVoice.detail}>{selectedVoiceProfile ? `${t("cloneBaseVoice", "基础语言声音")} · ${selectedVoice.name}` : selectedVoice.detail}</span>
           <button
-            className={`voice-card clone-voice-card ${profile.id === selectedVoiceProfileId ? "is-selected" : ""}`}
             type="button"
-            key={profile.id}
-            onClick={() => selectCloneProfile(profile)}
+            onClick={() => selectedVoiceProfile
+              ? toggleVoiceProfileFavorite(selectedVoiceProfile.id)
+              : setFavoriteVoiceIds((ids) => ids.includes(selectedVoiceId) ? ids.filter((id) => id !== selectedVoiceId) : [...ids, selectedVoiceId])}
           >
-            <span className="avatar"><Waveform size={17} weight="bold" /></span>
-            <span>
-              <strong>{profile.name}</strong>
-              <em>{t("cloneVoiceMultilingual", "多语言 · 克隆音色")}</em>
-            </span>
+            {selectedVoiceProfile
+              ? selectedVoiceProfile.favorite ? t("saved") : t("favorite")
+              : favoriteVoiceIds.includes(selectedVoiceId) ? t("saved") : t("favorite")}
           </button>
-        ))}
-        {filteredVoices.map((voice) => (
-          <button
-            className={`voice-card ${voice.id === selectedVoiceId && !selectedVoiceProfile ? "is-selected" : ""}`}
-            type="button"
-            key={voice.id}
-            onClick={() => selectAndPlayVoiceSample(voice)}
-          >
-            <span className="avatar voice-avatar" aria-hidden="true">
-              <img src={voice.avatarUrl} alt="" loading="lazy" />
-            </span>
-            <span>
-              <strong>{voice.name}</strong>
-              <em>
-                {voice.language} · {voice.gender}
-              </em>
-            </span>
-          </button>
-        ))}
-      </div>
-
-      <div className="model-row">
-        <span title={selectedVoice.detail}>{selectedVoiceProfile ? `${t("cloneBaseVoice", "基础语言声音")} · ${selectedVoice.name}` : selectedVoice.detail}</span>
-        <button
-          type="button"
-          onClick={() => selectedVoiceProfile
-            ? toggleVoiceProfileFavorite(selectedVoiceProfile.id)
-            : setFavoriteVoiceIds((ids) => ids.includes(selectedVoiceId) ? ids.filter((id) => id !== selectedVoiceId) : [...ids, selectedVoiceId])}
-        >
-          {selectedVoiceProfile
-            ? selectedVoiceProfile.favorite ? t("saved") : t("favorite")
-            : favoriteVoiceIds.includes(selectedVoiceId) ? t("saved") : t("favorite")}
-        </button>
-      </div>
-
-      <div className="voice-sample-preview">
-        <div>
-          <strong>{t("voiceSampleTitle", "音色样音")}</strong>
-          <span>{selectedVoiceProfile
-            ? `${selectedVoiceProfile.name} · ${t("cloneLanguageFlow", "先合成所选语言，再转换为此音色")}`
-            : `${selectedVoice.name} · ${t("voiceSampleHint", "切换音色后试听对应的预生成样音")}`}</span>
         </div>
-        <audio
-          ref={voiceSampleRef}
-          data-testid="voice-sample-player"
-          data-voice-id={selectedVoiceProfile?.id || selectedVoice.id}
-          controls
-          preload="metadata"
-          src={cloneSampleUrl || selectedVoice.sampleUrl}
-        />
-      </div>
 
-      <div className="slider-field">
-        <div>
-          <label htmlFor="speed">{t("speed")}</label>
-          <span>{speed.toFixed(2)} x</span>
-        </div>
-        <input id="speed" type="range" min="0.7" max="1.3" step="0.05" value={selectedVoice.engine === "hojo" ? 1 : speed} disabled={selectedVoice.engine === "hojo"} onChange={(event) => setSpeed(Number(event.target.value))} />
-      </div>
-
-      <div className="slider-field">
-        <div>
-          <label htmlFor="volume">{t("volume")}</label>
-          <span>{Math.round(volume * 100)}%</span>
-        </div>
-        <input id="volume" type="range" min="0" max="4" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
-        {volume > 1 ? <small className="voice-gain-hint">{t("voiceGainLimiterHint", "高增益已启用限幅保护")}</small> : null}
-      </div>
-
-      {status === "generating" ? (
-        <div className="voice-generation-loading" role="status" aria-live="polite">
-          <i className="voice-generation-spinner" aria-hidden="true" />
+        <div className="voice-sample-preview">
           <div>
-            <strong>{statusText || t("generating")}</strong>
-            <span>{t("ttsFirstRunHint")}</span>
+            <strong>{t("voiceSampleTitle", "音色样音")}</strong>
+            <span>{selectedVoiceProfile
+              ? `${selectedVoiceProfile.name} · ${t("cloneLanguageFlow", "先合成所选语言，再转换为此音色")}`
+              : `${selectedVoice.name} · ${t("voiceSampleHint", "切换音色后试听对应的预生成样音")}`}</span>
           </div>
-          <em>{Math.round(progressPercent)}%</em>
-          <div className="progress-track" aria-label={t("generationProgress")}>
-            <span style={{ width: `${progressPercent}%` }} />
-          </div>
+          <audio
+            ref={voiceSampleRef}
+            data-testid="voice-sample-player"
+            data-voice-id={selectedVoiceProfile?.id || selectedVoice.id}
+            controls
+            preload="metadata"
+            src={cloneSampleUrl || selectedVoice.sampleUrl}
+          />
         </div>
-      ) : null}
 
-      <div className="voice-actions">
-        <button className="generate-button" type="button" disabled={status === "generating" || !script.trim()} onClick={generateVoiceover}>
-          {status === "generating" ? <i className="generate-button-spinner" aria-hidden="true" /> : <Waveform size={18} weight="bold" />}
-          {status === "generating" ? t("generating") : audioBlob ? t("regenerateVoice") : t("generateVoice")}
-        </button>
-        <button className="secondary-download" type="button" disabled={!audioBlob} onClick={() => audioBlob && downloadBlob(audioBlob, "ai-voiceover.wav")}>
+        <div className="slider-field">
+          <div>
+            <label htmlFor="speed">{t("speed")}</label>
+            <span>{speed.toFixed(2)} x</span>
+          </div>
+          <input id="speed" type="range" min="0.7" max="1.3" step="0.05" value={selectedVoice.engine === "hojo" ? 1 : speed} disabled={selectedVoice.engine === "hojo"} onChange={(event) => setSpeed(Number(event.target.value))} />
+        </div>
+
+        <div className="slider-field">
+          <div>
+            <label htmlFor="volume">{t("volume")}</label>
+            <span>{Math.round(volume * 100)}%</span>
+          </div>
+          <input id="volume" type="range" min="0" max="4" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
+          {volume > 1 ? <small className="voice-gain-hint">{t("voiceGainLimiterHint", "高增益已启用限幅保护")}</small> : null}
+        </div>
+
+        {status === "generating" ? (
+          <div className="voice-generation-loading" role="status" aria-live="polite">
+            <i className="voice-generation-spinner" aria-hidden="true" />
+            <div>
+              <strong>{statusText || t("generating")}</strong>
+              <span>{t("ttsFirstRunHint")}</span>
+            </div>
+            <em>{Math.round(progressPercent)}%</em>
+            <div className="progress-track" aria-label={t("generationProgress")}>
+              <span style={{ width: `${progressPercent}%` }} />
+            </div>
+          </div>
+        ) : null}
+
+        <div className="voice-actions">
+          <button className="generate-button" type="button" disabled={status === "generating" || !script.trim()} onClick={generateVoiceover}>
+            {status === "generating" ? <i className="generate-button-spinner" aria-hidden="true" /> : <Waveform size={18} weight="bold" />}
+            {status === "generating" ? t("generating") : audioBlob ? t("regenerateVoice") : t("generateVoice")}
+          </button>
+          <button className="secondary-download" type="button" disabled={!audioBlob} onClick={() => audioBlob && downloadBlob(audioBlob, "ai-voiceover.wav")}>
+            <DownloadSimple size={17} />
+          </button>
+        </div>
+      </>}
+      {provider === "ollalink" ? <div className="voice-actions">
+        <button className="secondary-download" type="button" disabled={!resultBlob} onClick={() => resultBlob && downloadBlob(resultBlob, "ai-voiceover.wav")}>
           <DownloadSimple size={17} />
         </button>
-      </div>
-      {audioBlob && audioUrl ? (
+      </div> : null}
+      {resultBlob && resultUrl ? (
         <div className="generated-voice-result" aria-live="polite">
           <div><Check size={18} weight="bold" /><span><strong>{t("voiceAddedToTimeline", "已加入配音时间线")}</strong><em>{t("voicePreviewHint", "试听本次已生成的时间线配音")}</em></span></div>
-          <audio controls preload="metadata" src={audioUrl} />
+          <audio controls preload="metadata" src={resultUrl} />
         </div>
       ) : null}
     </>
@@ -2860,10 +3026,12 @@ export function MyVoicesPanel({
   const saveClone = async () => {
     if (!draft || !embedding || !testBlob || cloneState !== "ready") return;
     const now = new Date().toISOString();
-    const profile = { id: crypto.randomUUID(), name: draft.name.replace(/\.[^.]+$/, "") || t("myCloneVoice", "我的克隆声音"),
+    const profile = {
+      id: crypto.randomUUID(), name: draft.name.replace(/\.[^.]+$/, "") || t("myCloneVoice", "我的克隆声音"),
       sourceKind: draft.sourceKind, referenceBlob: draft.blob, testBlob, embedding: Float32Array.from(embedding),
       embeddingVersion: OPENVOICE_EMBEDDING_VERSION,
-      favorite: false, authorized: true, createdAt: now, updatedAt: now };
+      favorite: false, authorized: true, createdAt: now, updatedAt: now
+    };
     await addVoiceProfile(profile); setSelectedVoiceProfileId(profile.id); setDraft(null); setTestBlob(null); setEmbedding(null); setAuthorized(false); setCloneState("idle");
     notify(t("cloneSaved", "克隆声音已保存到“克隆声音”"));
   };
@@ -2874,25 +3042,25 @@ export function MyVoicesPanel({
         const file = event.target.files?.[0]; if (file) chooseReference(file, file.name, "upload"); event.target.value = "";
       }} />
       <div className="voice-source-grid">
-      <div className={`record-card ${isRecording ? "is-recording" : ""}`}>
-        <div>
-          <strong>{t("recordReferenceVoice", "录制参考声音")}</strong>
-          <span>{isRecording ? `${t("recording")} · ${formatClock(recordingElapsed)}` : t("recordReferenceHint", "录制自己的声音，完成后直接进入克隆试听。")}</span>
+        <div className={`record-card ${isRecording ? "is-recording" : ""}`}>
+          <div>
+            <strong>{t("recordReferenceVoice", "录制参考声音")}</strong>
+            <span>{isRecording ? `${t("recording")} · ${formatClock(recordingElapsed)}` : t("recordReferenceHint", "录制自己的声音，完成后直接进入克隆试听。")}</span>
+          </div>
+          <button
+            type="button"
+            disabled={isProcessingRecording}
+            onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+          >
+            {isRecording ? <Pause size={15} weight="fill" /> : <MicrophoneStage size={15} weight="fill" />}
+            {isRecording ? t("stopRecording") : isProcessingRecording ? t("generating") : t("startRecording")}
+          </button>
         </div>
-        <button
-          type="button"
-          disabled={isProcessingRecording}
-          onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
-        >
-          {isRecording ? <Pause size={15} weight="fill" /> : <MicrophoneStage size={15} weight="fill" />}
-          {isRecording ? t("stopRecording") : isProcessingRecording ? t("generating") : t("startRecording")}
-        </button>
-      </div>
 
-      <button className="record-card upload-voice-card" type="button" onClick={() => fileInputRef.current?.click()}>
-        <div><strong>{t("uploadVoice", "上传声音")}</strong><span>{t("uploadVoiceHint", "选择清晰的单人语音作为参考")}</span></div>
-        <CloudArrowUp size={22} weight="bold" />
-      </button>
+        <button className="record-card upload-voice-card" type="button" onClick={() => fileInputRef.current?.click()}>
+          <div><strong>{t("uploadVoice", "上传声音")}</strong><span>{t("uploadVoiceHint", "选择清晰的单人语音作为参考")}</span></div>
+          <CloudArrowUp size={22} weight="bold" />
+        </button>
       </div>
 
       {draft ? (
@@ -2935,17 +3103,17 @@ export function MyVoicesPanel({
 
       <div className="panel-subtitle">{t("savedCloneVoices", "已保存的克隆声音")}</div>
       {voiceProfiles.length ? voiceProfiles.map((profile) => (
-          <div className={`history-item clone-profile-item ${selectedVoiceProfileId === profile.id ? "is-selected" : ""}`} key={profile.id}>
-            <div className="clone-profile-copy">
-              <strong>{profile.name}</strong><span>{profile.sourceKind === "recording" ? t("recordVoice", "录制声音") : t("uploadVoice", "上传声音")}</span>
-            </div>
-            <div className="clone-profile-actions">
-              <button type="button" onClick={() => { setSelectedVoiceProfileId(profile.id); notify(t("cloneSelected", "已选择克隆音色")); }}>{t("use")}</button>
-              <button type="button" onClick={() => toggleVoiceProfileFavorite(profile.id)}>{profile.favorite ? t("saved") : t("favorite")}</button>
-              <button type="button" onClick={() => removeVoiceProfile(profile.id)}>{t("delete")}</button>
-            </div>
+        <div className={`history-item clone-profile-item ${selectedVoiceProfileId === profile.id ? "is-selected" : ""}`} key={profile.id}>
+          <div className="clone-profile-copy">
+            <strong>{profile.name}</strong><span>{profile.sourceKind === "recording" ? t("recordVoice", "录制声音") : t("uploadVoice", "上传声音")}</span>
           </div>
-        )) : <div className="empty-state">{t("noCloneVoices", "上传或录制参考声音，通过试听后会显示在这里。")}</div>}
+          <div className="clone-profile-actions">
+            <button type="button" onClick={() => { setSelectedVoiceProfileId(profile.id); notify(t("cloneSelected", "已选择克隆音色")); }}>{t("use")}</button>
+            <button type="button" onClick={() => toggleVoiceProfileFavorite(profile.id)}>{profile.favorite ? t("saved") : t("favorite")}</button>
+            <button type="button" onClick={() => removeVoiceProfile(profile.id)}>{t("delete")}</button>
+          </div>
+        </div>
+      )) : <div className="empty-state">{t("noCloneVoices", "上传或录制参考声音，通过试听后会显示在这里。")}</div>}
     </div>
   );
 }

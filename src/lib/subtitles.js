@@ -70,7 +70,7 @@ export function serializeSrt(captions, targetDuration = 0, options = {}) {
   const rangeEnd = Number.isFinite(requestedEnd) ? Math.max(rangeStart, requestedEnd) : Number.POSITIVE_INFINITY;
   const blocks = [];
   source.forEach((caption, index) => {
-    const text = getCaptionDisplayText(caption?.text).replace(/\r\n?/g, "\n").trim();
+    const text = (options.preserveText ? String(caption?.text ?? "") : getCaptionDisplayText(caption?.text)).replace(/\r\n?/g, "\n").trim();
     const range = timeline[index];
     if (caption?.hidden || !text || !range) return;
     const start = Math.max(range.start, rangeStart);

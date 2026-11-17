@@ -17,6 +17,8 @@ const UI_LANGUAGE_TO_WHISPER_LANGUAGE = {
   it: "it",
   id: "id",
   ru: "ru",
+  hi: "hi",
+  ar: "ar",
 };
 
 const WHISPER_LANGUAGE_NAMES = {
@@ -33,6 +35,8 @@ const WHISPER_LANGUAGE_NAMES = {
   it: "Italiano",
   id: "Bahasa Indonesia",
   ru: "Русский",
+  hi: "हिन्दी",
+  ar: "العربية",
 };
 
 let transcriberState = null;

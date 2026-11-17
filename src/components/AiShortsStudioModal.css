@@ -15,8 +15,15 @@
 }
 
 @keyframes shortsFadeIn {
-  from { opacity: 0; transform: scale(0.98); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .shorts-studio-window {
@@ -560,7 +567,8 @@
   justify-content: space-between;
 }
 
-.shorts-select, .shorts-input {
+.shorts-select,
+.shorts-input {
   background: #141b29;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
@@ -571,7 +579,8 @@
   transition: border-color 0.15s ease;
 }
 
-.shorts-select:focus, .shorts-input:focus {
+.shorts-select:focus,
+.shorts-input:focus {
   border-color: #818cf8;
   box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
 }
@@ -630,7 +639,9 @@
 }
 
 @keyframes shortsSpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .shorts-progress-bar-wrap {
@@ -737,12 +748,8 @@
   color: #f8fafc;
 }
 
-/* Minimized Floating Progress Banner (Requirement 7) */
+/* Minimized background card; placement is owned by the reserved notification row. */
 .shorts-minimized-floating-banner {
-  position: fixed;
-  bottom: 2rem;
-  right: 2rem;
-  z-index: 1300;
   background: #0f172a;
   border: 1px solid rgba(99, 102, 241, 0.4);
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 0 20px rgba(99, 102, 241, 0.2);
@@ -751,14 +758,7 @@
   display: flex;
   align-items: center;
   gap: 1.25rem;
-  min-width: 320px;
-  max-width: 440px;
-  animation: shortsBannerSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes shortsBannerSlideUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
+  min-width: 0;
 }
 
 .shorts-minimized-info {
@@ -963,5 +963,3 @@
   border: 1px solid rgba(245, 158, 11, 0.45);
   color: #fde68a;
 }
-
-

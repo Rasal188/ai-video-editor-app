@@ -1,4 +1,7 @@
+import { captureTranscriptionPreferences } from "../lib/transcriptionPreferences.js";
 import { useEffect, useRef, useState } from "react";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "../lib/transcriptionOutcome.js";
+import { cancelledWorkflowTranscription, isTranscriptionCancellation, workflowTranscriptionOutcome } from "../lib/workflowTranscription.js";
 import { browserProjectFingerprint } from "../lib/browserEditPlan.js";
 import {
   canRemovePauses,
@@ -38,9 +41,13 @@ export function useRoughCut(options) {
   const stale = Boolean(draft && (draft.version !== projectVersion || draft.clip.id !== segment?.id));
 
   const cancel = () => {
-    abortRef.current?.abort();
+    const controller = abortRef.current;
+    controller?.abort();
     abortRef.current = null;
-    setJob({ running: false, progress: 0, phase: "" });
+    setJob((current) => attachTranscriptionOutcome(
+      { ...current, running: false, progress: 0, phase: "" },
+      cancelledWorkflowTranscription(controller, controller?.transcriptionPreferences)
+    ));
   };
 
   const dismiss = () => {
@@ -53,6 +60,9 @@ export function useRoughCut(options) {
     const controller = new AbortController();
     abortRef.current = controller;
     const captured = { ...segment };
+    const transcription = captureTranscriptionPreferences();
+    controller.transcriptionPreferences = transcription;
+    let outcome = null;
     const snapshot = options.getSnapshot();
     const runtime = options.getRuntime();
     const fingerprint = browserProjectFingerprint(snapshot, false, runtime.visualSegments, runtime);
@@ -69,7 +79,7 @@ export function useRoughCut(options) {
         signal: controller.signal,
         onProgress: (progress, phase) => {
           if (!controller.signal.aborted) {
-            setJob({ running: true, progress: Math.min(85, progress), phase: phase || "roughCutDetecting" });
+            setJob({ running: true, progress: Number.isFinite(progress) ? Math.min(85, progress) : 10, phase: phase || "roughCutDetecting" });
           }
         },
       });
@@ -78,16 +88,30 @@ export function useRoughCut(options) {
 
       // Step 2: If filler words are requested, check cache or run transcription
       let chunks = null;
-      const cacheKey = captured.id || captured.src || captured.assetId;
+      const cacheKey = JSON.stringify([
+        captured.id, captured.src, captured.assetId, captured.sourceStart, captured.duration,
+        captured.playbackRate, transcription.provider, transcription.language,
+      ]);
       if (settings.removeFillerWords) {
         if (transcriptCache.current.has(cacheKey)) {
-          chunks = transcriptCache.current.get(cacheKey);
-        } else if (Array.isArray(captured.rawChunks) && captured.rawChunks.length > 0) {
-          chunks = captured.rawChunks;
-          transcriptCache.current.set(cacheKey, chunks);
-        } else {
-          // Attempt local transcription on the clip's audio
+          const cached = transcriptCache.current.get(cacheKey);
+          if (cached.blob === captured.blob) {
+            chunks = cached.chunks;
+            outcome = getTranscriptionOutcome(cached);
+          } else {
+            transcriptCache.current.delete(cacheKey);
+          }
+        }
+        if (!chunks && Array.isArray(captured.rawChunks) && captured.rawChunks.length > 0) {
+          // Attached transcripts are explicit reuse, not success by the selected provider.
+          outcome = getTranscriptionOutcome(captured.rawChunks) || getTranscriptionOutcome(captured);
+          chunks = attachTranscriptionOutcome(captured.rawChunks, outcome);
+          transcriptCache.current.set(cacheKey, attachTranscriptionOutcome({ chunks, blob: captured.blob }, outcome));
+        }
+        if (!chunks) {
+          // Transcribe with the provider/language captured when analysis began.
           try {
+            controller.transcriptionStarted = true;
             setJob({ running: true, progress: 85, phase: "roughCutTranscribing" });
             const mediaBlob = captured.blob || (captured.src ? await fetch(captured.src, { signal: controller.signal }).then((r) => r.blob()) : null);
             if (mediaBlob) {
@@ -100,20 +124,30 @@ export function useRoughCut(options) {
 
               const asrResult = await transcribeAudioToCaptionSegments(clipBlob, {
                 preferredLanguage: options.language,
+                ...transcription,
                 signal: controller.signal,
               });
+              controller.signal.throwIfAborted();
+              outcome = getTranscriptionOutcome(asrResult);
               if (asrResult?.rawChunks?.length) {
-                chunks = asrResult.rawChunks;
-                transcriptCache.current.set(cacheKey, chunks);
+                chunks = attachTranscriptionOutcome(asrResult.rawChunks, outcome);
+                transcriptCache.current.set(cacheKey, attachTranscriptionOutcome({ chunks, blob: captured.blob }, outcome));
               }
+            } else {
+              outcome = workflowTranscriptionOutcome(null, transcription);
             }
           } catch (asrErr) {
+            outcome = workflowTranscriptionOutcome(asrErr, transcription,
+              isTranscriptionCancellation(asrErr, controller.signal) ? "cancelled" : "failed");
+            controller.transcriptionOutcome = outcome;
+            if (isTranscriptionCancellation(asrErr, controller.signal)) throw asrErr;
             // Graceful fallback to silence-only cuts if transcription fails or is unavailable
             console.warn("[RoughCut] Transcription unavailable for filler detection, continuing with pause analysis:", asrErr);
           }
         }
       }
 
+      controller.transcriptionOutcome = outcome;
       controller.signal.throwIfAborted();
 
       // Step 3: Compute rough cut candidates
@@ -124,7 +158,7 @@ export function useRoughCut(options) {
         settings,
       });
 
-      setDraft({
+      setDraft(attachTranscriptionOutcome({
         clip: captured,
         fingerprint,
         probabilities,
@@ -132,15 +166,16 @@ export function useRoughCut(options) {
         version: projectVersion,
         start: runtime.visualSegments.slice(0, index).reduce((sum, clip) => sum + clip.duration, 0),
         candidates,
-      });
+      }, outcome));
     } catch (failure) {
-      if (!controller.signal.aborted) {
+      outcome = getTranscriptionOutcome(failure) || outcome;
+      if (!isTranscriptionCancellation(failure, controller.signal)) {
         setError(failure.code || "roughCutFailed");
       }
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
-        setJob({ running: false, progress: 0, phase: "" });
+        setJob(attachTranscriptionOutcome({ running: false, progress: 0, phase: "" }, outcome));
       }
     }
   };

@@ -151,7 +151,9 @@ export async function fuseRepairText(original, repaired, alpha, width, height, s
       await yieldRepairTask(signal);
     }
   }
-  for (let i = 0; i < alpha.length; i++)
-    if (alpha[i]) for (let c = 0; c < 3; c++) repaired[i * 4 + c] = values[i * 4 + c];
-  blendRepairText(original, repaired, alpha);
+  for (let i = 0; i < alpha.length; i++) {
+    if (alpha[i]) {
+      for (let c = 0; c < 3; c++) repaired[i * 4 + c] = Math.round(values[i * 4 + c]);
+    }
+  }
 }

@@ -7,15 +7,36 @@ import { requestLatestVideoFrame } from "./videoFrameSync.js";
 import { normalizeTimelineMarkers } from "./timelineMarkers.js";
 import { createTimelineSnapGuide, findClosestTimelineSnap } from "./timelineSnap.js";
 
+// Explicit paused seeks also resolve gaps/endpoints without restarting a track.
+export function getTimelineAudioSeekState(segments, timelineTime) {
+  const ordered = [...segments].sort((a, b) => a.start - b.start);
+  const segment = ordered.find((item) => isTimelineTimeInsideTrack(timelineTime, item.start, item.duration))
+    ?? ordered.filter((item) => item.start <= timelineTime).at(-1)
+    ?? ordered[0];
+  if (!segment) return { active: false, sourceTime: 0, playbackRate: 1 };
+  const localTime = getTimelineTrackLocalTime(timelineTime, segment.start, segment.duration);
+  return {
+    active: isTimelineTimeInsideTrack(timelineTime, segment.start, segment.duration),
+    sourceTime: getVisualSourceTime(segment, localTime),
+    playbackRate: getVisualPlaybackRateAtTime(segment, localTime),
+  };
+}
+
 export function createPlaybackControls(deps) {
+  const setPlaybackIntent = (playing) => {
+    if (!deps.playbackSessionRef) return;
+    // A running seek moves the existing clock anchors; it is not a new play.
+    if (playing && deps.playbackSessionRef.current.playing) return;
+    deps.playbackSessionRef.current = { playing };
+  };
   const isTrackAudible = (track) => deps.trackVisibility?.[track] !== false;
   const getSourceState = (timelineTime) => deps.sourceAudioLinked
     ? getLinkedSourceAudioState(deps.linkedSourceAudioSegments, timelineTime)
     : {
-        active: isTimelineTimeInsideTrack(timelineTime, deps.sourceAudioStart, deps.sourceAudioDuration),
-        sourceTime: getTimelineTrackLocalTime(timelineTime, deps.sourceAudioStart, deps.sourceAudioDuration),
-        playbackRate: 1,
-      };
+      active: isTimelineTimeInsideTrack(timelineTime, deps.sourceAudioStart, deps.sourceAudioDuration),
+      sourceTime: getTimelineTrackLocalTime(timelineTime, deps.sourceAudioStart, deps.sourceAudioDuration),
+      playbackRate: 1,
+    };
   const getMusicState = (timelineTime) => {
     const segments = deps.musicSegments?.length ? deps.musicSegments : [{ start: deps.musicStart, duration: deps.musicDuration, sourceStart: 0, playbackRate: 1 }];
     const segment = segments.find((item) => isTimelineTimeInsideTrack(timelineTime, item.start, item.duration));
@@ -28,6 +49,8 @@ export function createPlaybackControls(deps) {
     };
   };
   const pauseTimelineMedia = () => {
+    // Invalidate queued effects before native pause can make an element restartable.
+    setPlaybackIntent(false);
     deps.audioSegmentRefs.current.forEach((audio) => audio.pause()); deps.sourceAudioRef.current?.pause();
     deps.musicRef.current?.pause(); deps.previewVideoRef.current?.pause();
   };
@@ -61,6 +84,11 @@ export function createPlaybackControls(deps) {
   const seekTo = (time, options = {}) => {
     const clamped = Math.max(0, Math.min(deps.timelineDurationRef.current || MAX_TIMELINE_DURATION_SECONDS, time));
     const shouldPlay = options.play !== undefined ? Boolean(options.play) : (deps.isPlaying && !options.pause);
+    if (shouldPlay) setPlaybackIntent(true);
+    else {
+      pauseTimelineMedia();
+      if (deps.isPlaying) deps.setIsPlaying(false);
+    }
     if (options.play && !deps.isPlaying) deps.setIsPlaying(true);
     deps.currentTimeRef.current = clamped; deps.setCurrentTime(clamped);
     // Seeking while playback is active must also move the fallback timeline
@@ -74,28 +102,33 @@ export function createPlaybackControls(deps) {
       deps.visualPlaybackLastUpdateRef.current = 0;
     }
     syncPreviewVideoTime(clamped, options);
-    const audibleAudioIds = shouldPlay ? new Set(
+    const alignAudio = shouldPlay || options.immediate !== false;
+    const audibleAudioIds = new Set(
       filterTimedSegmentsByLaneVisibility(deps.audioSegments, deps.trackVisibility)
         .filter(isAudioSegmentAudible).map((segment) => segment.id),
-    ) : null;
-    // Paused audio has no visible frame to scrub. Seek only running, audible
-    // clips; every clip is aligned to its exact source time when it starts.
-    // This avoids seeking all offscreen clips and silent source backups on
-    // every pointer move in a large project.
+    );
+    // Pointer moves may defer audio work, but discrete seeks and pointer-up
+    // align paused clips without requesting playback. Resume still realigns.
     deps.audioSegments.forEach((segment) => {
       const audio = deps.audioSegmentRefs.current.get(segment.id);
       if (!audio) return;
-      if (audibleAudioIds?.has(segment.id) && isTimelineTimeInsideTrack(clamped, segment.start, segment.duration)) {
-        audio.currentTime = Math.max(0, Number(segment.sourceStart) || 0) + getTimelineTrackLocalTime(clamped, segment.start, segment.duration) * Math.max(0.25, Math.min(4, Number(segment.playbackRate) || 1));
+      if (alignAudio && audibleAudioIds.has(segment.id) && (!shouldPlay || isTimelineTimeInsideTrack(clamped, segment.start, segment.duration))) {
+        audio.currentTime = getVisualSourceTime(segment, getTimelineTrackLocalTime(clamped, segment.start, segment.duration));
       } else if (!audio.paused) audio.pause();
     });
-    const seekRunningTrack = (media, state, track) => {
+    const seekTrack = (media, state, track) => {
       if (!media) return;
-      if (shouldPlay && state.active && isTrackAudible(track)) media.currentTime = state.sourceTime;
+      if (alignAudio && (!shouldPlay || state.active) && isTrackAudible(track)) media.currentTime = state.sourceTime;
       else if (!media.paused) media.pause();
     };
-    seekRunningTrack(deps.sourceAudioRef.current, getSourceState(clamped), "source");
-    seekRunningTrack(deps.musicRef.current, getMusicState(clamped), "music");
+    const sourceState = !shouldPlay && deps.sourceAudioLinked
+      ? getTimelineAudioSeekState(deps.linkedSourceAudioSegments, clamped)
+      : getSourceState(clamped);
+    const musicState = shouldPlay ? getMusicState(clamped) : getTimelineAudioSeekState(
+      deps.musicSegments?.length ? deps.musicSegments : [{ start: deps.musicStart, duration: deps.musicDuration, sourceStart: 0, playbackRate: 1 }], clamped,
+    );
+    seekTrack(deps.sourceAudioRef.current, sourceState, "source");
+    seekTrack(deps.musicRef.current, musicState, "music");
     if (shouldPlay) {
       const video = deps.previewVideoRef.current;
       const index = getVisualSegmentIndexAtTime(deps.visualSegments, clamped);
@@ -208,6 +241,7 @@ export function createPlaybackControls(deps) {
     }
     if (!deps.canPreview) return void deps.notify("请先上传图片/视频素材、生成配音或上传背景音乐");
     if (deps.currentTimeRef.current >= deps.estimatedDuration - 0.02) seekTo(0);
+    setPlaybackIntent(true);
     const timelineTime = deps.currentTimeRef.current;
     const playIf = (media, ready) => ready ? requestTimelineMediaPlay(media) : media?.pause();
     voices.forEach(({ segment, audio }) => {
@@ -238,5 +272,10 @@ export function createPlaybackControls(deps) {
     }
     deps.setIsPlaying(true);
   };
-  return { getTimelineTimeFromClientX, handlePlayToggle, pauseTimelineMedia, seekTo, startTimelineSeek };
+  const finishTimelinePlayback = (time) => {
+    // Pause/invalidate first, then align to terminal source positions while paused.
+    seekTo(time, { pause: true, immediate: true });
+    deps.setIsPlaying(false);
+  };
+  return { finishTimelinePlayback, getTimelineTimeFromClientX, handlePlayToggle, pauseTimelineMedia, seekTo, startTimelineSeek };
 }

@@ -109,7 +109,7 @@ export function resolveOrdinalIndex(text, totalCount = 1) {
 /**
  * Resolves clip target ID from text reference and project summary.
  */
-export function resolveClipTargetFromText(text, projectSummary, defaultId = "") {
+export function resolveClipTargetFromText(text, projectSummary, defaultId = "", allowFallback = true) {
   const visuals = projectSummary?.visualSegments || projectSummary?.visualClips || projectSummary?.visuals || [];
   if (!visuals.length) return defaultId;
 
@@ -143,7 +143,7 @@ export function resolveClipTargetFromText(text, projectSummary, defaultId = "") 
     return projectSummary.selectedClipId;
   }
 
-  return defaultId || visuals[0]?.id || "";
+  return allowFallback ? (defaultId || visuals[0]?.id || "") : "";
 }
 
 /**
@@ -183,12 +183,12 @@ export function resolveTargetClipId(rawId, snapshot, defaultId = "", targetTrack
   const visuals = Array.isArray(snapshot?.visualSegments)
     ? snapshot.visualSegments
     : Array.isArray(snapshot?.visualClips)
-    ? snapshot.visualClips
-    : Array.isArray(snapshot?.visuals)
-    ? snapshot.visuals
-    : Array.isArray(snapshot?.clips)
-    ? snapshot.clips
-    : [];
+      ? snapshot.visualClips
+      : Array.isArray(snapshot?.visuals)
+        ? snapshot.visuals
+        : Array.isArray(snapshot?.clips)
+          ? snapshot.clips
+          : [];
   if (!visuals.length) return defaultId || rawId;
 
   // Exact ID match
@@ -248,12 +248,12 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
   const visuals = Array.isArray(projectSummary?.visualSegments)
     ? projectSummary.visualSegments
     : Array.isArray(projectSummary?.visualClips)
-    ? projectSummary.visualClips
-    : Array.isArray(projectSummary?.visuals)
-    ? projectSummary.visuals
-    : Array.isArray(projectSummary?.clips)
-    ? projectSummary.clips
-    : [];
+      ? projectSummary.visualClips
+      : Array.isArray(projectSummary?.visuals)
+        ? projectSummary.visuals
+        : Array.isArray(projectSummary?.clips)
+          ? projectSummary.clips
+          : [];
   const audioSegments = projectSummary?.audioSegments || [];
   const musicSegments = projectSummary?.musicSegments || [];
   const captionSegments = projectSummary?.captionSegments || projectSummary?.captions || [];
@@ -1301,10 +1301,10 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
   }
 
   // 14. Delete Clip
-  const deleteMatch = text.match(/\b(?:delete|remove)\s+(?:the\s+)?([\w\s-#]+?)(?:\s+clip)?\b/i);
-  if (deleteMatch && !/caption|music|audio|voice/i.test(deleteMatch[1])) {
-    const targetRef = deleteMatch[1];
-    const clipId = resolveClipTargetFromText(targetRef, projectSummary, "");
+  const deleteMatch = text.match(/\b(?:delete|remove)\s+(?:the\s+)?([^,.;]+?)(?=\s+(?:and|then)\b|[,.;]|$)/i);
+  if (deleteMatch && !/caption|music|audio|voice|pause|silence|filler|word|background|noise|punch|zoom|effect|filter/i.test(deleteMatch[1])) {
+    const targetRef = deleteMatch[1].trim();
+    const clipId = resolveClipTargetFromText(targetRef, projectSummary, "", false);
     if (clipId) {
       actions.push({
         id: nextId(),

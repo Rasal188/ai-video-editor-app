@@ -252,6 +252,8 @@ export function candidateToCanonicalTimeline(sourceClip = {}, candidate = {}, op
       id: cap.id || makeDeterministicId("cap", candidateId, idx + 1),
       trackId: CANONICAL_TRACK_IDS.SUBTITLES,
       text: cap.text || "",
+      ...(Object.hasOwn(cap, "speaker") ? { speaker: cap.speaker } : {}),
+      ...(Object.hasOwn(cap, "speakerId") ? { speakerId: cap.speakerId } : {}),
       start: Math.max(0, Number(cap.start) || 0),
       end: Math.min(candidateDuration, Number(cap.end) || Math.max(0, Number(cap.start) || 0) + 2.0),
       duration: Math.max(0.1, (Number(cap.end) || 0) - (Number(cap.start) || 0)),
@@ -535,6 +537,8 @@ export function serializeTimelineToNativeProject(timeline = {}) {
     project.captionSegments = subTrack.clips.map((cap) => ({
       id: cap.id,
       text: cap.text,
+      ...(Object.hasOwn(cap, "speaker") ? { speaker: cap.speaker } : {}),
+      ...(Object.hasOwn(cap, "speakerId") ? { speakerId: cap.speakerId } : {}),
       start: cap.start,
       end: cap.end,
       words: cap.words || [],
@@ -707,6 +711,8 @@ export function deserializeNativeProjectToTimeline(nativePayload = {}, options =
     id: cap.id || `cap-${idx + 1}`,
     trackId: CANONICAL_TRACK_IDS.SUBTITLES,
     text: cap.text || "",
+    ...(Object.hasOwn(cap, "speaker") ? { speaker: cap.speaker } : {}),
+    ...(Object.hasOwn(cap, "speakerId") ? { speakerId: cap.speakerId } : {}),
     start: Number(cap.start) || 0,
     end: Number(cap.end) || (Number(cap.start) || 0) + 2.0,
     duration: (Number(cap.end) || 0) - (Number(cap.start) || 0),
@@ -1207,6 +1213,7 @@ ${resourcesXml}  </resources>
         <sequence format="r1" duration="${durationStr}">
           <spine>
             <clip name="${escapeXml(v1Clip?.name || "Primary Video")}" offset="0s" duration="${v1Dur}" start="${v1Start}">
+              <adjust-transform position="${(((v1Clip?.cropX ?? 0.5) - 0.5) * 100).toFixed(1)} 0" scale="1 1"/>
 ${connectedBrollXml}${connectedTitlesXml}            </clip>
           </spine>
         </sequence>

@@ -1,0 +1,63 @@
+.subtitle-text-tools {
+    display: grid;
+    gap: 10px;
+    padding: 14px 0;
+    border-block: 1px solid var(--border-color, #484852);
+    margin-block: 12px;
+}
+
+.subtitle-text-tools h3,
+.subtitle-text-tools h4,
+.subtitle-text-tools p {
+    margin: 0;
+}
+
+.subtitle-text-tools p {
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.subtitle-text-tools label {
+    display: grid;
+    gap: 5px;
+    font-size: 12px;
+    min-width: 0;
+}
+
+.subtitle-text-tools select,
+.subtitle-text-tools textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    padding: 7px;
+}
+
+.subtitle-text-tools textarea {
+    min-height: 72px;
+    resize: vertical;
+}
+
+.subtitle-text-language-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.subtitle-text-review-cue {
+    display: grid;
+    gap: 8px;
+    padding-block: 12px;
+    border-bottom: 1px solid var(--border-color, #484852);
+}
+
+.subtitle-text-tools [role="alert"] {
+    color: var(--warning-color, #df9c57);
+}
+
+.subtitle-text-tools section>button {
+    margin: 10px 8px 0 0;
+}
+
+.subtitle-text-tools progress {
+    width: 100%;
+}

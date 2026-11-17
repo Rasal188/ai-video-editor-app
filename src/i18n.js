@@ -1574,8 +1574,8 @@ const IMAGE_AI_CAPTION_COPY = {
 };
 
 const PICTURE_IN_PICTURE_COPY = {
-  zh: { pictureInPicture: "画中画", overlayTrack: "画中画", dropAsOverlay: "作为画中画", appendAfter: "添加到后面", insertHere: "插入到此处", dropSlot: "放置位置", layoutPresets: "布局预设", moveLayerUp: "上移一层", moveLayerDown: "下移一层", overlayTiming: "时间与图层", clipStart: "开始时间", clipDuration: "持续时间", layer: "图层", overlayMute: "静音视频原声" },
-  en: { pictureInPicture: "Picture in picture", overlayTrack: "Overlay", dropAsOverlay: "Add as picture in picture", appendAfter: "Append to sequence", insertHere: "Insert here", dropSlot: "Drop position", layoutPresets: "Layout presets", moveLayerUp: "Move layer up", moveLayerDown: "Move layer down", overlayTiming: "Timing & layer", clipStart: "Start time", clipDuration: "Duration", layer: "Layer", overlayMute: "Mute video audio" },
+  zh: { pictureInPicture: "画中画", overlayTrack: "画中画", dropAsOverlay: "作为画中画", appendAfter: "添加到后面", insertHere: "插入到此处", dropSlot: "放置位置", layoutPresets: "布局预设", moveLayerUp: "上移一层", moveLayerDown: "下移一层", overlayTiming: "时间与图层", clipStart: "开始时间", clipDuration: "持续时间", layer: "图层", overlayMute: "静音视频原声", overlayTemplateSaveAction: "保存为模板", overlayTemplateName: "模板名称", overlayTemplateNamePlaceholder: "我的画中画模板", overlayTemplateNameSuffix: "模板", overlayTemplateScope: "保存范围", overlayTemplateSelected: "当前画中画", overlayTemplateAll: "全部画中画", overlayTemplateSelectedSummary: "当前画中画", overlayTemplateAllSummary: "当前编辑中的画中画", overlayTemplatePortableHint: "将包含可移植的媒体和矢量画中画", overlayTemplateKindVector: "矢量", overlayTemplateKindVideo: "视频", overlayTemplateKindImage: "图片", overlayTemplateSaving: "正在保存…", overlayTemplateSaveConfirm: "保存模板", overlayTemplateSaved: "模板已保存到全局模板库。", overlayTemplateSaveFailed: "无法保存模板。" },
+  en: { pictureInPicture: "Picture in picture", overlayTrack: "Overlay", dropAsOverlay: "Add as picture in picture", appendAfter: "Append to sequence", insertHere: "Insert here", dropSlot: "Drop position", layoutPresets: "Layout presets", moveLayerUp: "Move layer up", moveLayerDown: "Move layer down", overlayTiming: "Timing & layer", clipStart: "Start time", clipDuration: "Duration", layer: "Layer", overlayMute: "Mute video audio", overlayTemplateSaveAction: "Save as Template", overlayTemplateName: "Template name", overlayTemplateNamePlaceholder: "My overlay template", overlayTemplateNameSuffix: "template", overlayTemplateScope: "Save scope", overlayTemplateSelected: "Selected overlay", overlayTemplateAll: "All overlays", overlayTemplateSelectedSummary: "Selected overlay", overlayTemplateAllSummary: "Overlays in this edit", overlayTemplatePortableHint: "Portable media and vector overlays will be included", overlayTemplateKindVector: "Vector", overlayTemplateKindVideo: "Video", overlayTemplateKindImage: "Image", overlayTemplateSaving: "Saving…", overlayTemplateSaveConfirm: "Save Template", overlayTemplateSaved: "Template saved to your global library.", overlayTemplateSaveFailed: "Template could not be saved." },
   ja: { pictureInPicture: "ピクチャーインピクチャー", overlayTrack: "オーバーレイ", dropAsOverlay: "ワイプとして追加", appendAfter: "後ろに追加", insertHere: "ここに挿入", dropSlot: "配置位置", layoutPresets: "レイアウトプリセット", moveLayerUp: "レイヤーを上へ", moveLayerDown: "レイヤーを下へ", overlayTiming: "時間とレイヤー", clipStart: "開始時間", clipDuration: "長さ", layer: "レイヤー", overlayMute: "動画音声をミュート" },
   ko: { pictureInPicture: "화면 속 화면", overlayTrack: "오버레이", dropAsOverlay: "오버레이로 추가", appendAfter: "뒤에 추가", insertHere: "여기에 삽입", dropSlot: "놓을 위치", layoutPresets: "레이아웃 프리셋", moveLayerUp: "레이어 올리기", moveLayerDown: "레이어 내리기", overlayTiming: "시간 및 레이어", clipStart: "시작 시간", clipDuration: "길이", layer: "레이어", overlayMute: "비디오 음소거" },
   es: { pictureInPicture: "Imagen en imagen", overlayTrack: "Superposición", dropAsOverlay: "Añadir como superposición", appendAfter: "Añadir al final", insertHere: "Insertar aquí", dropSlot: "Posición de destino", layoutPresets: "Diseños predefinidos", moveLayerUp: "Subir capa", moveLayerDown: "Bajar capa", overlayTiming: "Tiempo y capa", clipStart: "Inicio", clipDuration: "Duración", layer: "Capa", overlayMute: "Silenciar audio" },
@@ -2639,7 +2639,7 @@ export const UI_COPY = {
     aiVoiceEntryTitle: "AI 配音",
     aiVoiceEntryDesc: "输入文案、选择声音并生成语音",
     autoCaptionsTitle: "从原声生成字幕",
-    autoCaptionsDesc: "本地加载 Whisper small，识别后写入字幕轨",
+    autoCaptionsDesc: "按语音时间生成短句或逐词字幕。默认使用 Ollalink Cloud（上传音频）；也可选择本机 Local Whisper。",
     autoCaptionsNeedsSource: "先上传视频或把音频拖到原声轨",
     autoCaptionsRunning: "正在生成自动字幕",
     currentVoice: "当前声音",
@@ -3064,7 +3064,7 @@ export const UI_COPY = {
     aiVoiceEntryTitle: "AI Voiceover",
     aiVoiceEntryDesc: "Write script, choose a voice, generate audio",
     autoCaptionsTitle: "Generate captions from source",
-    autoCaptionsDesc: "Loads Whisper small locally, then writes a caption track",
+    autoCaptionsDesc: "Create speech-timed short phrases or word-by-word captions. Ollalink Cloud is the default (uploads audio); Local Whisper on this device is an alternative.",
     autoCaptionsNeedsSource: "Upload video or drop audio on the source track first",
     autoCaptionsRunning: "Generating captions",
     currentVoice: "Current voice",

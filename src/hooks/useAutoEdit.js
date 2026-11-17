@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "../lib/transcriptionOutcome.js";
+import { cancelledWorkflowTranscription, isTranscriptionCancellation, workflowTranscriptionStatus } from "../lib/workflowTranscription.js";
 import {
   canRunAutoEdit,
   runAutoEditPipeline,
@@ -120,7 +122,8 @@ export function useAutoEdit(options = {}) {
       return;
     }
 
-    abortRef.current = new AbortController();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setReview({
       open: true,
       clip: activeClip,
@@ -143,12 +146,22 @@ export function useAutoEdit(options = {}) {
           language,
         },
         onProgress: (progress, phaseKey) => {
-          setJob({ running: true, progress, phase: t(phaseKey, phaseKey) });
+          if (!controller.signal.aborted) setJob((current) => ({ ...current, running: true, progress, phase: t(phaseKey, phaseKey) }));
         },
-        signal: abortRef.current.signal,
+        onTranscriptionOutcome: (outcome, state) => {
+          if (state?.started) {
+            controller.transcriptionStarted = true;
+            controller.transcriptionPreferences = state.preferences;
+          }
+          controller.transcriptionOutcome = outcome;
+          if (!controller.signal.aborted && outcome) setJob((current) => attachTranscriptionOutcome(current, outcome));
+        },
+        signal: controller.signal,
       });
 
-      setReview({
+      controller.signal.throwIfAborted();
+      if (abortRef.current !== controller) return;
+      setReview(attachTranscriptionOutcome({
         open: true,
         clip: activeClip,
         candidates: result.candidates || [],
@@ -156,29 +169,47 @@ export function useAutoEdit(options = {}) {
         sceneBoundaries: result.sceneBoundaries || [],
         metrics: result.metrics || null,
         error: "",
-      });
+      }, result));
 
-      setJob({ running: false, progress: 100, phase: t("autoEditDone", "Auto edit complete") });
+      const status = workflowTranscriptionStatus(result);
+      setJob(attachTranscriptionOutcome({
+        running: false, progress: 100,
+        phase: [t("autoEditDone", "Auto edit complete"), status].filter(Boolean).join(" ")
+      }, result));
+      if (status) notify(status);
     } catch (err) {
-      if (err?.name === "AbortError") {
-        setJob({ running: false, progress: 0, phase: "" });
+      if (abortRef.current !== controller) return;
+      const outcome = getTranscriptionOutcome(err) || controller.transcriptionOutcome;
+      if (isTranscriptionCancellation(err, controller.signal)) {
+        const status = workflowTranscriptionStatus(outcome);
+        setReview((prev) => attachTranscriptionOutcome(prev, outcome));
+        setJob(attachTranscriptionOutcome({ running: false, progress: 0, phase: status }, outcome));
+        if (status) notify(status);
         return;
       }
       console.error("[useAutoEdit] pipeline failed:", err);
       const errMsg = err?.message || String(err);
-      setReview((prev) => ({ ...prev, error: errMsg }));
-      setJob({ running: false, progress: 0, phase: "" });
-      notify(t("autoEditFailed", "Auto Edit failed: ") + errMsg);
+      setReview((prev) => attachTranscriptionOutcome({ ...prev, error: errMsg }, outcome));
+      setJob(attachTranscriptionOutcome({ running: false, progress: 0, phase: workflowTranscriptionStatus(outcome) }, outcome));
+      notify(t("autoEditFailed", "Auto Edit failed: ") + errMsg + " " + workflowTranscriptionStatus(outcome));
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
     }
   }, [activeClip, job.running, language, notify, settings, sourceAudioBlob, t, trackLocks, visualSegments]);
 
   const cancel = useCallback(() => {
-    abortRef.current?.abort();
-    setJob({ running: false, progress: 0, phase: "" });
-  }, []);
+    const controller = abortRef.current;
+    controller?.abort();
+    abortRef.current = null;
+    const outcome = cancelledWorkflowTranscription(controller, controller?.transcriptionPreferences);
+    const status = workflowTranscriptionStatus(outcome);
+    setReview((prev) => attachTranscriptionOutcome(prev, outcome));
+    setJob((current) => attachTranscriptionOutcome({ ...current, running: false, progress: 0, phase: status }, outcome));
+    if (status) notify(status);
+  }, [notify]);
 
   const closeReview = useCallback(() => {
-    if (job.running) abortRef.current?.abort();
+    if (job.running) cancel();
     setJob({ running: false, progress: 0, phase: "" });
     setReview({
       open: false,
@@ -189,7 +220,7 @@ export function useAutoEdit(options = {}) {
       metrics: null,
       error: "",
     });
-  }, [job.running]);
+  }, [job.running, cancel]);
 
   const applyCaptions = useCallback(async () => {
     if (!review.clip) return;

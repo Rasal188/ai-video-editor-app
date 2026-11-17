@@ -1,3 +1,6 @@
+import { encodeCloudWav } from "../../src/lib/cloudTranscriptionAudio.js";
+// Stage 2 capability checks require real decodable media, not size/type stubs.
+const captionMediaFixture = () => encodeCloudWav(new Float32Array(16000));
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyCommandPlan, inspectProject } from "../../src/lib/projectCommandEngine.js";
@@ -422,7 +425,7 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
   // =========================================================================
   describe("Caption Generation Source-Media Resolution", () => {
     it("resolves video clip with embedded audio on visualSegments", async () => {
-      const dummyBlob = { size: 1024, type: "video/mp4" };
+      const dummyBlob = captionMediaFixture();
       const projectData = {
         visualSegments: [
           { id: "vis-1", type: "video", start: 2, duration: 10, sourceStart: 0, blob: dummyBlob },
@@ -440,7 +443,7 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
     });
 
     it("resolves standalone audioSegment correctly", async () => {
-      const dummyAudioBlob = { size: 512, type: "audio/wav" };
+      const dummyAudioBlob = captionMediaFixture();
       const projectData = {
         visualSegments: [],
         audioSegments: [
@@ -458,7 +461,7 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
     });
 
     it("resolves userAssets video or audio when timeline is being initialized", async () => {
-      const dummyAssetBlob = { size: 2048, type: "video/mp4" };
+      const dummyAssetBlob = captionMediaFixture();
       const projectData = {
         visualSegments: [],
         audioSegments: [],
@@ -487,8 +490,8 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
     });
 
     it("correctly derives timeline position for non-first visual clips by cumulative duration when start is undefined", async () => {
-      const dummyBlob1 = { size: 1000, type: "video/mp4" };
-      const dummyBlob2 = { size: 2000, type: "video/mp4" };
+      const dummyBlob1 = captionMediaFixture();
+      const dummyBlob2 = captionMediaFixture();
       const projectData = {
         visualSegments: [
           { id: "vis-1", type: "video", duration: 5.5, blob: dummyBlob1 },
@@ -509,8 +512,8 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
     });
 
     it("prioritizes audio track when audio is explicitly selected or track is audio", async () => {
-      const videoBlob = { size: 1000, type: "video/mp4" };
-      const audioBlob = { size: 500, type: "audio/wav" };
+      const videoBlob = captionMediaFixture();
+      const audioBlob = captionMediaFixture();
       const projectData = {
         visualSegments: [
           { id: "vis-1", type: "video", duration: 10, blob: videoBlob },
@@ -532,8 +535,8 @@ describe("Caption Assistant Enhancements & Intent-Mapping Tests", () => {
     });
 
     it("falls back to audio track when video clip is silent (hasAudio=false, isMuted=true, or volume=0)", async () => {
-      const silentVideoBlob = { size: 1000, type: "video/mp4" };
-      const voiceoverBlob = { size: 500, type: "audio/wav" };
+      const silentVideoBlob = captionMediaFixture();
+      const voiceoverBlob = captionMediaFixture();
       const projectData = {
         visualSegments: [
           { id: "vis-silent", type: "video", duration: 10, blob: silentVideoBlob, hasAudio: false, isMuted: true },

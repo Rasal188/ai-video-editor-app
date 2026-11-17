@@ -1,25 +1,86 @@
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] || 0;
 
-// Estimate only a small channel bias on known, low-texture context. Never match
-// color against the watermark itself or amplify contrast across a face edge.
-export function repairColorOffset(original, repaired, width, height, crop, rect, maskPadding) {
+// Estimate boundary color offset between true original perimeter pixels immediately
+// outside rect and model inpainted pixels immediately inside rect perimeter.
+// Never sample the model outside the mask, where generative weights drift warm/yellow.
+export function repairColorOffset(original, cropData, width, height, crop, rect, maskPadding = 0) {
   const channels = [[], [], []];
-  const outer = maskPadding + 10;
-  for (let y = Math.max(crop.y + 1, rect.y - outer); y < Math.min(crop.y + crop.height - 1, rect.y + rect.height + outer); y += 2) {
-    for (let x = Math.max(crop.x + 1, rect.x - outer); x < Math.min(crop.x + crop.width - 1, rect.x + rect.width + outer); x += 2) {
-      if (x >= rect.x - maskPadding && x < rect.x + rect.width + maskPadding
-        && y >= rect.y - maskPadding && y < rect.y + rect.height + maskPadding) continue;
-      if (x <= 0 || y <= 0 || x >= width - 1 || y >= height - 1) continue;
-      const i = (y * width + x) * 4, j = ((y - crop.y) * crop.width + x - crop.x) * 4;
+  const sampleOrig = (x, y, c) => original[(y * width + x) * 4 + c];
+  const sampleModel = (x, y, c) => cropData[((y - crop.y) * crop.width + (x - crop.x)) * 4 + c];
+
+  const step = 2;
+  // Top and bottom edges:
+  for (let x = rect.x; x < rect.x + rect.width; x += step) {
+    if (x <= 0 || x >= width - 1) continue;
+    // Top edge:
+    if (rect.y > 0 && rect.y < height &&
+        x >= crop.x && x < crop.x + crop.width &&
+        rect.y - 1 >= crop.y && rect.y < crop.y + crop.height) {
       let texture = 0;
-      for (let c = 0; c < 3; c++) texture += Math.abs(original[i + 4 + c] - original[i - 4 + c])
-        + Math.abs(original[i + width * 4 + c] - original[i - width * 4 + c]);
-      if (texture > 48) continue;
-      for (let c = 0; c < 3; c++) channels[c].push(original[i + c] - repaired[j + c]);
+      for (let c = 0; c < 3; c++) {
+        texture += Math.abs(sampleOrig(x + 1, rect.y - 1, c) - sampleOrig(x - 1, rect.y - 1, c));
+      }
+      if (texture <= 48) {
+        for (let c = 0; c < 3; c++) {
+          channels[c].push(sampleOrig(x, rect.y - 1, c) - sampleModel(x, rect.y, c));
+        }
+      }
+    }
+    // Bottom edge:
+    const by = rect.y + rect.height;
+    if (by < height && by > 0 &&
+        x >= crop.x && x < crop.x + crop.width &&
+        by < crop.y + crop.height && by - 1 >= crop.y) {
+      let texture = 0;
+      for (let c = 0; c < 3; c++) {
+        texture += Math.abs(sampleOrig(x + 1, by, c) - sampleOrig(x - 1, by, c));
+      }
+      if (texture <= 48) {
+        for (let c = 0; c < 3; c++) {
+          channels[c].push(sampleOrig(x, by, c) - sampleModel(x, by - 1, c));
+        }
+      }
     }
   }
-  return channels.map((values) => values.length < 24 ? 0 : clamp(median(values), -10, 10));
+  // Left and right edges:
+  for (let y = rect.y; y < rect.y + rect.height; y += step) {
+    if (y <= 0 || y >= height - 1) continue;
+    // Left edge:
+    if (rect.x > 0 && rect.x < width &&
+        y >= crop.y && y < crop.y + crop.height &&
+        rect.x - 1 >= crop.x && rect.x < crop.x + crop.width) {
+      let texture = 0;
+      for (let c = 0; c < 3; c++) {
+        texture += Math.abs(sampleOrig(rect.x - 1, y + 1, c) - sampleOrig(rect.x - 1, y - 1, c));
+      }
+      if (texture <= 48) {
+        for (let c = 0; c < 3; c++) {
+          channels[c].push(sampleOrig(rect.x - 1, y, c) - sampleModel(rect.x, y, c));
+        }
+      }
+    }
+    // Right edge:
+    const rx = rect.x + rect.width;
+    if (rx < width && rx > 0 &&
+        y >= crop.y && y < crop.y + crop.height &&
+        rx < crop.x + crop.width && rx - 1 >= crop.x) {
+      let texture = 0;
+      for (let c = 0; c < 3; c++) {
+        texture += Math.abs(sampleOrig(rx, y + 1, c) - sampleOrig(rx, y - 1, c));
+      }
+      if (texture <= 48) {
+        for (let c = 0; c < 3; c++) {
+          channels[c].push(sampleOrig(rx, y, c) - sampleModel(rx - 1, y, c));
+        }
+      }
+    }
+  }
+
+  const raw = channels.map((values) => values.length < 12 ? 0 : clamp(median(values), -6, 6));
+  const luma = (raw[0] + raw[1] + raw[2]) / 3;
+  // Guard against chromatic discoloration (yellow / warm / cyan shifts):
+  return raw.map((v) => clamp(v, Math.round(luma - 2), Math.round(luma + 2)));
 }
 
 export function blendRepairBoundary(original, repaired, rect, width, height) {

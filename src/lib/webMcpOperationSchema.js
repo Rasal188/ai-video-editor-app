@@ -1,4 +1,5 @@
 import { MAX_TIMELINE_DURATION_SECONDS, MIN_VISUAL_SEGMENT_SECONDS } from "../config/editor.js";
+import { CAPTION_TRANSCRIPTION_SCHEMA } from "./captionTranscriptionMetadata.js";
 import { MAX_TIMELINE_MARKER_SECONDS, TIMELINE_MARKER_COLORS, TIMELINE_MARKER_TYPES } from "./timelineMarkers.js";
 import { CAPTION_STYLE_PROPERTY_SCHEMA } from "./projectCommandEngine.js";
 
@@ -40,7 +41,7 @@ const operation = (type, properties, required) => ({
 // media, filesystem paths, URLs, reducer payloads, or arbitrary JavaScript.
 export const WEB_MCP_OPERATION_SCHEMA = {
   oneOf: [
-    operation("caption.add", { clipId: id, text: { type: "string", maxLength: 20000 }, start: time, end: time, audioClipId: id }, ["clipId", "text", "start", "end"]),
+    operation("caption.add", { clipId: id, text: { type: "string", maxLength: 20000 }, start: time, end: time, audioClipId: id, ...CAPTION_TRANSCRIPTION_SCHEMA }, ["clipId", "text", "start", "end"]),
     operation("caption.update", { clipId: id, text: { type: "string", maxLength: 20000 }, start: time, end: time }, ["clipId"]),
     operation("caption.delete", { clipId: id }, ["clipId"]),
     {

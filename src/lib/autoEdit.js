@@ -1,5 +1,7 @@
+import { captureTranscriptionPreferences } from "./transcriptionPreferences.js";
+import { attachTranscriptionOutcome, getTranscriptionOutcome } from "./transcriptionOutcome.js";
+import { isTranscriptionCancellation, workflowTranscriptionOutcome, regroupWorkflowTranscript } from "./workflowTranscription.js";
 import { makeId } from "./timeline.js";
-import { regroupReviewSegments } from "./transcriptReview.js";
 import { canRemovePauses } from "./silenceRemoval.js";
 import { findRoughCutCandidates, buildRoughCutReview, mergeCutCandidates } from "./roughCut.js";
 import { detectVideoScenes } from "./sceneDetection.js";
@@ -90,7 +92,9 @@ export async function runAutoEditPipeline({
   settings = {},
   onProgress = () => {},
   signal,
+  onTranscriptionOutcome = () => { },
 }) {
+  const transcription = captureTranscriptionPreferences(settings.transcription);
   const duration = Number(clip?.duration);
   if (!Number.isFinite(duration) || duration <= 0) {
     throw Object.assign(new Error("autoEditClipUnsupported"), { code: "autoEditClipUnsupported" });
@@ -120,7 +124,7 @@ export async function runAutoEditPipeline({
         signal,
         onProgress: (p, phase) => {
           if (!signal?.aborted) {
-            onProgress?.(Math.min(45, 10 + Math.round(p * 0.35)), phase || "autoEditFindingScenes");
+            onProgress?.(Number.isFinite(p) ? Math.min(45, 10 + Math.round(p * 0.35)) : 10, phase || "autoEditFindingScenes");
           }
         },
       });
@@ -134,7 +138,9 @@ export async function runAutoEditPipeline({
 
   // Step 2: Speech Transcription (Whisper) for Captions and Filler Words
   let transcriptResult = null;
+  let outcome = null;
   if (transcribe || removeFillerWords) {
+    onTranscriptionOutcome(null, { started: true, preferences: transcription });
     onProgress?.(50, "autoEditWritingCaptions");
     try {
       let audioBlob = sourceAudioBlob;
@@ -152,18 +158,26 @@ export async function runAutoEditPipeline({
       if (audioBlob) {
         transcriptResult = await transcribeAudioToCaptionSegments(audioBlob, {
           preferredLanguage: language,
+          ...transcription,
           signal,
           onProgress: ({ progress, phase }) => {
             if (!signal?.aborted) {
-              onProgress?.(Math.min(85, 50 + Math.round(progress * 0.35)), phase || "autoEditWritingCaptions");
+              onProgress?.(Number.isFinite(progress) ? Math.min(85, 50 + Math.round(progress * 0.35)) : 50, phase || "autoEditWritingCaptions");
             }
           },
         });
+        outcome = getTranscriptionOutcome(transcriptResult);
+      } else {
+        outcome = workflowTranscriptionOutcome(null, transcription);
       }
     } catch (asrErr) {
-      if (signal?.aborted) throw asrErr;
+      outcome = workflowTranscriptionOutcome(asrErr, transcription,
+        isTranscriptionCancellation(asrErr, signal) ? "cancelled" : "failed");
+      onTranscriptionOutcome(outcome);
+      if (isTranscriptionCancellation(asrErr, signal)) throw asrErr;
       console.warn("[AutoEdit] Speech transcription warning:", asrErr);
     }
+    onTranscriptionOutcome(outcome);
   }
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -220,6 +234,7 @@ export async function runAutoEditPipeline({
   if (transcribe) {
     if (Array.isArray(rawSegments) && rawSegments.length > 0) {
       captions = rawSegments.map((seg) => ({
+        ...seg,
         id: seg.id || makeId("caption"),
         start: Number(seg.start) || 0,
         end: Number(seg.end) || 0,
@@ -227,6 +242,7 @@ export async function runAutoEditPipeline({
         visualSegmentId: clip.id,
         ...(Array.isArray(seg.words) && seg.words.length > 0 ? {
           words: seg.words.map((w) => ({
+            ...w,
             text: String(w.text || "").trim(),
             start: Number(w.start),
             end: Number(w.end),
@@ -234,26 +250,27 @@ export async function runAutoEditPipeline({
         } : {}),
       }));
     } else if (rawChunks.length > 0) {
-      captions = regroupReviewSegments(rawChunks, duration, { grouping: "phrases" }).map((seg) => ({
+      captions = regroupWorkflowTranscript(rawChunks, duration, { grouping: "phrases" }).map((seg) => ({
         ...seg,
         visualSegmentId: clip.id,
       }));
     }
   }
 
+  captions = attachTranscriptionOutcome(captions, outcome);
   const sceneBoundaries = sceneResult?.boundaries || [];
   const metrics = calculateAutoEditMetrics(duration, candidates, captions);
   onProgress?.(100, "autoEditDone");
 
-  return {
+  return attachTranscriptionOutcome({
     clip,
     candidates,
     sceneBoundaries,
     captions,
-    rawChunks,
+    rawChunks: attachTranscriptionOutcome(rawChunks, outcome),
     transcriptResult,
     metrics,
-  };
+  }, outcome);
 }
 
 /**
@@ -325,6 +342,7 @@ export function buildAutoEditReview({
       visualSegmentId: clipId,
       ...(Array.isArray(cap.words) ? {
         words: cap.words.map((w) => ({
+          ...w,
           text: String(w.text || "").trim(),
           start: Number((offsetToAdd + Number(w.start)).toFixed(3)),
           end: Number((offsetToAdd + Number(w.end)).toFixed(3)),
