@@ -110,6 +110,44 @@ describe("Ollama AI Assistant Service & API", () => {
       assert.throws(() => validateAndNormalizePlan(rawMany), /exceeds maximum limit/i);
     });
 
+    it("should preserve Smart workflow targets and collapse overlapping pause/filler tools", () => {
+      const normalized = validateAndNormalizePlan({
+        schemaVersion: 1,
+        explanation: "Prepare one combined Smart review",
+        actions: [
+          {
+            id: "act-silence",
+            type: "tool.silence_removal",
+            params: { clipId: "visual-2" },
+          },
+          {
+            id: "act-rough-cut",
+            type: "tool.rough_cut",
+            params: { clipId: "visual-2", removeFillerWords: false },
+          },
+        ],
+      });
+
+      assert.equal(normalized.actions.length, 1);
+      assert.equal(normalized.actions[0].type, "tool.rough_cut");
+      assert.deepEqual(normalized.actions[0].params, {
+        clipId: "visual-2",
+        removeFillerWords: true,
+      });
+
+      const silenceOnly = validateAndNormalizePlan({
+        schemaVersion: 1,
+        actions: [
+          {
+            id: "act-silence-only",
+            type: "tool.silence_removal",
+            params: { clipId: "visual-3" },
+          },
+        ],
+      });
+      assert.equal(silenceOnly.actions[0].params.clipId, "visual-3");
+    });
+
     it("should normalize caption operations with clipId, placement, and style objects", () => {
       const raw = {
         schemaVersion: 1,

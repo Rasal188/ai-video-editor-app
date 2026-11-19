@@ -51,20 +51,34 @@ export function useRoughCut(options) {
   };
 
   const dismiss = () => {
+    draft?.onDismissed?.();
     setDraft(null);
     setError("");
   };
 
-  const run = async () => {
-    if (abortRef.current || !supported || locked) return;
+  const run = async (request = {}) => {
+    const current = latest.current;
+    if (abortRef.current) return { status: "busy" };
+    if (current.locked) return { status: "locked", code: "roughCutLocked" };
+    const runtime = current.getRuntime();
+    const targetId = request.clipId || current.selectedSegment?.id;
+    const targetIndex = runtime.visualSegments.findIndex((clip) => clip.id === targetId);
+    const target = runtime.visualSegments[targetIndex];
+    if (target?.type !== "video" || !canRemovePauses(target, runtime.visualSegments[targetIndex - 1])) {
+      return { status: "unsupported", code: "roughCutUnsupported" };
+    }
+    const effectiveSettings = { ...settings, ...(request.settings || {}) };
+    if (request.settings) setSettings(effectiveSettings);
     const controller = new AbortController();
     abortRef.current = controller;
-    const captured = { ...segment };
+    const abortFromRequest = () => controller.abort();
+    if (request.signal?.aborted) controller.abort();
+    else request.signal?.addEventListener?.("abort", abortFromRequest, { once: true });
+    const captured = { ...target };
     const transcription = captureTranscriptionPreferences();
     controller.transcriptionPreferences = transcription;
     let outcome = null;
-    const snapshot = options.getSnapshot();
-    const runtime = options.getRuntime();
+    const snapshot = current.getSnapshot();
     const fingerprint = browserProjectFingerprint(snapshot, false, runtime.visualSegments, runtime);
 
     setError("");
@@ -75,7 +89,7 @@ export function useRoughCut(options) {
       // Step 1: Detect speech and pauses using Silero VAD / in-worker fallback
       setJob({ running: true, progress: 10, phase: "roughCutDetecting" });
       const probabilities = await analyzeVideoPauses(captured, {
-        language: options.language,
+        language: current.language,
         signal: controller.signal,
         onProgress: (progress, phase) => {
           if (!controller.signal.aborted) {
@@ -92,7 +106,7 @@ export function useRoughCut(options) {
         captured.id, captured.src, captured.assetId, captured.sourceStart, captured.duration,
         captured.playbackRate, transcription.provider, transcription.language,
       ]);
-      if (settings.removeFillerWords) {
+      if (effectiveSettings.removeFillerWords) {
         if (transcriptCache.current.has(cacheKey)) {
           const cached = transcriptCache.current.get(cacheKey);
           if (cached.blob === captured.blob) {
@@ -123,7 +137,7 @@ export function useRoughCut(options) {
                 : mediaBlob;
 
               const asrResult = await transcribeAudioToCaptionSegments(clipBlob, {
-                preferredLanguage: options.language,
+                preferredLanguage: current.language,
                 ...transcription,
                 signal: controller.signal,
               });
@@ -155,7 +169,7 @@ export function useRoughCut(options) {
         probabilities,
         chunks,
         clip: captured,
-        settings,
+        settings: effectiveSettings,
       });
 
       setDraft(attachTranscriptionOutcome({
@@ -163,16 +177,23 @@ export function useRoughCut(options) {
         fingerprint,
         probabilities,
         chunks,
-        version: projectVersion,
-        start: runtime.visualSegments.slice(0, index).reduce((sum, clip) => sum + clip.duration, 0),
+        version: current.projectVersion,
+        start: runtime.visualSegments.slice(0, targetIndex).reduce((sum, clip) => sum + clip.duration, 0),
         candidates,
+        onApplied: request.onApplied,
+        onDismissed: request.onDismissed,
       }, outcome));
+      return { status: "review-ready", clipId: captured.id, candidateCount: candidates.length, transcriptionOutcome: outcome };
     } catch (failure) {
       outcome = getTranscriptionOutcome(failure) || outcome;
-      if (!isTranscriptionCancellation(failure, controller.signal)) {
-        setError(failure.code || "roughCutFailed");
+      if (isTranscriptionCancellation(failure, controller.signal)) {
+        return { status: "cancelled", transcriptionOutcome: outcome };
       }
+      const code = failure.code || "roughCutFailed";
+      setError(code);
+      return { status: "failed", code, transcriptionOutcome: outcome };
     } finally {
+      request.signal?.removeEventListener?.("abort", abortFromRequest);
       if (abortRef.current === controller) {
         abortRef.current = null;
         setJob(attachTranscriptionOutcome({ running: false, progress: 0, phase: "" }, outcome));
@@ -202,11 +223,11 @@ export function useRoughCut(options) {
     setDraft((current) =>
       current
         ? {
-            ...current,
-            candidates: current.candidates.map((cut) =>
-              cut.id === id ? { ...cut, enabled: !cut.enabled } : cut
-            ),
-          }
+          ...current,
+          candidates: current.candidates.map((cut) =>
+            cut.id === id ? { ...cut, enabled: !cut.enabled } : cut
+          ),
+        }
         : null
     );
   };
@@ -216,9 +237,9 @@ export function useRoughCut(options) {
     setDraft((current) =>
       current
         ? {
-            ...current,
-            candidates: current.candidates.map((cut) => ({ ...cut, enabled })),
-          }
+          ...current,
+          candidates: current.candidates.map((cut) => ({ ...cut, enabled })),
+        }
         : null
     );
   };
@@ -247,6 +268,7 @@ export function useRoughCut(options) {
         current.rippleEditing
       );
       current.applyReview(review, current.t("roughCutApplied"));
+      draft.onApplied?.({ clipId: draft.clip.id, candidateCount: selectedCuts.length });
       setDraft(null);
       setError("");
     } catch (failure) {

@@ -17,7 +17,8 @@ export function createTranscriptionRouter({ transcribe = createOllalinkTranscrib
         if (req.headers.origin) {
             try {
                 const origin = new URL(req.headers.origin);
-                trustedOrigin = origin.origin === `${req.protocol}://${req.get("host")}`
+                const requestHost = String(req.get("host") || "").toLowerCase();
+                trustedOrigin = origin.host.toLowerCase() === requestHost
                     || (config.server.corsOrigin !== "*" && origin.origin === config.server.corsOrigin);
             } catch { trustedOrigin = false; }
         }

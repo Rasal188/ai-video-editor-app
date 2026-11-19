@@ -60,6 +60,20 @@ test("pause/filler/removal ambiguity never becomes visual deletion; explicit cli
     const result = parseNaturalLanguageEditingPlan("delete clip 2", summary);
     assert.ok((result?.plan?.actions || result?.actions || []).some(action => action.type === "visual.delete" && action.params.clipId === "v2"));
 });
+test("smart feature questions and compound cleanup requests preserve non-destructive workflow safety", () => {
+    const summary = { visuals: [{ id: "v1", index: 0, name: "Opening", duration: 4 }], selectedClipId: "v1" };
+
+    for (const prompt of ["How does Remove Pauses work?", "What does AI Rough Cut do?"]) {
+        const result = parseNaturalLanguageEditingPlan(prompt, summary);
+        assert.deepEqual(result.actions, [], prompt);
+    }
+
+    const result = parseNaturalLanguageEditingPlan("remove filler words and long pauses", summary);
+    const smartActions = result.actions.filter(action => ["tool.rough_cut", "tool.silence_removal"].includes(action.type));
+    assert.equal(smartActions.length, 1);
+    assert.equal(smartActions[0].type, "tool.rough_cut");
+    assert.deepEqual(smartActions[0].params, { clipId: "v1", removeFillerWords: true });
+});
 test("assistant checks track aliases, lane locks, clip locks and indirect locked-track changes", () => {
     for (const [key, type, params] of [["image", "visual.trim", { clipId: "v1" }], ["audio-0", "audio.set_volume", {}], ["captions", "tool.generate_captions", {}], ["overlay-1", "project.set_ratio", {}], ["music", "music.set_volume", {}]]) {
         const project = { ...fixture(), trackLocks: { [key]: true } };

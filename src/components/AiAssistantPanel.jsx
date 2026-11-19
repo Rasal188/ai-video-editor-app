@@ -477,6 +477,19 @@ export function AiAssistantPanel({
       // Only the owning request may publish results, errors, or local fallbacks.
       if (!isCurrent()) return;
       assertAssistantBase(getProjectSnapshot(), base);
+      if (data?.isInformational) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `asst-info-${Date.now()}`,
+            role: "assistant",
+            text: data.message,
+            status: "info",
+            timestamp: new Date(),
+          },
+        ]);
+        return;
+      }
       if (data?.isClarification) {
         setActiveClarification({
           category: data.category || data.ambiguityType,
@@ -501,6 +514,19 @@ export function AiAssistantPanel({
       // If network/server failed or returned empty plan, try our deterministic natural language parser
       if (fetchFailed || !data?.plan || !Array.isArray(data.plan.actions) || data.plan.actions.length === 0) {
         const localIntent = classifyUserIntent(userPromptText, projectSummary, conversationContext);
+        if (localIntent.type === "informational") {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `asst-info-${Date.now()}`,
+              role: "assistant",
+              text: localIntent.message,
+              status: "info",
+              timestamp: new Date(),
+            },
+          ]);
+          return;
+        }
         if (["ambiguous", "exploration", "more_options", "unsupported_style", "unsupported_font", "unsupported_effect"].includes(localIntent.type)) {
           const opts = localIntent.clarification?.options || localIntent.options || [];
           const clarCategory = localIntent.category || (localIntent.ambiguityType === "caption_style" ? "style" : localIntent.ambiguityType === "caption_effect" ? "effect" : localIntent.ambiguityType === "active_word_color" ? "color" : "font");
@@ -1251,6 +1277,7 @@ export function AiAssistantPanel({
         assertCurrent();
         await onApplyPlan(staged, plan, {});
       }
+      let reviewWorkflowResult = null;
       // Only a single nontransactional workflow can reach this dispatch.
       for (const toolAct of toolActions) {
         if (toolAct.type === "tool.generate_captions") {
@@ -1267,10 +1294,50 @@ export function AiAssistantPanel({
         if (toolAct.type === "tool.scene_detection") {
           const clipId = resolveTargetClipId(toolOp.clipId, snapshot, selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id);
           await onOpenSceneDetection(clipId);
-        } else if (toolAct.type === "tool.silence_removal") {
-          await onOpenSilenceRemoval();
-        } else if (toolAct.type === "tool.rough_cut") {
-          await onOpenRoughCut();
+        } else if (toolAct.type === "tool.silence_removal" || toolAct.type === "tool.rough_cut") {
+          const clipId = resolveTargetClipId(toolOp.clipId, snapshot, selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id);
+          const label = toolAct.type === "tool.rough_cut" ? "AI Rough Cut" : "Remove Pauses";
+          const onApplied = () => {
+            setMessages((prev) => prev.map((message) => message.id === msgId ? {
+              ...message,
+              status: "applied",
+              text: `${plan.explanation || message.text || label}\n${label} was applied to the timeline.`,
+            } : message));
+          };
+          const onDismissed = () => {
+            setMessages((prev) => prev.map((message) => message.id === msgId ? {
+              ...message,
+              status: "rejected",
+              text: `${plan.explanation || message.text || label}\nReview dismissed. The timeline was not changed.`,
+            } : message));
+          };
+          reviewWorkflowResult = await callbacks[toolAct.type]({
+            clipId,
+            signal: execution.controller.signal,
+            settings: toolAct.type === "tool.rough_cut"
+              ? { removeFillerWords: Boolean(toolOp.removeFillerWords) }
+              : undefined,
+            onApplied,
+            onDismissed,
+          });
+          if (reviewWorkflowResult?.status === "cancelled") {
+            const cancelledText = `${label} analysis was cancelled. The timeline was not changed.`;
+            setMessages((prev) => prev.map((message) => message.id === msgId ? {
+              ...message,
+              status: "rejected",
+              text: `${plan.explanation || message.text || label}\n${cancelledText}`,
+            } : message));
+            notify?.(cancelledText);
+            return;
+          }
+          if (reviewWorkflowResult?.status !== "review-ready") {
+            const workflowError = {
+              busy: `${label} analysis is already running.`,
+              locked: `${label} cannot run while the affected track is locked.`,
+              unsupported: `${label} requires a supported video clip with usable source media.`,
+            }[reviewWorkflowResult?.status] || `${label} analysis failed.`;
+            throw new Error(workflowError);
+          }
         } else if (toolAct.type === "tool.smart_pipeline") {
           const clipId = resolveTargetClipId(toolOp.clipId, snapshot, selectedVisualSegmentId || snapshot.visualSegments?.[0]?.id);
           await onOpenSmartPipeline(clipId, toolOp);
@@ -1279,6 +1346,20 @@ export function AiAssistantPanel({
         } else if (toolAct.type === "tool.export") {
           await onExportVideo(toolOp);
         }
+      }
+
+      if (reviewWorkflowResult) {
+        const candidateText = reviewWorkflowResult.candidateCount === 1
+          ? "1 candidate is ready"
+          : `${reviewWorkflowResult.candidateCount || 0} candidates are ready`;
+        const reviewText = `${candidateText} for review. The timeline is unchanged until you confirm Apply in the Smart panel.`;
+        notify?.(reviewText);
+        setMessages((prev) => prev.map((message) => message.id === msgId ? {
+          ...message,
+          status: "review-ready",
+          text: `${plan.explanation || message.text || "Smart analysis complete."}\n${reviewText}`,
+        } : message));
+        return;
       }
 
       const captionCompletion = execution.transcriptionOutcome
@@ -1810,6 +1891,13 @@ export function AiAssistantPanel({
                                   </button>
                                 </>
                               )}
+                            </div>
+                          )}
+
+                          {msg.status === "review-ready" && (
+                            <div className="ai-assistant-status-tag is-review-ready">
+                              <CheckCircle size={14} />
+                              <span>Ready for review — timeline unchanged</span>
                             </div>
                           )}
 

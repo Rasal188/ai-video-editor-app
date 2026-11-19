@@ -103,6 +103,44 @@ describe("Overlay Templates API", () => {
             });
         });
 
+        it("round-trips empty multiline-capable text and its selected font", async () => {
+            await withServer(env.app, async (baseUrl) => {
+                const fontFamily = '"Poppins", Inter, system-ui, sans-serif';
+                const res = await jsonRequest(baseUrl, "/api/overlay-templates", {
+                    method: "POST",
+                    cookie: alice.cookie,
+                    body: validPayload({
+                        name: "Blank text",
+                        elements: [{
+                            id: "text-empty",
+                            kind: "text",
+                            text: {
+                                content: "",
+                                fontId: "poppins",
+                                fontFamily,
+                            },
+                        }],
+                    }),
+                });
+
+                assert.equal(res.status, 201);
+                const data = await res.json();
+                assert.equal(data.template.elements[0].text.content, "");
+                assert.equal(data.template.elements[0].text.fontId, "poppins");
+                assert.equal(data.template.elements[0].text.fontFamily, fontFamily);
+
+                const reopened = await jsonRequest(
+                    baseUrl,
+                    `/api/overlay-templates/${data.template.id}`,
+                    { cookie: alice.cookie },
+                );
+                const reopenedData = await reopened.json();
+                assert.equal(reopenedData.template.elements[0].text.content, "");
+                assert.equal(reopenedData.template.elements[0].text.fontId, "poppins");
+                assert.equal(reopenedData.template.elements[0].text.fontFamily, fontFamily);
+            });
+        });
+
         it("round-trips a template through GET by id", async () => {
             await withServer(env.app, async (baseUrl) => {
                 const created = await jsonRequest(baseUrl, "/api/overlay-templates", {

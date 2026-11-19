@@ -97,6 +97,37 @@ async function resolveBrowserLauncher() {
   return {};
 }
 
+async function waitForProjectStability(page, { stableFor = 2000, timeout = 20000 } = {}) {
+  const startedAt = Date.now();
+  let stableSince = 0;
+  let previousToken = "";
+
+  while (Date.now() - startedAt < timeout) {
+    const token = await page.evaluate(() => {
+      if (typeof window.__PROJECT_SNAPSHOT__ !== "function") return "";
+      const snapshot = window.__PROJECT_SNAPSHOT__();
+      const { commandState, timelineZoom: _timelineZoom, ...content } = snapshot || {};
+      return JSON.stringify({
+        revision: commandState?.revision ?? -1,
+        changing: Boolean(commandState?.changing),
+        content,
+      });
+    });
+
+    if (token && token === previousToken) {
+      if (!stableSince) stableSince = Date.now();
+      if (Date.now() - stableSince >= stableFor) return;
+    } else {
+      previousToken = token;
+      stableSince = token ? Date.now() : 0;
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error("Project did not become stable before rough-cut analysis");
+}
+
 async function runRoughCutE2ETest() {
   console.log("==================================================================");
   console.log("    Playwright E2E Test: AI-Assisted Rough Cut Workflow           ");
@@ -152,7 +183,7 @@ async function runRoughCutE2ETest() {
 
   page.on("dialog", async (dialog) => {
     console.log(`[Browser Dialog] Auto-accepting ${dialog.type()}: "${dialog.message()}"`);
-    await dialog.accept().catch(() => {});
+    await dialog.accept().catch(() => { });
   });
 
   try {
@@ -188,7 +219,7 @@ async function runRoughCutE2ETest() {
       await page.waitForTimeout(400);
     }
 
-    await page.waitForTimeout(1000);
+    await waitForProjectStability(page);
 
     const initialClips = await page.locator('[data-timeline-segment-track="image"]').count();
     console.log(`✔ Initial timeline clips count: ${initialClips}`);
@@ -438,7 +469,7 @@ async function runRoughCutE2ETest() {
   } catch (err) {
     console.error(`\n✖ PLAYWRIGHT E2E TEST FAILED: ${err.message}`);
     const errScreenshot = resolve(ARTIFACTS_DIR, "rough-cut-failure.png");
-    await page.screenshot({ path: errScreenshot }).catch(() => {});
+    await page.screenshot({ path: errScreenshot }).catch(() => { });
     console.error(`Screenshot captured at: ${errScreenshot}`);
     throw err;
   } finally {

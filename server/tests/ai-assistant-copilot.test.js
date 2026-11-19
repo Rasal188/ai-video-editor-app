@@ -118,7 +118,7 @@ test("Copilot: Visual appearance filters (cinematic, black and white, glow/soft)
   assert.equal(planSoft.actions[0].params.filterId, "effect-soft");
 });
 
-test("Copilot: Color grading (saturation, warmer)", () => {
+test("Copilot: Color grading (saturation, warmer, brighter)", () => {
   const project = createMockProject();
   const summary = { visualClips: project.visualSegments, selectedClipId: "v1" };
 
@@ -130,6 +130,11 @@ test("Copilot: Color grading (saturation, warmer)", () => {
   assert.equal(planWarm.actions[0].type, "clip.set_color_grade");
   assert.equal(planWarm.actions[0].params.scope, "all");
   assert.equal(planWarm.actions[0].params.colorGrade.temperature, 15);
+
+  const planBright = parseNaturalLanguageEditingPlan("make this clip brighter", summary);
+  assert.equal(planBright.actions[0].type, "clip.set_color_grade");
+  assert.deepEqual(planBright.actions[0].params.colorGrade.highlights, { luminance: 20 });
+  assert.deepEqual(planBright.actions[0].params.colorGrade.shadows, { luminance: 20 });
 });
 
 test("Copilot: Audio ducking during speech", () => {
@@ -243,6 +248,44 @@ test("Copilot: Command engine executes clip.set_filter and clip.set_color_grade 
   }
 });
 
+test("Copilot: Partial color-grade commands preserve unrelated values and wheel components", () => {
+  const project = createMockProject();
+  project.visualSegments[0].colorGrade = {
+    temperature: -12,
+    tint: 8,
+    saturation: 24,
+    shadows: { hue: 210, saturation: 32, luminance: -14 },
+    midtones: { hue: 25, saturation: 18, luminance: 6 },
+    highlights: { hue: 48, saturation: 12, luminance: 15 },
+    offset: { hue: 300, saturation: 7, luminance: -2 },
+  };
+
+  const result = applyCommandPlan(project, {
+    schemaVersion: 1,
+    baseRevision: 1,
+    operations: [{
+      id: "op-grade-patch",
+      type: "clip.set_color_grade",
+      clipId: "v1",
+      colorGrade: {
+        temperature: 20,
+        highlights: { luminance: 30 },
+      },
+    }],
+  });
+
+  assert.ok(result.ok, `Command plan failed: ${result.message}`);
+  assert.deepEqual(result.project.visualSegments[0].colorGrade, {
+    temperature: 20,
+    tint: 8,
+    saturation: 24,
+    shadows: { hue: 210, saturation: 32, luminance: -14 },
+    midtones: { hue: 25, saturation: 18, luminance: 6 },
+    highlights: { hue: 48, saturation: 12, luminance: 30 },
+    offset: { hue: 300, saturation: 7, luminance: -2 },
+  });
+});
+
 test("Copilot: Command engine rejects edits on locked tracks safely", () => {
   const project = createMockProject();
   project.tracks.visuals.locked = true;
@@ -287,6 +330,26 @@ test("Copilot: Schema validation accepts new actions and rejects invalid paramet
   });
   assert.equal(cleanSpeed.speed, 1.5);
   assert.equal(cleanSpeed.preservePitch, true);
+
+  // Valid color wheels retain their object shape and normalized components.
+  const cleanGrade = validateActionParams("clip.set_color_grade", {
+    clipId: "v1",
+    colorGrade: {
+      temperature: 12.4,
+      highlights: { hue: 48.6, saturation: 12.2, luminance: 20.7 },
+    },
+  });
+  assert.deepEqual(cleanGrade.colorGrade, {
+    temperature: 12,
+    highlights: { hue: 49, saturation: 12, luminance: 21 },
+  });
+  assert.throws(
+    () => validateActionParams("clip.set_color_grade", {
+      clipId: "v1",
+      colorGrade: { highlights: 20 },
+    }),
+    /highlights must be a color-wheel object/
+  );
 
   // Speed out of range throws error
   assert.throws(

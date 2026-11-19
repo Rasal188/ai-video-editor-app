@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { decodeWaveform, sliceAudioBlob } from "../lib/media.js";
 import { separateVocals } from "../lib/vocalSeparation.js";
 
-export function useVocalSeparation({ sourceAudioBlob, sourceAudioName, replaceAudio, replaceSourceAudio, replaceMusic, notify, t }) {
+export function useVocalSeparation({ sourceAudioBlob, sourceAudioName, replaceAudio, replaceSourceAudio, replaceMusic, markEmbeddedAudioSeparated, notify, t }) {
   const [job, setJob] = useState({ running: false, progress: 0, phase: "" });
   const run = useCallback(async () => {
     if (!sourceAudioBlob || job.running) return;
@@ -44,13 +44,16 @@ export function useVocalSeparation({ sourceAudioBlob, sourceAudioName, replaceAu
       }));
       const [voiceMeta, musicMeta] = await Promise.all([decodeWaveform(result.vocals, 96), decodeWaveform(result.accompaniment, 96)]);
       const base = (name || t("audioClipFile")).replace(/\.[^.]+$/, "");
-      replaceAudio(result.vocals, voiceMeta.duration, voiceMeta.peaks, t("vocalStemPlaced"), {
+      const vocalSegment = replaceAudio(result.vocals, voiceMeta.duration, voiceMeta.peaks, t("vocalStemPlaced"), {
         start,
         name: `${base}-${t("vocalStemFile")}.wav`,
         sourceKind: "separated",
         replaceSegmentId: track === "audio" ? segmentId : "",
       });
       replaceMusic(result.accompaniment, musicMeta.duration, musicMeta.peaks, `${base}-${t("instrumentalStemFile")}.wav`, t("instrumentalStemPlaced"), { start });
+      if (track === "image" || track === "overlay") {
+        markEmbeddedAudioSeparated?.(track, segmentId, vocalSegment.id);
+      }
       setJob({ running: false, progress: 100, phase: t("vocalSeparationComplete") });
       notify(t("vocalSeparationComplete"));
     } catch (error) {
@@ -62,6 +65,6 @@ export function useVocalSeparation({ sourceAudioBlob, sourceAudioName, replaceAu
           : t("vocalSeparationModelFailed");
       notify(`${t("vocalSeparationFailed")}：${reason}`);
     }
-  }, [job.running, notify, replaceAudio, replaceMusic, t]);
+  }, [job.running, markEmbeddedAudioSeparated, notify, replaceAudio, replaceMusic, t]);
   return { vocalSeparationJob: job, separateAudioClipVocals: runClip, separateSourceVocals: run };
 }

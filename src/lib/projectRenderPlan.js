@@ -3,6 +3,11 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { buildSmartZoomCropFilter } from "./smartZoom.js";
 import { buildReframingFFmpegCropFilter } from "./shortsReframing.js";
+import {
+  COLOR_GRADE_KEYFRAME_KEYS,
+  isColorGradeNeutral,
+  normalizeColorGrade,
+} from "./colorGrade.js";
 
 const RATIO_SIZES = Object.freeze({
   "16:9": { width: 1280, height: 720 },
@@ -59,22 +64,22 @@ function resolveCaptionFontPath(settings = {}) {
 
   const candidates = isWin
     ? [
-        `${winDir}/Fonts/segoeui.ttf`,
-        `${winDir}/Fonts/arial.ttf`,
-        `${winDir}/Fonts/msyh.ttc`,
-        "C:/Windows/Fonts/segoeui.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/msyh.ttc",
-      ]
+      `${winDir}/Fonts/segoeui.ttf`,
+      `${winDir}/Fonts/arial.ttf`,
+      `${winDir}/Fonts/msyh.ttc`,
+      "C:/Windows/Fonts/segoeui.ttf",
+      "C:/Windows/Fonts/arial.ttf",
+      "C:/Windows/Fonts/msyh.ttc",
+    ]
     : [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-      ];
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+      "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+      "/System/Library/Fonts/Supplemental/Arial.ttf",
+      "/Library/Fonts/Arial.ttf",
+      "/System/Library/Fonts/Helvetica.ttc",
+    ];
 
   for (const candidate of candidates) {
     try {
@@ -134,6 +139,65 @@ function normalizeFfmpegColor(colorHex, fallback = "white") {
   return hex;
 }
 
+function roundFilterValue(value, precision = 4) {
+  const scale = 10 ** precision;
+  return Math.round(value * scale) / scale;
+}
+
+function buildColorGradeFfmpegFilter(value = {}) {
+  const grade = normalizeColorGrade(value);
+  if (isColorGradeNeutral(grade)) return "";
+
+  const wheels = [
+    [grade.shadows, 0.34],
+    [grade.midtones, 0.42],
+    [grade.highlights, 0.24],
+    [grade.offset, 0.56],
+  ];
+  let vectorX = 0;
+  let vectorY = 0;
+  let luminance = 0;
+  for (const [wheel, weight] of wheels) {
+    const radians = wheel.hue * Math.PI / 180;
+    const amount = wheel.saturation / 100 * weight;
+    vectorX += Math.cos(radians) * amount;
+    vectorY += Math.sin(radians) * amount;
+    luminance += wheel.luminance / 100 * weight;
+  }
+
+  const chroma = Math.min(1, Math.hypot(vectorX, vectorY));
+  const hue = chroma > 0.0001 ? Math.atan2(vectorY, vectorX) * 180 / Math.PI : 0;
+  const temperatureWarmth = Math.max(0, grade.temperature) / 100;
+  const temperatureCool = Math.max(0, -grade.temperature) / 100;
+  const sepia = Math.min(0.34, temperatureWarmth * 0.2 + chroma * 0.26);
+  const hueRotate = hue * chroma + grade.tint * 0.18 + temperatureCool * 188;
+  const brightness = Math.max(0.72, 1 + luminance * 0.24 + grade.offset.luminance * 0.0014 + grade.temperature * 0.0003);
+  const contrast = Math.max(0.78, 1 + (grade.highlights.luminance - grade.shadows.luminance) * 0.0011);
+  const saturation = Math.max(0, 1 + grade.saturation / 100 + chroma * 0.42);
+  const filters = [
+    `eq=brightness=${roundFilterValue(brightness - 1)}:contrast=${roundFilterValue(contrast)}:saturation=${roundFilterValue(saturation)}`,
+  ];
+
+  if (sepia > 0.0001) {
+    const mix = (identity, target) => roundFilterValue(identity * (1 - sepia) + target * sepia);
+    filters.push(
+      `colorchannelmixer=rr=${mix(1, 0.393)}:rg=${mix(0, 0.769)}:rb=${mix(0, 0.189)}`
+      + `:gr=${mix(0, 0.349)}:gg=${mix(1, 0.686)}:gb=${mix(0, 0.168)}`
+      + `:br=${mix(0, 0.272)}:bg=${mix(0, 0.534)}:bb=${mix(1, 0.131)}`,
+    );
+  }
+  if (Math.abs(hueRotate) > 0.001) {
+    filters.push(`hue=h=${roundFilterValue(hueRotate, 2)}`);
+  }
+  return `${filters.join(",")},`;
+}
+
+function hasAnimatedColorGrade(item) {
+  return (item?.keyframes || []).some((frame) => (
+    frame && COLOR_GRADE_KEYFRAME_KEYS.some((key) => Object.hasOwn(frame, key))
+  ));
+}
+
 function resolvePlacementCoords(placement) {
   if (typeof placement === "string") {
     if (placement === "top") return { x: 50, y: 18 };
@@ -179,6 +243,7 @@ function assertSupportedProject(project) {
       }
     }
   });
+  if ((project.visualSegments || []).some(hasAnimatedColorGrade)) unsupported.push("animated color grading");
   if ((project.visualSegments || []).some((item) => (item.keyframes?.length && !item.punchIns?.length) || item.mask?.type || item.filter || item.effects?.length || item.vision || item.speedCurve?.enabled)) unsupported.push("visual effects");
   if (unsupported.length) {
     throw renderError("UNSUPPORTED_RENDER_FEATURE", `Headless render does not yet support: ${[...new Set(unsupported)].join(", ")}`);
@@ -356,7 +421,8 @@ export function buildFfmpegRenderPlan({ project, media = {}, extractedFiles, med
       ? (reframingFilter ? `scale=${width}:${height}:force_original_aspect_ratio=increase,${reframingFilter}` : `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}${cropOffset},`)
       : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,`;
     const zoomFilter = buildSmartZoomCropFilter(segment.punchIns, width, height, clipDuration);
-    filters.push(`[${inputIndex}:v]${trim}${scaleFilter}${zoomFilter}fps=${frameRate},settb=1/${frameRate},setsar=1,format=yuv420p[v${index}]`);
+    const colorGradeFilter = buildColorGradeFfmpegFilter(segment.colorGrade);
+    filters.push(`[${inputIndex}:v]${trim}${scaleFilter}${zoomFilter}${colorGradeFilter}fps=${frameRate},settb=1/${frameRate},setsar=1,format=yuv420p[v${index}]`);
 
 
     if (hasVisualAudio) {
@@ -434,8 +500,8 @@ export function buildFfmpegRenderPlan({ project, media = {}, extractedFiles, med
   const areOverlaysVisible = visible.overlay !== false;
   const overlaySegments = (areOverlaysVisible && Array.isArray(project.visualOverlaySegments))
     ? project.visualOverlaySegments
-        .filter((s) => !s.hidden)
-        .sort((a, b) => (Number(a.layer) || 1) - (Number(b.layer) || 1))
+      .filter((s) => !s.hidden)
+      .sort((a, b) => (Number(a.layer) || 1) - (Number(b.layer) || 1))
     : [];
 
   const areStickersVisible = visible.sticker !== false;

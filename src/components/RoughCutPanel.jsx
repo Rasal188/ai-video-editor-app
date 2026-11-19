@@ -155,7 +155,7 @@ export function RoughCutPanel({ t, tool }) {
             className="rough-cut-analyze-btn"
             data-testid="rough-cut-analyze-btn"
             disabled={!supported || locked || segment?.type !== "video"}
-            onClick={tool.run}
+            onClick={() => tool.run({ clipId: segment?.id })}
           >
             <Scissors size={16} />
             <span>{t("roughCutAnalyze", "Analyze rough cut")}</span>

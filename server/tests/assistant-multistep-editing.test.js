@@ -228,15 +228,19 @@ describe("Phase 2 — Step 2.1: Assistant Multi-Step Editing & Project-Aware Rea
       assert.equal(res.project.visualSegments[1].id, "vis-1");
     });
 
-    it("should support compound smart tool triggers: remove filler words and long pauses", () => {
+    it("should route compound pause and filler cleanup through one Rough Cut review workflow", () => {
       const project = createTestProject();
       const summary = getProjectSummary(project);
       const parsed = parseNaturalLanguageEditingPlan("remove filler words and cut out pauses", summary);
 
       assert.ok(parsed);
-      const toolTypes = parsed.actions.map((a) => a.type);
-      assert.ok(toolTypes.includes("tool.rough_cut"));
-      assert.ok(toolTypes.includes("tool.silence_removal"));
+      const smartActions = parsed.actions.filter((action) =>
+        ["tool.rough_cut", "tool.silence_removal"].includes(action.type)
+      );
+      assert.equal(smartActions.length, 1);
+      assert.equal(smartActions[0].type, "tool.rough_cut");
+      assert.equal(smartActions[0].params.clipId, "vis-1");
+      assert.equal(smartActions[0].params.removeFillerWords, true);
     });
   });
 

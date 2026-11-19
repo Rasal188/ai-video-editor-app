@@ -10,10 +10,12 @@ import {
     TEMPLATE_APPLY_REASONS,
     TEMPLATE_ELEMENT_SKIP_REASONS,
     createTemplateFromOverlays,
+    createTemplateOverlayRenderSource,
     describeTemplate,
     duplicateOverlayTemplate,
     instantiateTemplate,
     isOverlayTemplateCompatible,
+    mapTemplateLayoutToOverlayTransform,
     normalizeOverlayTemplate,
     serializeOverlayTemplateForApi,
     validateOverlayTemplate,
@@ -60,7 +62,11 @@ const vectorElement = (overrides = {}) => ({
     layer: 3,
     start: 1,
     duration: 3,
-    vector: { body: "<circle cx=\"600\" cy=\"600\" r=\"200\" fill=\"#ff0000\"/>", background: "transparent" },
+    vector: {
+        assetId: "vector-badge",
+        body: "<circle cx=\"600\" cy=\"600\" r=\"200\" fill=\"#ff0000\"/>",
+        background: "transparent",
+    },
     ...overrides,
 });
 
@@ -188,6 +194,21 @@ describe("Overlay template model", () => {
         assert.equal(normalized.elements[1].shape.shapeType, "rect");
     });
 
+    it("accepts empty text and preserves whitespace, newlines, and font identity", () => {
+        const family = '"Poppins", Inter, system-ui, sans-serif';
+        const normalized = normalizeOverlayTemplate(validTemplate({
+            elements: [
+                { id: "empty", kind: "text", text: { content: "", fontId: "poppins", fontFamily: family } },
+                { id: "spaced", kind: "text", text: { content: "  One\nTwo  " } },
+            ],
+        }));
+
+        assert.equal(normalized.elements[0].text.content, "");
+        assert.equal(normalized.elements[0].text.fontId, "poppins");
+        assert.equal(normalized.elements[0].text.fontFamily, family);
+        assert.equal(normalized.elements[1].text.content, "  One\nTwo  ");
+    });
+
     it("rejects an unsupported schema version", () => {
         throwsCode(() => normalizeOverlayTemplate(validTemplate({ schemaVersion: 99 })), "UNSUPPORTED_TEMPLATE_SCHEMA_VERSION");
     });
@@ -234,6 +255,33 @@ describe("Overlay template model", () => {
         throwsCode(
             () => normalizeOverlayTemplate(validTemplate({ elements: [{ id: "x", kind: "video-clip" }] })),
             "INVALID_TEMPLATE_ELEMENT",
+        );
+    });
+
+    it("preserves stable vector identifiers during normalization and JSON reload", () => {
+        const normalized = normalizeOverlayTemplate(validTemplate({
+            elements: [
+                vectorElement({
+                    id: "vector-one",
+                    vector: {
+                        assetId: "vector-star",
+                        body: '<path d="M0 0h10v10H0z"/>',
+                    },
+                }),
+                vectorElement({
+                    id: "vector-two",
+                    vector: {
+                        assetId: "vector-arrow-right",
+                        body: '<path d="M0 5h8L5 2l1-1 5 4-5 4-1-1 3-2H0z"/>',
+                    },
+                }),
+            ],
+        }));
+        const reloaded = normalizeOverlayTemplate(JSON.parse(JSON.stringify(normalized)));
+
+        assert.deepEqual(
+            reloaded.elements.map((element) => element.vector.assetId),
+            ["vector-star", "vector-arrow-right"],
         );
     });
 
@@ -384,11 +432,12 @@ describe("Create template from overlays", () => {
         assert.equal(template.elements.length, 1);
     });
 
-    it("keeps vector overlays self-contained instead of referencing blobs", () => {
+    it("keeps vector overlays self-contained with their stable vector identity", () => {
         const overlay = liveOverlay({
             id: "vec-1",
             assetId: "",
             archiveMediaId: "",
+            vectorAssetId: "vector-square",
             vectorBody: "<rect x=\"0\" y=\"0\" width=\"10\" height=\"10\" fill=\"#00ff00\"/>",
             vectorBackground: "transparent",
             vectorColorSlots: { primary: ["#00ff00"], secondary: [], accent: [] },
@@ -396,6 +445,7 @@ describe("Create template from overlays", () => {
         const template = createTemplateFromOverlays({ overlays: [overlay], name: "Vector Look" });
 
         assert.equal(template.elements[0].kind, "vector");
+        assert.equal(template.elements[0].vector.assetId, "vector-square");
         assert.ok(template.elements[0].vector.body.includes("<rect"));
         assert.equal(JSON.stringify(template).includes("\"src\""), false);
     });
@@ -687,13 +737,31 @@ describe("Instantiate template", () => {
         assert.equal(overlay.templateElementId, "el-1");
     });
 
-    it("skips text and shape elements without failing the apply", () => {
+    it("creates individually editable text and shape overlays", () => {
+        const fontFamily = '"Playfair Display", Inter, system-ui, sans-serif';
         const result = instantiateTemplate({
             template: validTemplate({
                 elements: [
                     mediaElement(),
-                    { id: "t1", kind: "text", text: { content: "Hi" } },
-                    { id: "s1", kind: "shape", shape: { shapeType: "rect" } },
+                    {
+                        id: "t1",
+                        kind: "text",
+                        name: "Headline",
+                        layout: { x: 100, y: 200, width: 600, height: 180 },
+                        text: {
+                            content: "Hi & <friends>",
+                            color: "#00ffff",
+                            fontId: "playfair-display",
+                            fontFamily,
+                        },
+                    },
+                    {
+                        id: "s1",
+                        kind: "shape",
+                        name: "Panel",
+                        layout: { x: 80, y: 160, width: 640, height: 240 },
+                        shape: { shapeType: "rect", fill: "#101820", radius: 24 },
+                    },
                 ],
             }),
             existingOverlays: [],
@@ -701,12 +769,120 @@ describe("Instantiate template", () => {
         });
 
         assert.equal(result.applied, true);
-        assert.equal(result.created.length, 1);
-        assert.equal(result.skipped.length, 2);
-        result.skipped.forEach((item) => {
-            assert.equal(item.reason, TEMPLATE_ELEMENT_SKIP_REASONS.unsupportedKind);
+        assert.equal(result.created.length, 3);
+        assert.equal(result.skipped.length, 0);
+
+        const text = result.created.find((overlay) => overlay.kind === "text");
+        const shape = result.created.find((overlay) => overlay.kind === "shape");
+        assert.deepEqual(text.text.content, "Hi & <friends>");
+        assert.equal(text.text.fontId, "playfair-display");
+        assert.equal(text.text.fontFamily, fontFamily);
+        assert.deepEqual(shape.shape.shapeType, "rect");
+        assert.ok(text.src.startsWith("data:image/svg+xml"));
+        assert.ok(shape.src.startsWith("data:image/svg+xml"));
+        assert.deepEqual(text.templateLayout, { x: 100, y: 200, width: 600, height: 180 });
+        assert.deepEqual(shape.templateLayout, { x: 80, y: 160, width: 640, height: 240 });
+        const decodedTextSvg = decodeURIComponent(text.src);
+        assert.match(decodedTextSvg, /Hi .*amp; .*lt;friends.*gt;/);
+        assert.match(decodedTextSvg, /Playfair Display/);
+        assert.doesNotMatch(decodedTextSvg, /Hi & <friends>/);
+    });
+
+    it("applies an empty text element as an editable blank overlay", () => {
+        const result = instantiateTemplate({
+            template: validTemplate({
+                elements: [{
+                    id: "empty-text",
+                    kind: "text",
+                    name: "Blank headline",
+                    layout: { x: 100, y: 200, width: 600, height: 180 },
+                    text: {
+                        content: "",
+                        fontId: "montserrat",
+                        fontFamily: '"Montserrat", Inter, system-ui, sans-serif',
+                    },
+                }],
+            }),
+            existingOverlays: [],
+            assets: [],
         });
-        assert.ok(result.warnings.some((warning) => warning.includes("unsupported kind")));
+
+        assert.equal(result.applied, true);
+        assert.equal(result.created.length, 1);
+        assert.equal(result.created[0].text.content, "");
+        assert.equal(result.created[0].text.fontId, "montserrat");
+        assert.doesNotMatch(decodeURIComponent(result.created[0].src), />Text</);
+    });
+
+    it("regenerates text and shape render sources after editable payload changes", () => {
+        const textSource = createTemplateOverlayRenderSource({
+            kind: "text",
+            name: "Headline",
+            width: 600,
+            height: 180,
+            text: { content: "Updated", color: "#ff00ff", fontSize: 64 },
+        });
+        const emptyTextSource = createTemplateOverlayRenderSource({
+            kind: "text",
+            width: 600,
+            height: 180,
+            text: { content: "", color: "#ffffff", fontSize: 64 },
+        });
+        const shapeSource = createTemplateOverlayRenderSource({
+            kind: "shape",
+            width: 600,
+            height: 180,
+            shape: { shapeType: "ellipse", fill: "#00ff00", stroke: "#ffffff", strokeWidth: 4 },
+        });
+
+        assert.match(decodeURIComponent(textSource), /Updated/);
+        assert.doesNotMatch(decodeURIComponent(emptyTextSource), />Text</);
+        assert.match(decodeURIComponent(shapeSource), /<ellipse/);
+    });
+
+    it("maps Studio layout geometry and keyframes into normal overlay transforms", () => {
+        const layout = { x: 108, y: 384, width: 540, height: 384 };
+        assert.deepEqual(
+            mapTemplateLayoutToOverlayTransform(layout, { width: 1080, height: 1920 }, {
+                x: 27, y: -24, scale: 0.34, rotation: 12, opacity: 0.8,
+            }),
+            { x: 12, y: -44, scale: 0.17, rotation: 12, opacity: 0.8 },
+        );
+
+        const result = instantiateTemplate({
+            template: validTemplate({
+                elements: [mediaElement({
+                    layout,
+                    media: {
+                        ...mediaElement().media,
+                        fit: "contain",
+                        positionX: 25,
+                        positionY: 75,
+                        zoom: 1.4,
+                    },
+                })],
+            }),
+            existingOverlays: [],
+            assets: [projectAsset()],
+        });
+        const overlay = result.created[0];
+
+        assert.equal(overlay.width, 540);
+        assert.equal(overlay.height, 384);
+        assert.equal(overlay.mediaSourceWidth, 512);
+        assert.equal(overlay.mediaSourceHeight, 512);
+        assert.deepEqual(overlay.mediaPresentation, {
+            fit: "contain",
+            positionX: 25,
+            positionY: 75,
+            zoom: 1.4,
+        });
+        assert.deepEqual(overlay.baseTransform, {
+            x: 12, y: -44, scale: 0.17, rotation: 0, opacity: 1,
+        });
+        assert.deepEqual(overlay.keyframes[1], {
+            time: 2, x: -5, y: -20, scale: 0.5, rotation: 0, opacity: 1,
+        });
     });
 
     it("selects the first newly created overlay", () => {
@@ -718,7 +894,7 @@ describe("Instantiate template", () => {
         assert.equal(result.selectedId, result.created[0].id);
     });
 
-    it("derives the vector data URL at apply time rather than storing it", () => {
+    it("derives the vector data URL at apply time and keeps the exact selected identifier", () => {
         const template = validTemplate({ elements: [vectorElement()] });
         assert.equal(JSON.stringify(template).includes("data:image/svg"), false);
 
@@ -726,6 +902,7 @@ describe("Instantiate template", () => {
         assert.equal(result.applied, true);
         assert.ok(result.created[0].src.startsWith("data:image/svg+xml"));
         assert.equal(result.created[0].kind, "vector");
+        assert.equal(result.created[0].vectorAssetId, "vector-badge");
         assert.ok(result.created[0].vectorBody.includes("<circle"));
     });
 
@@ -738,8 +915,8 @@ describe("Instantiate template", () => {
         assert.equal(result.created[0].duration, 9);
     });
 
-    it("exposes the applicable element kinds", () => {
-        assert.deepEqual([...APPLICABLE_ELEMENT_KINDS], ["media", "vector"]);
+    it("exposes every editable Studio element kind as applicable", () => {
+        assert.deepEqual([...APPLICABLE_ELEMENT_KINDS], ["media", "vector", "text", "shape"]);
     });
 
     it("rejects an invalid template before touching the timeline", () => {

@@ -605,7 +605,7 @@ export function Timeline({
         clientX,
         clientY: latest.y,
         pointerId,
-        preventDefault() {},
+        preventDefault() { },
       }, scrollOffset),
     });
     const move = (moveEvent, scrollOffset = autoScroller.getScrollOffset()) => {
@@ -1213,9 +1213,13 @@ export function Timeline({
   }, []);
   useEffect(() => {
     const handleSelectionShortcut = (event) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target;
-      if (target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (
+        event.defaultPrevented || event.isComposing || event.repeat ||
+        event.metaKey || event.ctrlKey || event.altKey ||
+        isEditorTextEntryTarget(event.target) ||
+        isEditorInteractiveTarget(event.target) ||
+        isEditorShortcutBlockedByModal()
+      ) return;
       if (event.key === "[") {
         event.preventDefault();
         setTimelineSelectionMode("left");
@@ -1472,8 +1476,8 @@ export function Timeline({
       };
       setRulerViewport((viewport) =>
         Math.abs(viewport.scrollLeft - nextViewport.scrollLeft) < 0.5 &&
-        Math.abs(viewport.viewportWidth - nextViewport.viewportWidth) < 0.5 &&
-        Math.abs(viewport.contentWidth - nextViewport.contentWidth) < 0.5
+          Math.abs(viewport.viewportWidth - nextViewport.viewportWidth) < 0.5 &&
+          Math.abs(viewport.contentWidth - nextViewport.contentWidth) < 0.5
           ? viewport
           : nextViewport,
       );
@@ -1603,11 +1607,11 @@ export function Timeline({
         if (controller.signal.aborted || !framesToCommit?.length) return;
         setVisualSegments((items) => items.map((item) => item.id === segment.id
           ? {
-              ...item,
-              trackFrames: mergeExactVideoTrackFrames(item.trackFrames, framesToCommit),
-              trackFrameDuration: sourceDuration,
-              trackFrameSampling: "exact-pts-hq-v5-progressive",
-            }
+            ...item,
+            trackFrames: mergeExactVideoTrackFrames(item.trackFrames, framesToCommit),
+            trackFrameDuration: sourceDuration,
+            trackFrameSampling: "exact-pts-hq-v5-progressive",
+          }
           : item));
       };
       const refineCells = (sampleTimes) => {
@@ -1799,11 +1803,11 @@ export function Timeline({
       : `${localTrackWidthPercent}%`;
   const mainAssetInsertIndex = assetDropTargetTrack === "image"
     ? Math.max(0, Math.min(
-        displayedVisualSegments.length,
-        Number.isInteger(assetDropPosition?.insertIndex)
-          ? assetDropPosition.insertIndex
-          : displayedVisualSegments.length,
-      ))
+      displayedVisualSegments.length,
+      Number.isInteger(assetDropPosition?.insertIndex)
+        ? assetDropPosition.insertIndex
+        : displayedVisualSegments.length,
+    ))
     : -1;
   const mainAssetInsertTime = mainAssetInsertIndex >= 0
     ? Number.isFinite(Number(assetDropPosition?.insertTime))
@@ -2427,9 +2431,8 @@ export function Timeline({
     return assetDropTargetTrack === track ? <>
       {track !== "image" ? <i className="asset-drop-position-marker" style={{ "--drop-x": `${dropPercent}%` }} /> : null}
       <div
-        className={`asset-drop-slot type-${assetDragPreview?.type || "asset"} mode-${track} ${
-          assetDragPreview?.src ? "has-thumb" : ""
-        }`}
+        className={`asset-drop-slot type-${assetDragPreview?.type || "asset"} mode-${track} ${assetDragPreview?.src ? "has-thumb" : ""
+          }`}
         style={{ "--drop-x": `${dropPercent}%` }}
       >
         {assetDragPreview?.src ? (
@@ -2448,12 +2451,12 @@ export function Timeline({
           {track === "overlay" || track === "image"
             ? assetDragPreview?.name || (assetDragPreview?.type === "video" ? t("assetVideo") : t("assetImage"))
             : assetDragPreview?.type === "audio"
-            ? t("assetAudio")
-            : assetDragPreview?.type === "video"
-              ? t("assetVideo")
-              : assetDragPreview?.type === "sticker"
-                ? t("assetSticker")
-              : t("assetImage")}
+              ? t("assetAudio")
+              : assetDragPreview?.type === "video"
+                ? t("assetVideo")
+                : assetDragPreview?.type === "sticker"
+                  ? t("assetSticker")
+                  : t("assetImage")}
         </strong>
       </div>
     </> : null;
@@ -2462,11 +2465,9 @@ export function Timeline({
     showStickerTrack ? (
       <div
         key={`sticker-lane-${laneIndex}`}
-        className={`sticker-track ${selectedTrack === "sticker" ? "is-selected" : ""} ${
-          !isRowVisible("sticker") ? "is-track-disabled" : ""
-        } ${trackLocks.sticker ? "is-track-locked" : ""} ${
-          assetDropTargetTrack === "sticker" ? "is-drop-target" : ""
-        } ${assetDropPulseTrack === "sticker" ? "is-drop-landing" : ""}`}
+        className={`sticker-track ${selectedTrack === "sticker" ? "is-selected" : ""} ${!isRowVisible("sticker") ? "is-track-disabled" : ""
+          } ${trackLocks.sticker ? "is-track-locked" : ""} ${assetDropTargetTrack === "sticker" ? "is-drop-target" : ""
+          } ${assetDropPulseTrack === "sticker" ? "is-drop-landing" : ""}`}
         onClick={(event) => selectTimelineTrackBackground(event, "sticker", "stickers")}
         onDragOver={(event) => handleTrackAssetDragOver(event, "sticker")}
         onDragLeave={(event) => handleTrackAssetDragLeave(event, "sticker")}
@@ -2481,53 +2482,51 @@ export function Timeline({
           <div className="track-drop-hint">{t("dropStickerHere")}</div>
         ) : null}
         {lane.map((segment) => {
-              const segmentLeft =
-                timelineDuration > 0
-                  ? Math.max(0, Math.min(100, ((segment.start || 0) / timelineDuration) * 100))
-                  : 0;
-              const segmentWidth =
-                timelineDuration > 0
-                  ? Math.max(0.4, Math.min(100 - segmentLeft, ((segment.duration || 0) / timelineDuration) * 100))
-                  : 0;
-              return (
-                <button
-                  className={`sticker-segment ${
-                    segment.id === currentStickerSegment?.id ? "is-current" : ""
-                  } ${segment.id === selectedStickerSegmentId ? "is-selected-segment" : ""} ${
-                    stickerTimelineDrag?.segmentId === segment.id ? "is-timeline-dragging" : ""
-                  }`}
-                  type="button"
-                  key={segment.id}
-                  data-timeline-segment-track="sticker"
-                  data-timeline-segment-id={segment.id}
-                  data-range-selected={isRangeSelected("sticker", segment.id) || undefined}
-                  style={{
-                    "--sticker-left": `${segmentLeft}%`,
-                    "--sticker-width": `${segmentWidth}%`,
-                  }}
-                  onPointerDown={(event) => startStickerSegmentMove(event, segment.id, laneIndex)}
-                  onContextMenu={(event) => showTrackContextMenu(event, "sticker", segment.id)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (suppressTimelineClipClickRef.current === segment.id) {
-                      return;
-                    }
-                    setSelectedTrack("sticker");
-                    activateStickerToolForClipSelection();
-                    clearClipSelections("sticker");
-                    setSelectedStickerSegmentId(segment.id);
-                    seekTo(segment.start || 0);
-                    ensureMobileTimedClipVisible(segment.id);
-                    revealMobileClipActions("sticker");
-                  }}
-                >
-                  <img src={segment.src} alt="" draggable={false} />
-                  <span>{segment.name}</span>
-                  <i className="sticker-resize-handle is-start" onPointerDown={(event) => startStickerSegmentResize(event, segment.id, "start")} />
-                  <i className="sticker-resize-handle is-end" onPointerDown={(event) => startStickerSegmentResize(event, segment.id, "end")} />
-                </button>
-              );
-            })}
+          const segmentLeft =
+            timelineDuration > 0
+              ? Math.max(0, Math.min(100, ((segment.start || 0) / timelineDuration) * 100))
+              : 0;
+          const segmentWidth =
+            timelineDuration > 0
+              ? Math.max(0.4, Math.min(100 - segmentLeft, ((segment.duration || 0) / timelineDuration) * 100))
+              : 0;
+          return (
+            <button
+              className={`sticker-segment ${segment.id === currentStickerSegment?.id ? "is-current" : ""
+                } ${segment.id === selectedStickerSegmentId ? "is-selected-segment" : ""} ${stickerTimelineDrag?.segmentId === segment.id ? "is-timeline-dragging" : ""
+                }`}
+              type="button"
+              key={segment.id}
+              data-timeline-segment-track="sticker"
+              data-timeline-segment-id={segment.id}
+              data-range-selected={isRangeSelected("sticker", segment.id) || undefined}
+              style={{
+                "--sticker-left": `${segmentLeft}%`,
+                "--sticker-width": `${segmentWidth}%`,
+              }}
+              onPointerDown={(event) => startStickerSegmentMove(event, segment.id, laneIndex)}
+              onContextMenu={(event) => showTrackContextMenu(event, "sticker", segment.id)}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (suppressTimelineClipClickRef.current === segment.id) {
+                  return;
+                }
+                setSelectedTrack("sticker");
+                activateStickerToolForClipSelection();
+                clearClipSelections("sticker");
+                setSelectedStickerSegmentId(segment.id);
+                seekTo(segment.start || 0);
+                ensureMobileTimedClipVisible(segment.id);
+                revealMobileClipActions("sticker");
+              }}
+            >
+              <img src={segment.src} alt="" draggable={false} />
+              <span>{segment.name}</span>
+              <i className="sticker-resize-handle is-start" onPointerDown={(event) => startStickerSegmentResize(event, segment.id, "start")} />
+              <i className="sticker-resize-handle is-end" onPointerDown={(event) => startStickerSegmentResize(event, segment.id, "end")} />
+            </button>
+          );
+        })}
         {stickerTimelineDrag?.lane === laneIndex && timelineDuration > 0 ? (
           <div
             className="sticker-drop-preview"
@@ -2547,271 +2546,271 @@ export function Timeline({
   const renderOverlayTrack = (lane, laneIndex) => {
     const laneEnd = lane.reduce((end, segment) => Math.max(end, segment.start + segment.duration), 0);
     return (
-    <div
-      className={`visual-overlay-track ${selectedTrack === "overlay" ? "is-selected" : ""} ${!isOverlayLaneVisible(lane) ? "is-track-disabled" : ""} ${trackLocks.overlay ? "is-track-locked" : ""} ${assetDropTargetTrack === "overlay" ? "is-drop-target" : ""}`}
-      key={`overlay-lane-${laneIndex}`}
-      aria-disabled={!isOverlayLaneVisible(lane)}
-      inert={!isOverlayLaneVisible(lane) ? true : undefined}
-      onClick={(event) => selectTimelineTrackBackground(event, "overlay")}
-      data-asset-drop-track="overlay"
-      data-drop-start-time={laneEnd}
-      data-drop-layer={laneIndex + 1}
-      onDragLeave={(event) => handleTrackAssetDragLeave(event, "overlay")}
-      onDragOver={(event) => handleTrackAssetDragOver(event, "overlay")}
-      onDrop={(event) => handleTrackAssetDrop(event, "overlay")}
-    >
-      {lane.map((segment) => {
-        const left = timelineDuration > 0 ? Math.max(0, Math.min(100, segment.start / timelineDuration * 100)) : 0;
-        const width = timelineDuration > 0 ? Math.max(0.01, Math.min(100 - left, segment.duration / timelineDuration * 100)) : 0;
-        const active = currentTime >= segment.start && currentTime < segment.start + segment.duration;
-        const startOverlayEdit = (event, mode) => {
-          if (trackLocks.overlay || !setVisualOverlaySegments) return;
-          const isMobileTouch = event.pointerType === "touch" && window.matchMedia?.("(max-width: 760px)").matches;
-          if (!isMobileTouch) event.preventDefault();
-          event.stopPropagation();
-          clearClipSelections("overlay"); setSelectedVisualOverlayId?.(segment.id); setSelectedTrack("overlay");
-          // Keep horizontal timeline edits on the row where the gesture began.
-          // Without a persisted preference, repacking moves a clip to the first
-          // available row as soon as its overlap with another clip changes.
-          if (!Number.isInteger(segment.lane) || segment.lane !== laneIndex) {
-            setVisualOverlaySegments((items) => items.map((item) => item.id === segment.id
-              ? { ...item, lane: laneIndex }
-              : item));
-          }
-          const track = event.currentTarget.closest(".visual-overlay-track");
-          if (!track) return;
-          const startX = event.clientX; const startY = event.clientY; const initialStart = segment.start; const initialDuration = segment.duration; const initialLane = segment.lane; const initialLayer = segment.layer;
-          const initialOverlayLaneState = new Map(visualOverlaySegments.map((item) => [item.id, { lane: item.lane, layer: item.layer }]));
-          const sourceLaneHasOnlyDraggedClip = overlayLanes[laneIndex]?.length === 1;
-          let latestClientX = startX; let latestClientY = startY;
-          const autoScroller = createTimelineEdgeAutoScroller({
-            trackElement: trackScrollRef.current,
-            pointerType: event.pointerType,
-            timelineDuration,
-            onScrollFrame: (clientX, scrollOffset) => move({ clientX, clientY: latestClientY, preventDefault() {} }, scrollOffset),
-          });
-          const verticalAutoScroller = createTimelineVerticalEdgeAutoScroller({
-            scrollElement: track.closest(".timeline-board"),
-            pointerType: event.pointerType,
-            onScrollFrame: (clientY) => move({ clientX: latestClientX, clientY, preventDefault() {} }),
-          });
-          const contentWidth = Math.max(1, track.getBoundingClientRect().width);
-          const snapPoints = collectTimelineSnapPoints({
-            timelineMarkers,
-            timelineDuration,
-            currentTime,
-            visualSegments: displayedVisualSegments,
-            visualOverlaySegments,
-            captionSegments: displayedCaptionSegments,
-            captionTargetDuration,
-            stickerSegments,
-            audioSegments,
-            sourceAudioDuration,
-            sourceAudioStart: sourceAudioStartPercent / 100 * timelineDuration,
-            musicDuration,
-            musicStart: musicStartPercent / 100 * timelineDuration,
-            musicSegments,
-          }, { track: "overlay", id: segment.id });
-          let dragging = false; let promoteToMain = false; let mainInsertIndex = displayedVisualSegments.length; let dragLane = laneIndex;
-          const move = (moveEvent, scrollOffset = autoScroller?.getScrollOffset() || 0) => {
-            const deltaX = moveEvent.clientX - startX;
-            const deltaY = moveEvent.clientY - startY;
-            latestClientX = moveEvent.clientX;
-            latestClientY = moveEvent.clientY;
-            if (!dragging && isMobileTouch && Math.abs(deltaY) > Math.abs(deltaX)) return;
-            if (!dragging && (mode === "move" ? Math.max(Math.abs(deltaX), Math.abs(deltaY)) : Math.abs(deltaX)) < 4) return;
-            if (!dragging) {
-              dragging = true;
-              // A click must remain selection-only. Materialize the next empty
-              // overlay row only after the pointer crosses the drag threshold.
-              // Moving the sole clip in a lane reorders the existing lanes, so
-              // its vacated lane already provides all required capacity.
-              setOverlayDragLaneCount(overlayLanes.length + (sourceLaneHasOnlyDraggedClip ? 0 : 1));
-              setTimelineHorizon?.((value) => Math.max(value, timelineDuration));
-              if (isPlaying) handlePlayToggle();
+      <div
+        className={`visual-overlay-track ${selectedTrack === "overlay" ? "is-selected" : ""} ${!isOverlayLaneVisible(lane) ? "is-track-disabled" : ""} ${trackLocks.overlay ? "is-track-locked" : ""} ${assetDropTargetTrack === "overlay" ? "is-drop-target" : ""}`}
+        key={`overlay-lane-${laneIndex}`}
+        aria-disabled={!isOverlayLaneVisible(lane)}
+        inert={!isOverlayLaneVisible(lane) ? true : undefined}
+        onClick={(event) => selectTimelineTrackBackground(event, "overlay")}
+        data-asset-drop-track="overlay"
+        data-drop-start-time={laneEnd}
+        data-drop-layer={laneIndex + 1}
+        onDragLeave={(event) => handleTrackAssetDragLeave(event, "overlay")}
+        onDragOver={(event) => handleTrackAssetDragOver(event, "overlay")}
+        onDrop={(event) => handleTrackAssetDrop(event, "overlay")}
+      >
+        {lane.map((segment) => {
+          const left = timelineDuration > 0 ? Math.max(0, Math.min(100, segment.start / timelineDuration * 100)) : 0;
+          const width = timelineDuration > 0 ? Math.max(0.01, Math.min(100 - left, segment.duration / timelineDuration * 100)) : 0;
+          const active = currentTime >= segment.start && currentTime < segment.start + segment.duration;
+          const startOverlayEdit = (event, mode) => {
+            if (trackLocks.overlay || !setVisualOverlaySegments) return;
+            const isMobileTouch = event.pointerType === "touch" && window.matchMedia?.("(max-width: 760px)").matches;
+            if (!isMobileTouch) event.preventDefault();
+            event.stopPropagation();
+            clearClipSelections("overlay"); setSelectedVisualOverlayId?.(segment.id); setSelectedTrack("overlay");
+            // Keep horizontal timeline edits on the row where the gesture began.
+            // Without a persisted preference, repacking moves a clip to the first
+            // available row as soon as its overlap with another clip changes.
+            if (!Number.isInteger(segment.lane) || segment.lane !== laneIndex) {
+              setVisualOverlaySegments((items) => items.map((item) => item.id === segment.id
+                ? { ...item, lane: laneIndex }
+                : item));
             }
-            moveEvent.preventDefault();
-            autoScroller?.update(moveEvent.clientX);
-            verticalAutoScroller?.update(moveEvent.clientY);
-            const mainTrack = mode === "move" && !trackLocks.image
-              ? document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest?.('[data-asset-drop-track="image"]')
-              : null;
-            promoteToMain = Boolean(mainTrack);
-            if (promoteToMain) {
-              const clips = Array.from(mainTrack.querySelectorAll('[data-timeline-segment-track="image"]'));
-              mainInsertIndex = clips.findIndex((clip) => {
-                const clipRect = clip.getBoundingClientRect();
-                return moveEvent.clientX < clipRect.left + clipRect.width / 2;
-              });
-              if (mainInsertIndex < 0) mainInsertIndex = clips.length;
-              setOverlayPromotionTarget({ segmentId: segment.id, insertIndex: mainInsertIndex });
-            } else {
-              setOverlayPromotionTarget(null);
-            }
-            if (promoteToMain) {
-              setSnapGuide?.(null);
-              return;
-            }
-            const dragClientX = autoScroller?.getDragClientX(moveEvent.clientX) ?? moveEvent.clientX;
-            const delta = getTimelineDragTimeDelta({ clientX: dragClientX, startX, scrollOffset, contentWidth, timelineDuration });
-            let nextStart = Math.max(0, Math.min(timelineDuration - initialDuration, initialStart + delta));
-            let activeSnapGuide = null;
-            if (mode === "move") {
-              const snapped = snapTimelineRange(nextStart, initialDuration, snapPoints, (10 / contentWidth) * timelineDuration);
-              nextStart = Math.max(0, Math.min(timelineDuration - initialDuration, snapped.start));
-              activeSnapGuide = snapped.guide;
-            } else {
-              const movingValue = mode === "resize-start" ? nextStart : initialStart + initialDuration + delta;
-              const snap = findClosestTimelineSnap(movingValue, snapPoints, (10 / contentWidth) * timelineDuration);
-              activeSnapGuide = createTimelineSnapGuide(snap, mode === "resize-start" ? "start" : "end");
-            }
-            setSnapGuide?.(activeSnapGuide);
-            if (mode === "move") {
-              const targetTrack = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest?.(".visual-overlay-track");
-              const targetLane = Number(targetTrack?.dataset.dropLayer) - 1;
-              // This pointer handler closes over the lane list from the render
-              // where the drag began. The trailing drop lane is mounted by the
-              // state update above, so it is intentionally one index beyond
-              // that snapshot and must be treated as an empty valid lane.
-              const targetLaneSegments = targetLane === overlayLanes.length
-                ? []
-                : overlayLanes[targetLane];
-              const nextEnd = nextStart + initialDuration;
-              const targetHasRoom = Array.isArray(targetLaneSegments) && targetLaneSegments.every((item) => (
-                item.id === segment.id
-                || item.start + item.duration <= nextStart + 0.001
-                || nextEnd <= item.start + 0.001
-              ));
-              if (sourceLaneHasOnlyDraggedClip && Number.isInteger(targetLane) && targetLane >= 0 && targetLane < overlayLanes.length) {
-                const previousLane = dragLane;
-                dragLane = targetLane;
-                setVisualOverlaySegments((items) => reorderSingleVisualOverlayLane(items, segment.id, previousLane, targetLane)
-                  .map((item) => item.id === segment.id ? { ...item, start: nextStart } : item));
+            const track = event.currentTarget.closest(".visual-overlay-track");
+            if (!track) return;
+            const startX = event.clientX; const startY = event.clientY; const initialStart = segment.start; const initialDuration = segment.duration; const initialLane = segment.lane; const initialLayer = segment.layer;
+            const initialOverlayLaneState = new Map(visualOverlaySegments.map((item) => [item.id, { lane: item.lane, layer: item.layer }]));
+            const sourceLaneHasOnlyDraggedClip = overlayLanes[laneIndex]?.length === 1;
+            let latestClientX = startX; let latestClientY = startY;
+            const autoScroller = createTimelineEdgeAutoScroller({
+              trackElement: trackScrollRef.current,
+              pointerType: event.pointerType,
+              timelineDuration,
+              onScrollFrame: (clientX, scrollOffset) => move({ clientX, clientY: latestClientY, preventDefault() { } }, scrollOffset),
+            });
+            const verticalAutoScroller = createTimelineVerticalEdgeAutoScroller({
+              scrollElement: track.closest(".timeline-board"),
+              pointerType: event.pointerType,
+              onScrollFrame: (clientY) => move({ clientX: latestClientX, clientY, preventDefault() { } }),
+            });
+            const contentWidth = Math.max(1, track.getBoundingClientRect().width);
+            const snapPoints = collectTimelineSnapPoints({
+              timelineMarkers,
+              timelineDuration,
+              currentTime,
+              visualSegments: displayedVisualSegments,
+              visualOverlaySegments,
+              captionSegments: displayedCaptionSegments,
+              captionTargetDuration,
+              stickerSegments,
+              audioSegments,
+              sourceAudioDuration,
+              sourceAudioStart: sourceAudioStartPercent / 100 * timelineDuration,
+              musicDuration,
+              musicStart: musicStartPercent / 100 * timelineDuration,
+              musicSegments,
+            }, { track: "overlay", id: segment.id });
+            let dragging = false; let promoteToMain = false; let mainInsertIndex = displayedVisualSegments.length; let dragLane = laneIndex;
+            const move = (moveEvent, scrollOffset = autoScroller?.getScrollOffset() || 0) => {
+              const deltaX = moveEvent.clientX - startX;
+              const deltaY = moveEvent.clientY - startY;
+              latestClientX = moveEvent.clientX;
+              latestClientY = moveEvent.clientY;
+              if (!dragging && isMobileTouch && Math.abs(deltaY) > Math.abs(deltaX)) return;
+              if (!dragging && (mode === "move" ? Math.max(Math.abs(deltaX), Math.abs(deltaY)) : Math.abs(deltaX)) < 4) return;
+              if (!dragging) {
+                dragging = true;
+                // A click must remain selection-only. Materialize the next empty
+                // overlay row only after the pointer crosses the drag threshold.
+                // Moving the sole clip in a lane reorders the existing lanes, so
+                // its vacated lane already provides all required capacity.
+                setOverlayDragLaneCount(overlayLanes.length + (sourceLaneHasOnlyDraggedClip ? 0 : 1));
+                setTimelineHorizon?.((value) => Math.max(value, timelineDuration));
+                if (isPlaying) handlePlayToggle();
+              }
+              moveEvent.preventDefault();
+              autoScroller?.update(moveEvent.clientX);
+              verticalAutoScroller?.update(moveEvent.clientY);
+              const mainTrack = mode === "move" && !trackLocks.image
+                ? document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest?.('[data-asset-drop-track="image"]')
+                : null;
+              promoteToMain = Boolean(mainTrack);
+              if (promoteToMain) {
+                const clips = Array.from(mainTrack.querySelectorAll('[data-timeline-segment-track="image"]'));
+                mainInsertIndex = clips.findIndex((clip) => {
+                  const clipRect = clip.getBoundingClientRect();
+                  return moveEvent.clientX < clipRect.left + clipRect.width / 2;
+                });
+                if (mainInsertIndex < 0) mainInsertIndex = clips.length;
+                setOverlayPromotionTarget({ segmentId: segment.id, insertIndex: mainInsertIndex });
+              } else {
+                setOverlayPromotionTarget(null);
+              }
+              if (promoteToMain) {
+                setSnapGuide?.(null);
                 return;
               }
-              if (targetHasRoom) dragLane = targetLane;
-            }
-            setVisualOverlaySegments((items) => items.map((item) => {
-              if (item.id !== segment.id) return item;
-              if (mode === "move") return { ...item, start: nextStart, lane: dragLane, layer: dragLane + 1 };
-              if (mode === "resize-start") {
-                const start = Math.max(0, Math.min(
-                  initialStart + initialDuration - 0.1,
-                  activeSnapGuide?.time ?? initialStart + delta,
+              const dragClientX = autoScroller?.getDragClientX(moveEvent.clientX) ?? moveEvent.clientX;
+              const delta = getTimelineDragTimeDelta({ clientX: dragClientX, startX, scrollOffset, contentWidth, timelineDuration });
+              let nextStart = Math.max(0, Math.min(timelineDuration - initialDuration, initialStart + delta));
+              let activeSnapGuide = null;
+              if (mode === "move") {
+                const snapped = snapTimelineRange(nextStart, initialDuration, snapPoints, (10 / contentWidth) * timelineDuration);
+                nextStart = Math.max(0, Math.min(timelineDuration - initialDuration, snapped.start));
+                activeSnapGuide = snapped.guide;
+              } else {
+                const movingValue = mode === "resize-start" ? nextStart : initialStart + initialDuration + delta;
+                const snap = findClosestTimelineSnap(movingValue, snapPoints, (10 / contentWidth) * timelineDuration);
+                activeSnapGuide = createTimelineSnapGuide(snap, mode === "resize-start" ? "start" : "end");
+              }
+              setSnapGuide?.(activeSnapGuide);
+              if (mode === "move") {
+                const targetTrack = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest?.(".visual-overlay-track");
+                const targetLane = Number(targetTrack?.dataset.dropLayer) - 1;
+                // This pointer handler closes over the lane list from the render
+                // where the drag began. The trailing drop lane is mounted by the
+                // state update above, so it is intentionally one index beyond
+                // that snapshot and must be treated as an empty valid lane.
+                const targetLaneSegments = targetLane === overlayLanes.length
+                  ? []
+                  : overlayLanes[targetLane];
+                const nextEnd = nextStart + initialDuration;
+                const targetHasRoom = Array.isArray(targetLaneSegments) && targetLaneSegments.every((item) => (
+                  item.id === segment.id
+                  || item.start + item.duration <= nextStart + 0.001
+                  || nextEnd <= item.start + 0.001
                 ));
-                return { ...item, start, duration: initialDuration + initialStart - start };
-              }
-              const end = activeSnapGuide?.time ?? initialStart + initialDuration + delta;
-              return { ...item, duration: Math.max(0.1, Math.min(timelineDuration - initialStart, end - initialStart)) };
-            }));
-          };
-          const cleanup = (settle) => {
-            verticalAutoScroller?.stop();
-            setSnapGuide?.(null);
-            if (!dragging) {
-              autoScroller?.stop();
-              setOverlayPromotionTarget(null);
-              setOverlayDragLaneCount(0);
-              settle?.();
-            } else {
-              settleTimelineDrag(autoScroller, {
-                active: dragging,
-                setTimelineHorizon,
-                settle: () => {
-                  setOverlayPromotionTarget(null);
-                  setOverlayDragLaneCount(0);
-                  settle?.();
-                },
-              });
-            }
-            window.removeEventListener("pointermove", move);
-            window.removeEventListener("pointerup", end);
-            window.removeEventListener("pointercancel", cancel);
-          };
-          const cancel = () => {
-            cleanup(() => {
-              setVisualOverlaySegments((items) => items.map((item) => {
-                const initialLaneState = initialOverlayLaneState.get(item.id);
-                if (item.id === segment.id) {
-                  return { ...item, start: initialStart, duration: initialDuration, lane: initialLane, layer: initialLayer };
+                if (sourceLaneHasOnlyDraggedClip && Number.isInteger(targetLane) && targetLane >= 0 && targetLane < overlayLanes.length) {
+                  const previousLane = dragLane;
+                  dragLane = targetLane;
+                  setVisualOverlaySegments((items) => reorderSingleVisualOverlayLane(items, segment.id, previousLane, targetLane)
+                    .map((item) => item.id === segment.id ? { ...item, start: nextStart } : item));
+                  return;
                 }
-                return initialLaneState ? { ...item, ...initialLaneState } : item;
-              }));
-            });
-          };
-          const end = () => {
-            const didDrag = dragging;
-            cleanup(() => {
-              if (!didDrag) return;
-              if (!promoteToMain) {
-                setVisualOverlaySegments((items) => compactVisualOverlayLanes(items));
-                return;
+                if (targetHasRoom) dragLane = targetLane;
               }
-              const promoted = createMainVisualFromOverlay(segment);
-              if (!promoted) return;
-              setVisualOverlaySegments((items) => compactVisualOverlayLanes(items.filter((item) => item.id !== segment.id)));
-              setVisualSegments((items) => {
-                const next = [...items];
-                next.splice(Math.max(0, Math.min(next.length, mainInsertIndex)), 0, promoted);
-                return next;
+              setVisualOverlaySegments((items) => items.map((item) => {
+                if (item.id !== segment.id) return item;
+                if (mode === "move") return { ...item, start: nextStart, lane: dragLane, layer: dragLane + 1 };
+                if (mode === "resize-start") {
+                  const start = Math.max(0, Math.min(
+                    initialStart + initialDuration - 0.1,
+                    activeSnapGuide?.time ?? initialStart + delta,
+                  ));
+                  return { ...item, start, duration: initialDuration + initialStart - start };
+                }
+                const end = activeSnapGuide?.time ?? initialStart + initialDuration + delta;
+                return { ...item, duration: Math.max(0.1, Math.min(timelineDuration - initialStart, end - initialStart)) };
+              }));
+            };
+            const cleanup = (settle) => {
+              verticalAutoScroller?.stop();
+              setSnapGuide?.(null);
+              if (!dragging) {
+                autoScroller?.stop();
+                setOverlayPromotionTarget(null);
+                setOverlayDragLaneCount(0);
+                settle?.();
+              } else {
+                settleTimelineDrag(autoScroller, {
+                  active: dragging,
+                  setTimelineHorizon,
+                  settle: () => {
+                    setOverlayPromotionTarget(null);
+                    setOverlayDragLaneCount(0);
+                    settle?.();
+                  },
+                });
+              }
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", end);
+              window.removeEventListener("pointercancel", cancel);
+            };
+            const cancel = () => {
+              cleanup(() => {
+                setVisualOverlaySegments((items) => items.map((item) => {
+                  const initialLaneState = initialOverlayLaneState.get(item.id);
+                  if (item.id === segment.id) {
+                    return { ...item, start: initialStart, duration: initialDuration, lane: initialLane, layer: initialLayer };
+                  }
+                  return initialLaneState ? { ...item, ...initialLaneState } : item;
+                }));
               });
-              clearClipSelections("visual");
-              setSelectedVisualSegmentId(promoted.id);
-              setSelectedTrack("image");
-            });
+            };
+            const end = () => {
+              const didDrag = dragging;
+              cleanup(() => {
+                if (!didDrag) return;
+                if (!promoteToMain) {
+                  setVisualOverlaySegments((items) => compactVisualOverlayLanes(items));
+                  return;
+                }
+                const promoted = createMainVisualFromOverlay(segment);
+                if (!promoted) return;
+                setVisualOverlaySegments((items) => compactVisualOverlayLanes(items.filter((item) => item.id !== segment.id)));
+                setVisualSegments((items) => {
+                  const next = [...items];
+                  next.splice(Math.max(0, Math.min(next.length, mainInsertIndex)), 0, promoted);
+                  return next;
+                });
+                clearClipSelections("visual");
+                setSelectedVisualSegmentId(promoted.id);
+                setSelectedTrack("image");
+              });
+            };
+            window.addEventListener("pointermove", move, { passive: false });
+            window.addEventListener("pointerup", end, { once: true });
+            window.addEventListener("pointercancel", cancel, { once: true });
           };
-          window.addEventListener("pointermove", move, { passive: false });
-          window.addEventListener("pointerup", end, { once: true });
-          window.addEventListener("pointercancel", cancel, { once: true });
-        };
-        return <div className={`visual-overlay-clip ${segment.type === "video" ? "is-video" : "is-image"} ${active ? "is-current" : ""} ${segment.id === selectedVisualOverlayId ? "is-selected-segment" : ""}`} role="button" tabIndex={0} key={segment.id} data-timeline-segment-track="overlay" data-timeline-segment-id={segment.id} data-range-selected={isRangeSelected("overlay", segment.id) || undefined} style={{ "--overlay-left": `${left}%`, "--overlay-width": `${width}%` }} onPointerDown={(event) => startOverlayEdit(event, "move")} onContextMenu={(event) => showTrackContextMenu(event, "overlay", segment.id)} onClick={(event) => {
-          event.stopPropagation();
-          clearClipSelections("overlay");
-          setSelectedVisualOverlayId?.(segment.id);
-          setSelectedTrack("overlay");
-          ensureMobileTimedClipVisible(segment.id);
-          revealMobileClipActions("overlay");
-        }} onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          clearClipSelections("overlay");
-          setSelectedVisualOverlayId?.(segment.id);
-          setSelectedTrack("overlay");
-          ensureMobileTimedClipVisible(segment.id);
-          revealMobileClipActions("overlay");
-        }}>
-          <TimelineThumbnails
-            segment={segment}
-            visible={isFilmstripInViewport(segment.start, segment.duration)}
-            src={segment.src}
-            type={segment.type}
-            videoFrameCount={getTimelineThumbnailCount({ duration: segment.duration, timelineDuration, contentWidth: rulerViewport.contentWidth, timelineZoom: localTimelineZoom })}
-            imageFrameCount={getImageTimelineThumbnailCount({ duration: segment.duration, timelineDuration, contentWidth: rulerViewport.contentWidth })}
-            overlay
-          />
-          {segment.type === "video" ? <button className="clip-mute-toggle" type="button" aria-label={t(segment.muted ? "unmuteClip" : "muteClip", segment.muted ? "取消静音" : "静音")} title={t(segment.muted ? "unmuteClip" : "muteClip", segment.muted ? "取消静音" : "静音")} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); if (trackLocks.overlay) return void notify("画中画轨已锁定，无法切换静音"); setVisualOverlaySegments((items) => items.map((item) => item.id === segment.id ? { ...item, muted: !item.muted } : item)); }}>{segment.muted ? <SpeakerSlash size={13} /> : <SpeakerHigh size={13} />}</button> : null}
-          {segment.type === "video" && !segment.audioSeparated ? <VideoClipAudio segment={segment} disabled={trackLocks.overlay || !isOverlayLaneVisible(lane)} muted={segment.muted} t={t} onChange={(volume) => setVisualOverlaySegments((items) => items.map((item) => item.id === segment.id ? { ...item, volume } : item))} /> : null}
-          <span className={segment.type === "video" ? "video-clip-name" : undefined}>{segment.name || t("overlayTrack", "Overlay")}</span>
-          {segment.type === "video" ? <span className="image-clip-duration">{formatClock(segment.duration)}</span> : null}
-          <i className="visual-overlay-resize is-start" onPointerDown={(event) => startOverlayEdit(event, "resize-start")} />
-          <i className="visual-overlay-resize is-end" onPointerDown={(event) => startOverlayEdit(event, "resize-end")} />
-        </div>;
-      })}
-      {laneIndex === activeTimelineClipDrag?.overlayLane && activeTimelineClipDrag.overlayDropAllowed && draggingVisualSegment ? (
-        <div
-          className="visual-overlay-drop-preview"
-          style={{
-            "--overlay-left": `${timelineDuration > 0 ? Math.max(0, Math.min(100, (activeTimelineClipDrag.overlayStart / timelineDuration) * 100)) : 0}%`,
-            "--overlay-width": `${timelineDuration > 0 ? Math.max(0.01, Math.min(100, (draggingVisualSegment.duration / timelineDuration) * 100)) : 0}%`,
-          }}
-        >
-          <span>{t("dropAsOverlay", "作为画中画")}</span>
-        </div>
-      ) : null}
-      {!lane.length ? <div className="track-drop-hint">{t("dropAsOverlay", "作为画中画")}</div> : null}
-      {renderAssetDropSlot("overlay", laneIndex)}
-    </div>
-  );
+          return <div className={`visual-overlay-clip ${segment.type === "video" ? "is-video" : "is-image"} ${active ? "is-current" : ""} ${segment.id === selectedVisualOverlayId ? "is-selected-segment" : ""}`} role="button" tabIndex={0} key={segment.id} data-timeline-segment-track="overlay" data-timeline-segment-id={segment.id} data-range-selected={isRangeSelected("overlay", segment.id) || undefined} style={{ "--overlay-left": `${left}%`, "--overlay-width": `${width}%` }} onPointerDown={(event) => startOverlayEdit(event, "move")} onContextMenu={(event) => showTrackContextMenu(event, "overlay", segment.id)} onClick={(event) => {
+            event.stopPropagation();
+            clearClipSelections("overlay");
+            setSelectedVisualOverlayId?.(segment.id);
+            setSelectedTrack("overlay");
+            ensureMobileTimedClipVisible(segment.id);
+            revealMobileClipActions("overlay");
+          }} onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            clearClipSelections("overlay");
+            setSelectedVisualOverlayId?.(segment.id);
+            setSelectedTrack("overlay");
+            ensureMobileTimedClipVisible(segment.id);
+            revealMobileClipActions("overlay");
+          }}>
+            <TimelineThumbnails
+              segment={segment}
+              visible={isFilmstripInViewport(segment.start, segment.duration)}
+              src={segment.src}
+              type={segment.type}
+              videoFrameCount={getTimelineThumbnailCount({ duration: segment.duration, timelineDuration, contentWidth: rulerViewport.contentWidth, timelineZoom: localTimelineZoom })}
+              imageFrameCount={getImageTimelineThumbnailCount({ duration: segment.duration, timelineDuration, contentWidth: rulerViewport.contentWidth })}
+              overlay
+            />
+            {segment.type === "video" ? <button className="clip-mute-toggle" type="button" aria-label={t(segment.muted ? "unmuteClip" : "muteClip", segment.muted ? "取消静音" : "静音")} title={t(segment.muted ? "unmuteClip" : "muteClip", segment.muted ? "取消静音" : "静音")} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); if (trackLocks.overlay) return void notify("画中画轨已锁定，无法切换静音"); setVisualOverlaySegments((items) => items.map((item) => item.id === segment.id ? { ...item, muted: !item.muted } : item)); }}>{segment.muted ? <SpeakerSlash size={13} /> : <SpeakerHigh size={13} />}</button> : null}
+            {segment.type === "video" && !segment.audioSeparated ? <VideoClipAudio segment={segment} disabled={trackLocks.overlay || !isOverlayLaneVisible(lane)} muted={segment.muted} t={t} onChange={(volume) => setVisualOverlaySegments((items) => items.map((item) => item.id === segment.id ? { ...item, volume } : item))} /> : null}
+            <span className={segment.type === "video" ? "video-clip-name" : undefined}>{segment.name || t("overlayTrack", "Overlay")}</span>
+            {segment.type === "video" ? <span className="image-clip-duration">{formatClock(segment.duration)}</span> : null}
+            <i className="visual-overlay-resize is-start" onPointerDown={(event) => startOverlayEdit(event, "resize-start")} />
+            <i className="visual-overlay-resize is-end" onPointerDown={(event) => startOverlayEdit(event, "resize-end")} />
+          </div>;
+        })}
+        {laneIndex === activeTimelineClipDrag?.overlayLane && activeTimelineClipDrag.overlayDropAllowed && draggingVisualSegment ? (
+          <div
+            className="visual-overlay-drop-preview"
+            style={{
+              "--overlay-left": `${timelineDuration > 0 ? Math.max(0, Math.min(100, (activeTimelineClipDrag.overlayStart / timelineDuration) * 100)) : 0}%`,
+              "--overlay-width": `${timelineDuration > 0 ? Math.max(0.01, Math.min(100, (draggingVisualSegment.duration / timelineDuration) * 100)) : 0}%`,
+            }}
+          >
+            <span>{t("dropAsOverlay", "作为画中画")}</span>
+          </div>
+        ) : null}
+        {!lane.length ? <div className="track-drop-hint">{t("dropAsOverlay", "作为画中画")}</div> : null}
+        {renderAssetDropSlot("overlay", laneIndex)}
+      </div>
+    );
   };
 
   return (
@@ -2825,77 +2824,77 @@ export function Timeline({
         timelineRangeDragClickGuardRef.current = "";
       }}
       onPointerDownCapture={(event) => {
-      if (!(event.target instanceof Element)) return;
-      // A real follow-up pointer gesture is intentional user input, so it
-      // ends the one-shot guard reserved for the synthetic click after drag.
-      if (timelineRangeDragClickGuardRef.current && !timelineRangeDrag) {
-        timelineRangeDragClickGuardRef.current = "";
-      }
-      const isMobileTimeline = window.matchMedia?.("(max-width: 760px)").matches;
-      const fineEditModeActive = ["edit-point", "slip", "slide"].includes(timelineSelectionMode);
-      const desktopPressedSegment = (!isMobileTimeline || fineEditModeActive)
-        ? event.target.closest("[data-timeline-segment-track]")
-        : null;
-      if (
-        desktopPressedSegment?.dataset.timelineSegmentTrack === "image"
-        && fineEditModeActive
-      ) {
-        const index = Number(desktopPressedSegment.dataset.timelineSegmentIndex);
-        if (timelineSelectionMode === "edit-point") selectVisualEditPoint(event, index);
-        else startVisualFineEdit(event, index, timelineSelectionMode);
-        return;
-      }
-      if (desktopPressedSegment && fineEditModeActive) {
-        event.preventDefault();
-        event.stopPropagation();
-        notify(t("fineEditMainTrackOnly", "精剪工具仅作用于主画面轨"));
-        return;
-      }
-      if (
-        desktopPressedSegment
-        && timelineSelectionMode === "select"
-        && startTimelineRangeDrag(
-          event,
-          desktopPressedSegment.dataset.timelineSegmentTrack,
-          desktopPressedSegment.dataset.timelineSegmentId,
-          { toggleOnClick: event.shiftKey },
-        )
-      ) return;
-      if (desktopPressedSegment && timelineSelectionMode === "select" && event.shiftKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleTimelineClipInSelection(
-          desktopPressedSegment.dataset.timelineSegmentTrack,
-          desktopPressedSegment.dataset.timelineSegmentId,
-        );
-        return;
-      }
-      if (desktopPressedSegment && ["left", "right"].includes(timelineSelectionMode)) {
-        event.preventDefault();
-        event.stopPropagation();
-        selectTimelineRangeFromClip(
-          desktopPressedSegment.dataset.timelineSegmentTrack,
-          desktopPressedSegment.dataset.timelineSegmentId,
-        );
-        return;
-      }
-      if (desktopPressedSegment && timelineRangeSelection.size) setTimelineRangeSelection(new Set());
-      if (!isMobileTimeline) return;
-      const pressedSegment = event.target.closest("[data-timeline-segment-track]");
-      if (pressedSegment?.dataset.timelineSegmentTrack) {
-        setMobileClipActionTrack(pressedSegment.dataset.timelineSegmentTrack);
-        setMobileClipActionsVisible(true);
-      } else if (event.target.closest(".track-scroll, .track-labels, .timeline-ruler-viewport")) {
-        setMobileClipActionsVisible(false);
-        setMobileClipActionTrack("");
-        if (
-          event.target.closest(".track-scroll, .timeline-ruler-viewport")
-          && !event.target.closest("[data-timeline-segment-track], button, [role='slider']")
-        ) {
-          clearTimelineClipFocus();
+        if (!(event.target instanceof Element)) return;
+        // A real follow-up pointer gesture is intentional user input, so it
+        // ends the one-shot guard reserved for the synthetic click after drag.
+        if (timelineRangeDragClickGuardRef.current && !timelineRangeDrag) {
+          timelineRangeDragClickGuardRef.current = "";
         }
-      }
-    }}>
+        const isMobileTimeline = window.matchMedia?.("(max-width: 760px)").matches;
+        const fineEditModeActive = ["edit-point", "slip", "slide"].includes(timelineSelectionMode);
+        const desktopPressedSegment = (!isMobileTimeline || fineEditModeActive)
+          ? event.target.closest("[data-timeline-segment-track]")
+          : null;
+        if (
+          desktopPressedSegment?.dataset.timelineSegmentTrack === "image"
+          && fineEditModeActive
+        ) {
+          const index = Number(desktopPressedSegment.dataset.timelineSegmentIndex);
+          if (timelineSelectionMode === "edit-point") selectVisualEditPoint(event, index);
+          else startVisualFineEdit(event, index, timelineSelectionMode);
+          return;
+        }
+        if (desktopPressedSegment && fineEditModeActive) {
+          event.preventDefault();
+          event.stopPropagation();
+          notify(t("fineEditMainTrackOnly", "精剪工具仅作用于主画面轨"));
+          return;
+        }
+        if (
+          desktopPressedSegment
+          && timelineSelectionMode === "select"
+          && startTimelineRangeDrag(
+            event,
+            desktopPressedSegment.dataset.timelineSegmentTrack,
+            desktopPressedSegment.dataset.timelineSegmentId,
+            { toggleOnClick: event.shiftKey },
+          )
+        ) return;
+        if (desktopPressedSegment && timelineSelectionMode === "select" && event.shiftKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleTimelineClipInSelection(
+            desktopPressedSegment.dataset.timelineSegmentTrack,
+            desktopPressedSegment.dataset.timelineSegmentId,
+          );
+          return;
+        }
+        if (desktopPressedSegment && ["left", "right"].includes(timelineSelectionMode)) {
+          event.preventDefault();
+          event.stopPropagation();
+          selectTimelineRangeFromClip(
+            desktopPressedSegment.dataset.timelineSegmentTrack,
+            desktopPressedSegment.dataset.timelineSegmentId,
+          );
+          return;
+        }
+        if (desktopPressedSegment && timelineRangeSelection.size) setTimelineRangeSelection(new Set());
+        if (!isMobileTimeline) return;
+        const pressedSegment = event.target.closest("[data-timeline-segment-track]");
+        if (pressedSegment?.dataset.timelineSegmentTrack) {
+          setMobileClipActionTrack(pressedSegment.dataset.timelineSegmentTrack);
+          setMobileClipActionsVisible(true);
+        } else if (event.target.closest(".track-scroll, .track-labels, .timeline-ruler-viewport")) {
+          setMobileClipActionsVisible(false);
+          setMobileClipActionTrack("");
+          if (
+            event.target.closest(".track-scroll, .timeline-ruler-viewport")
+            && !event.target.closest("[data-timeline-segment-track], button, [role='slider']")
+          ) {
+            clearTimelineClipFocus();
+          }
+        }
+      }}>
       <div className="timeline-tools">
         <div className="timeline-icon-group">
           <TimelineMarkerToolbar controller={markerController} t={t} currentTime={currentTime} />
@@ -3107,37 +3106,36 @@ export function Timeline({
             const rowLocked = isTimelineRowLocked(track, lockKey);
             return (
               <div
-                className={`${selectedTrack === track && rowVisible ? "is-selected" : ""} ${
-                  !rowVisible ? "is-track-disabled" : ""
-                } ${rowLocked ? "is-track-locked" : ""}`}
+                className={`${selectedTrack === track && rowVisible ? "is-selected" : ""} ${!rowVisible ? "is-track-disabled" : ""
+                  } ${rowLocked ? "is-track-locked" : ""}`}
                 key={rowId}
                 onContextMenu={rowVisible ? (event) => showTrackContextMenu(event, track, "", visibilityKey, lockKey) : undefined}
               >
-              <button
-                type="button"
-                aria-label={`${label} ${t("visible")}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  toggleTimelineRowVisibility(track, visibilityKey);
-                }}
-              >
-                {getTimelineRowVisibility(track, visibilityKey) ? <Eye size={15} /> : <EyeSlash size={15} />}
-              </button>
-              <button
-                type="button"
-                aria-label={`${label} ${t("lock")}`}
-                aria-pressed={rowLocked}
-                disabled={!rowVisible}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  toggleTimelineRowLock(track, lockKey);
-                }}
-              >
-                {rowLocked ? <LockKey size={15} /> : <LockKeyOpen size={15} />}
-              </button>
-              <button className="track-name-button" type="button" disabled={!rowVisible} onClick={() => setSelectedTrack(track)}>
-                {label}
-              </button>
+                <button
+                  type="button"
+                  aria-label={`${label} ${t("visible")}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleTimelineRowVisibility(track, visibilityKey);
+                  }}
+                >
+                  {getTimelineRowVisibility(track, visibilityKey) ? <Eye size={15} /> : <EyeSlash size={15} />}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`${label} ${t("lock")}`}
+                  aria-pressed={rowLocked}
+                  disabled={!rowVisible}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleTimelineRowLock(track, lockKey);
+                  }}
+                >
+                  {rowLocked ? <LockKey size={15} /> : <LockKeyOpen size={15} />}
+                </button>
+                <button className="track-name-button" type="button" disabled={!rowVisible} onClick={() => setSelectedTrack(track)}>
+                  {label}
+                </button>
               </div>
             );
           })}
@@ -3182,13 +3180,10 @@ export function Timeline({
               />
             ) : null}
             <div
-              className={`image-track ${selectedTrack === "image" ? "is-selected" : ""} ${
-                !trackVisibility.image ? "is-track-disabled" : ""
-              } ${trackLocks.image ? "is-track-locked" : ""} ${
-                assetDropTargetTrack === "image" || assetDropTargetTrack === "overlay" || overlayPromotionTarget ? `is-drop-target is-drop-${overlayPromotionTarget ? "image" : assetDropTargetTrack}` : ""
-              } ${assetDropPulseTrack === "image" ? "is-drop-landing" : ""} ${
-                activeTimelineClipDrag?.track === "image" ? "is-reordering" : ""
-              }`}
+              className={`image-track ${selectedTrack === "image" ? "is-selected" : ""} ${!trackVisibility.image ? "is-track-disabled" : ""
+                } ${trackLocks.image ? "is-track-locked" : ""} ${assetDropTargetTrack === "image" || assetDropTargetTrack === "overlay" || overlayPromotionTarget ? `is-drop-target is-drop-${overlayPromotionTarget ? "image" : assetDropTargetTrack}` : ""
+                } ${assetDropPulseTrack === "image" ? "is-drop-landing" : ""} ${activeTimelineClipDrag?.track === "image" ? "is-reordering" : ""
+                }`}
               aria-disabled={!trackVisibility.image}
               inert={!trackVisibility.image ? true : undefined}
               onClick={(event) => selectTimelineTrackBackground(event, "image")}
@@ -3221,167 +3216,163 @@ export function Timeline({
               ) : null}
               {imageSrc
                 ? displayedVisualSegments.map((segment, index) => {
-                    const segmentSrc = segment.src || imageSrc;
-                    const segmentType = segment.type || visualType;
-                    const segmentWidth =
-                      timelineDuration > 0
-                        ? Math.max(0.01, Math.min(100, (segment.duration / timelineDuration) * 100))
-                        : 0;
-                    const segmentRange = renderedVisualTimeline[index];
-                    const isCurrentVisualSegment =
-                      segment.id === currentVisualSegment?.id ||
-                      (currentTime >= (segmentRange?.start ?? 0) && currentTime < (segmentRange?.end ?? 0));
-                    const isSelectedVisualSegment = segment.id === selectedVisualSegmentId;
-                    const isDraggingVisualSegment =
-                      activeTimelineClipDrag?.track === "image" &&
-                      activeTimelineClipDrag.segmentId === segment.id;
-                    const isReorderTarget =
-                      activeTimelineClipDrag?.track === "image" &&
-                      activeTimelineClipDrag.overIndex === index &&
-                      !isDraggingVisualSegment;
-                    const isOverlayPromotionInsertTarget = Boolean(
-                      overlayPromotionTarget && overlayPromotionTarget.insertIndex === index,
-                    );
-                    const isAssetInsertTarget = mainAssetInsertIndex === index;
-                    const promotionOverlay = isOverlayPromotionInsertTarget
-                      ? visualOverlaySegments.find((item) => item.id === overlayPromotionTarget.segmentId)
-                      : null;
-                    const promotionGapWidth = timelineDuration > 0
-                      ? Math.max(0.01, Math.min(100, ((promotionOverlay?.duration || 0.5) / timelineDuration) * 100))
+                  const segmentSrc = segment.src || imageSrc;
+                  const segmentType = segment.type || visualType;
+                  const segmentWidth =
+                    timelineDuration > 0
+                      ? Math.max(0.01, Math.min(100, (segment.duration / timelineDuration) * 100))
                       : 0;
-                    return (
-                      <div
-                        key={segment.id}
-                        role="button"
-                        tabIndex={0}
-                        data-timeline-segment-track="image"
-                        data-timeline-segment-index={index}
-                        data-timeline-segment-id={segment.id}
-                        data-range-selected={isRangeSelected("image", segment.id) || undefined}
-                        data-placeholder={t("dropSlot", "放置位置")}
-                        style={{
-                          "--image-clip-width": `${segmentWidth}%`,
-                          "--promotion-gap-width": `${promotionGapWidth}%`,
-                          "--asset-insert-gap-width": `${mainAssetInsertWidth}%`,
-                        }}
-                        className={`image-clip ${segmentType === "video" ? "is-video" : ""} ${
-                          isCurrentVisualSegment ? "is-current" : ""
-                        } ${isSelectedVisualSegment ? "is-selected-segment" : ""} ${
-                          isDraggingVisualSegment ? "is-reorder-dragging" : ""
-                        } ${isReorderTarget ? "is-reorder-target" : ""} ${
-                          isOverlayPromotionInsertTarget ? "is-overlay-promotion-insert-target" : ""
+                  const segmentRange = renderedVisualTimeline[index];
+                  const isCurrentVisualSegment =
+                    segment.id === currentVisualSegment?.id ||
+                    (currentTime >= (segmentRange?.start ?? 0) && currentTime < (segmentRange?.end ?? 0));
+                  const isSelectedVisualSegment = segment.id === selectedVisualSegmentId;
+                  const isDraggingVisualSegment =
+                    activeTimelineClipDrag?.track === "image" &&
+                    activeTimelineClipDrag.segmentId === segment.id;
+                  const isReorderTarget =
+                    activeTimelineClipDrag?.track === "image" &&
+                    activeTimelineClipDrag.overIndex === index &&
+                    !isDraggingVisualSegment;
+                  const isOverlayPromotionInsertTarget = Boolean(
+                    overlayPromotionTarget && overlayPromotionTarget.insertIndex === index,
+                  );
+                  const isAssetInsertTarget = mainAssetInsertIndex === index;
+                  const promotionOverlay = isOverlayPromotionInsertTarget
+                    ? visualOverlaySegments.find((item) => item.id === overlayPromotionTarget.segmentId)
+                    : null;
+                  const promotionGapWidth = timelineDuration > 0
+                    ? Math.max(0.01, Math.min(100, ((promotionOverlay?.duration || 0.5) / timelineDuration) * 100))
+                    : 0;
+                  return (
+                    <div
+                      key={segment.id}
+                      role="button"
+                      tabIndex={0}
+                      data-timeline-segment-track="image"
+                      data-timeline-segment-index={index}
+                      data-timeline-segment-id={segment.id}
+                      data-range-selected={isRangeSelected("image", segment.id) || undefined}
+                      data-placeholder={t("dropSlot", "放置位置")}
+                      style={{
+                        "--image-clip-width": `${segmentWidth}%`,
+                        "--promotion-gap-width": `${promotionGapWidth}%`,
+                        "--asset-insert-gap-width": `${mainAssetInsertWidth}%`,
+                      }}
+                      className={`image-clip ${segmentType === "video" ? "is-video" : ""} ${isCurrentVisualSegment ? "is-current" : ""
+                        } ${isSelectedVisualSegment ? "is-selected-segment" : ""} ${isDraggingVisualSegment ? "is-reorder-dragging" : ""
+                        } ${isReorderTarget ? "is-reorder-target" : ""} ${isOverlayPromotionInsertTarget ? "is-overlay-promotion-insert-target" : ""
                         } ${isAssetInsertTarget ? "is-asset-insert-target" : ""
-                        } ${segment.preparing ? "is-preparing" : ""} ${
-                          activeFineEdit?.index === index ? `is-fine-editing is-fine-editing-${activeFineEdit.mode}` : ""
+                        } ${segment.preparing ? "is-preparing" : ""} ${activeFineEdit?.index === index ? `is-fine-editing is-fine-editing-${activeFineEdit.mode}` : ""
                         } ${selectedEditPointIndex === index ? "has-selected-edit-point" : ""}`}
-                        onPointerDown={(event) => {
-                          if (!segment.preparing) startTimelineClipDrag(event, "image", segment.id, index);
-                        }}
-                        onContextMenu={(event) => showTrackContextMenu(event, "image", segment.id)}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (suppressTimelineClipClickRef.current === segment.id) {
-                            return;
-                          }
+                      onPointerDown={(event) => {
+                        if (!segment.preparing) startTimelineClipDrag(event, "image", segment.id, index);
+                      }}
+                      onContextMenu={(event) => showTrackContextMenu(event, "image", segment.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (suppressTimelineClipClickRef.current === segment.id) {
+                          return;
+                        }
+                        setSelectedTrack("image");
+                        clearClipSelections("visual");
+                        setSelectedVisualSegmentId(segment.id);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
                           setSelectedTrack("image");
                           clearClipSelections("visual");
                           setSelectedVisualSegmentId(segment.id);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            setSelectedTrack("image");
-                            clearClipSelections("visual");
-                            setSelectedVisualSegmentId(segment.id);
-                          }
-                        }}
-                      >
-                        {segment.preparing ? (
-                          <div className="timeline-media-preparing" aria-live="polite">
-                            <i className="timeline-media-spinner" />
-                            <strong>{segment.prepareStage === "download"
-                              ? t("remoteAssetDownloading", "正在下载在线素材…")
-                              : t("timelineMediaPreparing", "正在准备素材")}</strong>
-                            <em>{Math.round((segment.prepareProgress || 0) * 100)}%</em>
-                          </div>
-                        ) : segmentType === "video" ? (
+                        }
+                      }}
+                    >
+                      {segment.preparing ? (
+                        <div className="timeline-media-preparing" aria-live="polite">
+                          <i className="timeline-media-spinner" />
+                          <strong>{segment.prepareStage === "download"
+                            ? t("remoteAssetDownloading", "正在下载在线素材…")
+                            : t("timelineMediaPreparing", "正在准备素材")}</strong>
+                          <em>{Math.round((segment.prepareProgress || 0) * 100)}%</em>
+                        </div>
+                      ) : segmentType === "video" ? (
+                        <button
+                          className="clip-mute-toggle"
+                          type="button"
+                          aria-label={t(segment.sourceAudioDisabled ? "unmuteClip" : "muteClip", segment.sourceAudioDisabled ? "取消静音" : "静音")}
+                          title={t(segment.sourceAudioDisabled ? "unmuteClip" : "muteClip", segment.sourceAudioDisabled ? "取消静音" : "静音")}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (trackLocks.image) return void notify("图片轨已锁定，无法切换静音");
+                            setVisualSegments((items) => items.map((item) => item.id === segment.id ? { ...item, sourceAudioDisabled: !item.sourceAudioDisabled } : item));
+                          }}
+                        >
+                          {segment.sourceAudioDisabled ? <SpeakerSlash size={13} /> : <SpeakerHigh size={13} />}
+                        </button>
+                      ) : null}
+                      {!segment.preparing ? (
+                        <TimelineThumbnails
+                          segment={segment}
+                          visible={isFilmstripInViewport(segmentRange?.start || 0, segment.duration)}
+                          src={segmentSrc}
+                          type={segmentType}
+                          videoFrameCount={getTimelineThumbnailCount({
+                            duration: segment.duration,
+                            timelineDuration,
+                            contentWidth: rulerViewport.contentWidth,
+                            timelineZoom: localTimelineZoom,
+                          })}
+                          imageFrameCount={getImageTimelineThumbnailCount({
+                            duration: segment.duration || IMAGE_SEGMENT_SECONDS,
+                            timelineDuration,
+                            contentWidth: rulerViewport.contentWidth,
+                          })}
+                          imageCellWidth={IMAGE_THUMBNAIL_TARGET_WIDTH}
+                          currentTime={segmentType === "video" && isCurrentVisualSegment && segmentRange ? currentTime : null}
+                          segmentStart={segmentRange?.start || 0}
+                          previewVideoMediaTime={segmentType === "video" && isCurrentVisualSegment ? previewVideoMediaTime : 0}
+                          timelineSeekActive={isCurrentVisualSegment && timelineSeekActive}
+                        />
+                      ) : null}
+                      {!segment.preparing && segmentType === "video" ? <>
+                        <span className="video-clip-name">{segment.name}</span>
+                        {!Number.isFinite(segment.sourceAudioOffset) && !segment.audioSeparated ? <VideoClipAudio segment={segment} disabled={trackLocks.image || !trackVisibility.image} muted={segment.sourceAudioDisabled} t={t} onChange={(volume) => setVisualSegments((items) => items.map((item) => item.id === segment.id ? { ...item, volume } : item))} /> : null}
+                      </> : null}
+                      {!segment.preparing && segment.speedCurve?.enabled ? (
+                        <span className="image-clip-speed-markers" aria-label={t("visualSpeedCurveTitle", "速度曲线")}>
+                          {normalizeVisualSpeedCurve(segment.speedCurve).points.slice(1, -1).map((point) => (
+                            <i key={point.id} style={{ left: `${point.progress * 100}%` }} />
+                          ))}
+                        </span>
+                      ) : null}
+                      {!segment.preparing ? <span className="image-clip-duration">{formatClock(segment.duration)}</span> : null}
+                      {!segment.preparing && activeFineEdit?.index === index ? (
+                        <span className="fine-edit-readout">
+                          {t(activeFineEdit.mode === "slip" ? "timelineSlip" : "timelineSlide", activeFineEdit.mode === "slip" ? "滑移" : "滑动")}
+                          {activeFineEdit.delta >= 0 ? "+" : ""}{activeFineEdit.delta.toFixed(2)}s
+                        </span>
+                      ) : null}
+                      {!segment.preparing && !activeTimelineClipDrag ? <>
+                        {index > 0 ? (
                           <button
-                            className="clip-mute-toggle"
+                            className="image-resize-handle is-start"
                             type="button"
-                            aria-label={t(segment.sourceAudioDisabled ? "unmuteClip" : "muteClip", segment.sourceAudioDisabled ? "取消静音" : "静音")}
-                            title={t(segment.sourceAudioDisabled ? "unmuteClip" : "muteClip", segment.sourceAudioDisabled ? "取消静音" : "静音")}
-                            onPointerDown={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (trackLocks.image) return void notify("图片轨已锁定，无法切换静音");
-                              setVisualSegments((items) => items.map((item) => item.id === segment.id ? { ...item, sourceAudioDisabled: !item.sourceAudioDisabled } : item));
-                            }}
-                          >
-                            {segment.sourceAudioDisabled ? <SpeakerSlash size={13} /> : <SpeakerHigh size={13} />}
-                          </button>
-                        ) : null}
-                        {!segment.preparing ? (
-                          <TimelineThumbnails
-                            segment={segment}
-                            visible={isFilmstripInViewport(segmentRange?.start || 0, segment.duration)}
-                            src={segmentSrc}
-                            type={segmentType}
-                            videoFrameCount={getTimelineThumbnailCount({
-                              duration: segment.duration,
-                              timelineDuration,
-                              contentWidth: rulerViewport.contentWidth,
-                              timelineZoom: localTimelineZoom,
-                            })}
-                            imageFrameCount={getImageTimelineThumbnailCount({
-                              duration: segment.duration || IMAGE_SEGMENT_SECONDS,
-                              timelineDuration,
-                              contentWidth: rulerViewport.contentWidth,
-                            })}
-                            imageCellWidth={IMAGE_THUMBNAIL_TARGET_WIDTH}
-                            currentTime={segmentType === "video" && isCurrentVisualSegment && segmentRange ? currentTime : null}
-                            segmentStart={segmentRange?.start || 0}
-                            previewVideoMediaTime={segmentType === "video" && isCurrentVisualSegment ? previewVideoMediaTime : 0}
-                            timelineSeekActive={isCurrentVisualSegment && timelineSeekActive}
+                            aria-label={t("dragImageStart", "调整画面片段起点")}
+                            aria-pressed={selectedEditPointIndex === index}
+                            onPointerDown={(event) => startImageResize(event, segment.id, index, "start")}
                           />
                         ) : null}
-                        {!segment.preparing && segmentType === "video" ? <>
-                          <span className="video-clip-name">{segment.name}</span>
-                          {!Number.isFinite(segment.sourceAudioOffset) && !segment.audioSeparated ? <VideoClipAudio segment={segment} disabled={trackLocks.image || !trackVisibility.image} muted={segment.sourceAudioDisabled} t={t} onChange={(volume) => setVisualSegments((items) => items.map((item) => item.id === segment.id ? { ...item, volume } : item))} /> : null}
-                        </> : null}
-                        {!segment.preparing && segment.speedCurve?.enabled ? (
-                          <span className="image-clip-speed-markers" aria-label={t("visualSpeedCurveTitle", "速度曲线")}>
-                            {normalizeVisualSpeedCurve(segment.speedCurve).points.slice(1, -1).map((point) => (
-                              <i key={point.id} style={{ left: `${point.progress * 100}%` }} />
-                            ))}
-                          </span>
-                        ) : null}
-                        {!segment.preparing ? <span className="image-clip-duration">{formatClock(segment.duration)}</span> : null}
-                        {!segment.preparing && activeFineEdit?.index === index ? (
-                          <span className="fine-edit-readout">
-                            {t(activeFineEdit.mode === "slip" ? "timelineSlip" : "timelineSlide", activeFineEdit.mode === "slip" ? "滑移" : "滑动")}
-                            {activeFineEdit.delta >= 0 ? "+" : ""}{activeFineEdit.delta.toFixed(2)}s
-                          </span>
-                        ) : null}
-                        {!segment.preparing && !activeTimelineClipDrag ? <>
-                          {index > 0 ? (
-                            <button
-                              className="image-resize-handle is-start"
-                              type="button"
-                              aria-label={t("dragImageStart", "调整画面片段起点")}
-                              aria-pressed={selectedEditPointIndex === index}
-                              onPointerDown={(event) => startImageResize(event, segment.id, index, "start")}
-                            />
-                          ) : null}
-                          <button
-                            className="image-resize-handle is-end"
-                            type="button"
-                            aria-label={t("dragImageDuration")}
-                            onPointerDown={(event) => startImageResize(event, segment.id, index, "end")}
-                          />
-                        </> : null}
-                      </div>
-                    );
-                  })
+                        <button
+                          className="image-resize-handle is-end"
+                          type="button"
+                          aria-label={t("dragImageDuration")}
+                          onPointerDown={(event) => startImageResize(event, segment.id, index, "end")}
+                        />
+                      </> : null}
+                    </div>
+                  );
+                })
                 : null}
               {mainAssetInsertIndex >= 0 ? (
                 <div
@@ -3442,11 +3433,9 @@ export function Timeline({
             {showStickerTrack ? stickerLanes.map((lane, laneIndex) => renderStickerTrack(lane, laneIndex)) : null}
             {captionLanes.map((lane, laneIndex) => (
               <div
-                className={`caption-track ${selectedTrack === "caption" ? "is-selected" : ""} ${
-                  !isRowVisible(`caption-${laneIndex}`) ? "is-track-disabled" : ""
-                } ${trackLocks.caption ? "is-track-locked" : ""} ${
-                  activeTimelineClipDrag?.track === "caption" ? "is-reordering" : ""
-                }`}
+                className={`caption-track ${selectedTrack === "caption" ? "is-selected" : ""} ${!isRowVisible(`caption-${laneIndex}`) ? "is-track-disabled" : ""
+                  } ${trackLocks.caption ? "is-track-locked" : ""} ${activeTimelineClipDrag?.track === "caption" ? "is-reordering" : ""
+                  }`}
                 key={`caption-lane-${laneIndex}`}
                 aria-disabled={!isRowVisible(`caption-${laneIndex}`)}
                 inert={!isRowVisible(`caption-${laneIndex}`) ? true : undefined}
@@ -3475,11 +3464,9 @@ export function Timeline({
               </div>
             ))}
             {showSourceTrack ? <button
-              className={`audio-track source-track ${selectedTrack === "source" ? "is-selected" : ""} ${
-                !trackVisibility.source ? "is-track-disabled" : ""
-              } ${trackLocks.source ? "is-track-locked" : ""} ${
-                assetDropTargetTrack === "source" ? "is-drop-target" : ""
-              } ${assetDropPulseTrack === "source" ? "is-drop-landing" : ""}`}
+              className={`audio-track source-track ${selectedTrack === "source" ? "is-selected" : ""} ${!trackVisibility.source ? "is-track-disabled" : ""
+                } ${trackLocks.source ? "is-track-locked" : ""} ${assetDropTargetTrack === "source" ? "is-drop-target" : ""
+                } ${assetDropPulseTrack === "source" ? "is-drop-landing" : ""}`}
               type="button"
               disabled={!trackVisibility.source}
               onClick={(event) => selectTimelineTrackBackground(event, "source")}
@@ -3489,9 +3476,9 @@ export function Timeline({
               data-asset-drop-track="source"
               onContextMenu={(event) => showTrackContextMenu(event, "source")}
             >
-                {assetDropTargetTrack === "source" ? (
-                  <div className="track-drop-hint">{t("dropSourceHere")}</div>
-                ) : null}
+              {assetDropTargetTrack === "source" ? (
+                <div className="track-drop-hint">{t("dropSourceHere")}</div>
+              ) : null}
               {renderAssetDropSlot("source")}
               {sourceAudioExtractionPendingId && !sourceAudioBlob ? (
                 <div className="source-audio-extraction-state" role="status" aria-live="polite">
@@ -3561,59 +3548,55 @@ export function Timeline({
               const rowVisible = isRowVisible(rowKey);
               const rowLocked = isTimelineRowLocked("audio", rowKey);
               return (
-              <button
-                className={`audio-track ${selectedTrack === "audio" ? "is-selected" : ""} ${
-                  !rowVisible ? "is-track-disabled" : ""
-                } ${rowLocked ? "is-track-locked" : ""} ${
-                  laneIndex === 0 && assetDropTargetTrack === "audio" ? "is-drop-target" : ""
-                } ${sourceAudioDragTargetLane === laneIndex ? "is-source-audio-drop-target" : ""
-                } ${laneIndex === 0 && assetDropPulseTrack === "audio" ? "is-drop-landing" : ""}`}
-                type="button"
-                disabled={!rowVisible}
-                key={`audio-lane-${laneIndex}`}
-                onClick={(event) => selectTimelineTrackBackground(event, "audio")}
-                onDragOver={(event) => laneIndex === 0 && handleTrackAssetDragOver(event, "audio")}
-                onDragLeave={(event) => laneIndex === 0 && handleTrackAssetDragLeave(event, "audio")}
-                onDrop={(event) => laneIndex === 0 && handleTrackAssetDrop(event, "audio")}
-                data-asset-drop-track={laneIndex === 0 ? "audio" : undefined}
-                data-audio-lane-index={laneIndex}
-                onContextMenu={(event) => showTrackContextMenu(event, "audio", "", rowKey, rowKey)}
-              >
-                {laneIndex === 0 && assetDropTargetTrack === "audio" ? (
+                <button
+                  className={`audio-track ${selectedTrack === "audio" ? "is-selected" : ""} ${!rowVisible ? "is-track-disabled" : ""
+                    } ${rowLocked ? "is-track-locked" : ""} ${laneIndex === 0 && assetDropTargetTrack === "audio" ? "is-drop-target" : ""
+                    } ${sourceAudioDragTargetLane === laneIndex ? "is-source-audio-drop-target" : ""
+                    } ${laneIndex === 0 && assetDropPulseTrack === "audio" ? "is-drop-landing" : ""}`}
+                  type="button"
+                  disabled={!rowVisible}
+                  key={`audio-lane-${laneIndex}`}
+                  onClick={(event) => selectTimelineTrackBackground(event, "audio")}
+                  onDragOver={(event) => laneIndex === 0 && handleTrackAssetDragOver(event, "audio")}
+                  onDragLeave={(event) => laneIndex === 0 && handleTrackAssetDragLeave(event, "audio")}
+                  onDrop={(event) => laneIndex === 0 && handleTrackAssetDrop(event, "audio")}
+                  data-asset-drop-track={laneIndex === 0 ? "audio" : undefined}
+                  data-audio-lane-index={laneIndex}
+                  onContextMenu={(event) => showTrackContextMenu(event, "audio", "", rowKey, rowKey)}
+                >
+                  {laneIndex === 0 && assetDropTargetTrack === "audio" ? (
                     <div className="track-drop-hint">{t("dropVoiceHere")}</div>
                   ) : null}
-                {sourceAudioDragTargetLane === laneIndex ? (
-                  <div className="source-audio-lane-drop-hint">
-                    {t(laneIndex >= (audioSegments.length ? packedAudioLanes.length : 0) ? "sourceAudioCreateTrackDrop" : "sourceAudioTrackDrop")}
-                  </div>
-                ) : null}
-                {laneIndex === 0 ? renderAssetDropSlot("audio") : null}
-                {lane.map((segment) => (
-                  <TimelineAudioClip
-                    key={segment.id}
-                    segment={segment}
-                    laneIndex={laneIndex}
-                    t={t}
-                    gainDisabled={rowLocked || !rowVisible}
-                    timelineDuration={timelineDuration}
-                    selected={selectedAudioSegmentId === segment.id}
-                    rangeSelected={isRangeSelected("audio", segment.id)}
-                    waveformVisible={rulerViewport.viewportWidth <= 0 || (
-                      segment.start + segment.duration >= rulerVisibleStart - 240 * secondsPerPixel
-                      && segment.start <= rulerVisibleEnd + 240 * secondsPerPixel
-                    )}
-                    handlersRef={timelineClipHandlersRef}
-                  />
-                ))}
-              </button>
+                  {sourceAudioDragTargetLane === laneIndex ? (
+                    <div className="source-audio-lane-drop-hint">
+                      {t(laneIndex >= (audioSegments.length ? packedAudioLanes.length : 0) ? "sourceAudioCreateTrackDrop" : "sourceAudioTrackDrop")}
+                    </div>
+                  ) : null}
+                  {laneIndex === 0 ? renderAssetDropSlot("audio") : null}
+                  {lane.map((segment) => (
+                    <TimelineAudioClip
+                      key={segment.id}
+                      segment={segment}
+                      laneIndex={laneIndex}
+                      t={t}
+                      gainDisabled={rowLocked || !rowVisible}
+                      timelineDuration={timelineDuration}
+                      selected={selectedAudioSegmentId === segment.id}
+                      rangeSelected={isRangeSelected("audio", segment.id)}
+                      waveformVisible={rulerViewport.viewportWidth <= 0 || (
+                        segment.start + segment.duration >= rulerVisibleStart - 240 * secondsPerPixel
+                        && segment.start <= rulerVisibleEnd + 240 * secondsPerPixel
+                      )}
+                      handlersRef={timelineClipHandlersRef}
+                    />
+                  ))}
+                </button>
               );
             })}
             {showMusicTrack ? <button
-              className={`audio-track music-track ${selectedTrack === "music" ? "is-selected" : ""} ${
-                !trackVisibility.music ? "is-track-disabled" : ""
-              } ${trackLocks.music ? "is-track-locked" : ""} ${
-                assetDropTargetTrack === "music" ? "is-drop-target" : ""
-              } ${assetDropPulseTrack === "music" ? "is-drop-landing" : ""}`}
+              className={`audio-track music-track ${selectedTrack === "music" ? "is-selected" : ""} ${!trackVisibility.music ? "is-track-disabled" : ""
+                } ${trackLocks.music ? "is-track-locked" : ""} ${assetDropTargetTrack === "music" ? "is-drop-target" : ""
+                } ${assetDropPulseTrack === "music" ? "is-drop-landing" : ""}`}
               type="button"
               disabled={!trackVisibility.music}
               onClick={(event) => selectTimelineTrackBackground(event, "music")}
@@ -3623,9 +3606,9 @@ export function Timeline({
               data-asset-drop-track="music"
               onContextMenu={(event) => showTrackContextMenu(event, "music")}
             >
-                {assetDropTargetTrack === "music" ? (
-                  <div className="track-drop-hint">{t("dropMusicHere")}</div>
-                ) : null}
+              {assetDropTargetTrack === "music" ? (
+                <div className="track-drop-hint">{t("dropMusicHere")}</div>
+              ) : null}
               {renderAssetDropSlot("music")}
               {musicBlob ? (musicSegments.length ? musicSegments : [{ id: "music-audio", start: musicStartPercent / 100 * timelineDuration, duration: musicDuration, peaks: musicPeaks }]).map((segment) => (
                 <div className={`audio-clip is-music ${selectedMusicSegmentId === segment.id ? "is-selected" : ""}`} key={segment.id} data-timeline-segment-track="music" data-timeline-segment-id={segment.id} data-range-selected={isRangeSelected("music", segment.id) || undefined} style={{ width: `${timelineDuration > 0 ? segment.duration / timelineDuration * 100 : 0}%`, left: `${timelineDuration > 0 ? segment.start / timelineDuration * 100 : 0}%` }} onPointerDown={(event) => startMusicMove(event, segment.id)} onContextMenu={(event) => showTrackContextMenu(event, "music", segment.id)} onClick={(event) => { event.stopPropagation(); if (suppressTimelineClipClickRef.current === "music") return void (suppressTimelineClipClickRef.current = ""); setSelectedTrack("music"); activateAudioToolForClipSelection(); clearClipSelections("music"); setSelectedMusicSegmentId?.(segment.id); ensureMobileTimedClipVisible(segment.id); revealMobileClipActions("music"); }}>
@@ -3691,33 +3674,33 @@ export function Timeline({
         <nav className={`timeline-mobile-clip-actions ${mobileClipActionIds.length > 5 ? "is-scroll-actions" : ""}`} aria-label={t("clipActions")}>
           <button className="is-back" type="button" onClick={() => { closeMobileClipActions(); clearClipSelections(); }}><ArrowLeft size={21} /><span>{t("mobileClipDismiss")}</span></button>
           <div className="timeline-mobile-clip-action-scroller">
-          {mobileClipActionIds.filter((actionId) => actionId !== "dismiss").map((actionId) => {
-            if (actionId === "visual-transform") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("transform")}><SlidersHorizontal size={20} /><span>{t("visualTabTransform")}</span></button>;
-            if (actionId === "visual-mask") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("mask")}><Crop size={20} /><span>{t("visualTabMask")}</span></button>;
-            if (actionId === "visual-filter") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("filters")}><Sparkle size={20} /><span>{t("visualTabEffects")}</span></button>;
-            if (actionId === "visual-effects") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("effects")}><Sparkle size={20} weight="fill" /><span>{t("effects")}</span></button>;
-            if (actionId === "visual-animation") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("animation")}><MonitorPlay size={20} /><span>{t("visualTabAnimation")}</span></button>;
-            if (actionId === "visual-speed") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("speed")}><ArrowsOutLineHorizontal size={20} /><span>{t("visualTabSpeed")}</span></button>;
-            if (actionId === "visual-repair") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("repair")}><Sparkle size={20} /><span>{t("repairTab")}</span></button>;
-            if (actionId === "visual-vector") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("vector")}><Sparkle size={20} /><span>{t("vectorProperties", "矢量")}</span></button>;
-            if (actionId === "overlay-timing") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("timing")}><PictureInPicture size={20} /><span>{t("overlayTiming", "层级")}</span></button>;
-            if (actionId === "caption-properties") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("caption")}><ClosedCaptioning size={20} /><span>{t("caption")}</span></button>;
-            if (actionId === "caption-font") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("font")}><TextT size={20} /><span>{t("captionFont")}</span></button>;
-            if (actionId === "caption-voice") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("voice")}><Waveform size={20} /><span>{t("aiVoice")}</span></button>;
-            if (actionId === "sticker-properties") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("sticker")}><SlidersHorizontal size={20} /><span>{t("properties")}</span></button>;
-            if (actionId === "audio-properties") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("audio")}><Waveform size={20} /><span>{t("mobileClipAudio")}</span></button>;
-            if (actionId === "audio-fade") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("fade")}><ArrowsInLineHorizontal size={20} /><span>{t("mobileClipFade")}</span></button>;
-            if (actionId === "audio-spatial") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("spatial")}><Waveform size={20} /><span>{t("audioSpaceTab")}</span></button>;
-            if (actionId === "audio-voice-color") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("voice-color")}><Sparkle size={20} weight="fill" /><span>{t("voiceColorTab", "音色")}</span></button>;
-            if (actionId === "split") return <button type="button" key={actionId} onClick={() => runMobileClipAction(handleCutTrack)}><Scissors size={20} /><span>{t("mobileClipSplit")}</span></button>;
-            if (actionId === "copy") return <button type="button" key={actionId} onClick={() => runMobileClipAction(handleDuplicateTrack)}><CopySimple size={20} /><span>{t("mobileClipCopy")}</span></button>;
-            if (actionId === "captions") return <button type="button" key={actionId} disabled={audioProcessingBusy || !selectedMobileAudioSegment} onClick={generateSelectedMobileAudioCaptions}><ClosedCaptioning size={20} /><span>{t("mobileClipCaptions")}</span></button>;
-            if (actionId === "caption-link") return <button type="button" key={actionId} onClick={toggleSelectedMobileCaptionAudioLink}>{selectedMobileHasLinkedCaption ? <LinkBreak size={20} /> : <LinkSimple size={20} />}<span>{t(selectedMobileHasLinkedCaption ? "captionUnlinkAudio" : "captionLinkAudio")}</span></button>;
-            if (actionId === "caption-align") return <button type="button" key={actionId} onClick={alignSelectedMobileCaptionAudio}><ArrowsInLineHorizontal size={20} /><span>{t("captionAlignToAudio")}</span></button>;
-            if (actionId === "separate") return <button type="button" key={actionId} disabled={audioProcessingBusy || !selectedMobileAudioSegment} onClick={separateSelectedMobileAudio}><Waveform size={20} /><span>{t("mobileClipSeparate")}</span></button>;
-            if (actionId === "extract-source-audio") return <button type="button" key={actionId} disabled={Boolean(sourceAudioExtractionPendingId) || !selectedMobileExtractableVideo} onClick={() => void runSourceAudioExtraction(selectedMobileExtractableVideo, selectedMobileClipTrack)}>{sourceAudioExtractionPendingId === selectedMobileExtractableVideo?.id ? <CircleNotch className="spin" size={20} /> : <Waveform size={20} />}<span>{t(sourceAudioExtractionPendingId === selectedMobileExtractableVideo?.id ? "separatingSourceAudio" : "separateSourceAudio", sourceAudioExtractionPendingId === selectedMobileExtractableVideo?.id ? "正在分离音频…" : "分离音频")}</span></button>;
-            return <button className="is-danger" type="button" key={actionId} onClick={() => runMobileClipAction(handleDeleteTrack)}><Trash size={20} /><span>{t("mobileClipDelete")}</span></button>;
-          })}
+            {mobileClipActionIds.filter((actionId) => actionId !== "dismiss").map((actionId) => {
+              if (actionId === "visual-transform") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("transform")}><SlidersHorizontal size={20} /><span>{t("visualTabTransform")}</span></button>;
+              if (actionId === "visual-mask") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("mask")}><Crop size={20} /><span>{t("visualTabMask")}</span></button>;
+              if (actionId === "visual-filter") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("filters")}><Sparkle size={20} /><span>{t("visualTabEffects")}</span></button>;
+              if (actionId === "visual-effects") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("effects")}><Sparkle size={20} weight="fill" /><span>{t("effects")}</span></button>;
+              if (actionId === "visual-animation") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("animation")}><MonitorPlay size={20} /><span>{t("visualTabAnimation")}</span></button>;
+              if (actionId === "visual-speed") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("speed")}><ArrowsOutLineHorizontal size={20} /><span>{t("visualTabSpeed")}</span></button>;
+              if (actionId === "visual-repair") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("repair")}><Sparkle size={20} /><span>{t("repairTab")}</span></button>;
+              if (actionId === "visual-vector") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("vector")}><Sparkle size={20} /><span>{t("vectorProperties", "矢量")}</span></button>;
+              if (actionId === "overlay-timing") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("timing")}><PictureInPicture size={20} /><span>{t("overlayTiming", "层级")}</span></button>;
+              if (actionId === "caption-properties") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("caption")}><ClosedCaptioning size={20} /><span>{t("caption")}</span></button>;
+              if (actionId === "caption-font") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("font")}><TextT size={20} /><span>{t("captionFont")}</span></button>;
+              if (actionId === "caption-voice") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("voice")}><Waveform size={20} /><span>{t("aiVoice")}</span></button>;
+              if (actionId === "sticker-properties") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("sticker")}><SlidersHorizontal size={20} /><span>{t("properties")}</span></button>;
+              if (actionId === "audio-properties") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("audio")}><Waveform size={20} /><span>{t("mobileClipAudio")}</span></button>;
+              if (actionId === "audio-fade") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("fade")}><ArrowsInLineHorizontal size={20} /><span>{t("mobileClipFade")}</span></button>;
+              if (actionId === "audio-spatial") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("spatial")}><Waveform size={20} /><span>{t("audioSpaceTab")}</span></button>;
+              if (actionId === "audio-voice-color") return <button type="button" key={actionId} onClick={() => openSelectedClipInspector("voice-color")}><Sparkle size={20} weight="fill" /><span>{t("voiceColorTab", "音色")}</span></button>;
+              if (actionId === "split") return <button type="button" key={actionId} onClick={() => runMobileClipAction(handleCutTrack)}><Scissors size={20} /><span>{t("mobileClipSplit")}</span></button>;
+              if (actionId === "copy") return <button type="button" key={actionId} onClick={() => runMobileClipAction(handleDuplicateTrack)}><CopySimple size={20} /><span>{t("mobileClipCopy")}</span></button>;
+              if (actionId === "captions") return <button type="button" key={actionId} disabled={audioProcessingBusy || !selectedMobileAudioSegment} onClick={generateSelectedMobileAudioCaptions}><ClosedCaptioning size={20} /><span>{t("mobileClipCaptions")}</span></button>;
+              if (actionId === "caption-link") return <button type="button" key={actionId} onClick={toggleSelectedMobileCaptionAudioLink}>{selectedMobileHasLinkedCaption ? <LinkBreak size={20} /> : <LinkSimple size={20} />}<span>{t(selectedMobileHasLinkedCaption ? "captionUnlinkAudio" : "captionLinkAudio")}</span></button>;
+              if (actionId === "caption-align") return <button type="button" key={actionId} onClick={alignSelectedMobileCaptionAudio}><ArrowsInLineHorizontal size={20} /><span>{t("captionAlignToAudio")}</span></button>;
+              if (actionId === "separate") return <button type="button" key={actionId} disabled={audioProcessingBusy || !selectedMobileAudioSegment} onClick={separateSelectedMobileAudio}><Waveform size={20} /><span>{t("mobileClipSeparate")}</span></button>;
+              if (actionId === "extract-source-audio") return <button type="button" key={actionId} disabled={Boolean(sourceAudioExtractionPendingId) || !selectedMobileExtractableVideo} onClick={() => void runSourceAudioExtraction(selectedMobileExtractableVideo, selectedMobileClipTrack)}>{sourceAudioExtractionPendingId === selectedMobileExtractableVideo?.id ? <CircleNotch className="spin" size={20} /> : <Waveform size={20} />}<span>{t(sourceAudioExtractionPendingId === selectedMobileExtractableVideo?.id ? "separatingSourceAudio" : "separateSourceAudio", sourceAudioExtractionPendingId === selectedMobileExtractableVideo?.id ? "正在分离音频…" : "分离音频")}</span></button>;
+              return <button className="is-danger" type="button" key={actionId} onClick={() => runMobileClipAction(handleDeleteTrack)}><Trash size={20} /><span>{t("mobileClipDelete")}</span></button>;
+            })}
           </div>
         </nav>
       ), document.body) : null}
@@ -3732,10 +3715,10 @@ export function Timeline({
                   openTrackPanel("caption");
                   requestCaptionVoiceFocus?.();
                 })}><Waveform size={16} />{t("aiVoice")}</button>
-                {contextCaptionSegment ? <>
-                  <button type="button" role="menuitem" onClick={() => runContextAction(() => contextCaptionSegment.audioSegmentId ? unlinkCaptionAudio?.(contextCaptionSegment.id) : linkCaptionAudio?.(contextCaptionSegment.id))}>{contextCaptionSegment.audioSegmentId ? <LinkBreak size={16} /> : <LinkSimple size={16} />}{t(contextCaptionSegment.audioSegmentId ? "captionUnlinkAudio" : "captionLinkAudio")}</button>
-                  {contextCaptionSegment.audioSegmentId ? <button type="button" role="menuitem" onClick={() => runContextAction(() => alignCaptionToAudio?.(contextCaptionSegment.id))}><ArrowsInLineHorizontal size={16} />{t("captionAlignToAudio")}</button> : null}
-                </> : null}</>
+                  {contextCaptionSegment ? <>
+                    <button type="button" role="menuitem" onClick={() => runContextAction(() => contextCaptionSegment.audioSegmentId ? unlinkCaptionAudio?.(contextCaptionSegment.id) : linkCaptionAudio?.(contextCaptionSegment.id))}>{contextCaptionSegment.audioSegmentId ? <LinkBreak size={16} /> : <LinkSimple size={16} />}{t(contextCaptionSegment.audioSegmentId ? "captionUnlinkAudio" : "captionLinkAudio")}</button>
+                    {contextCaptionSegment.audioSegmentId ? <button type="button" role="menuitem" onClick={() => runContextAction(() => alignCaptionToAudio?.(contextCaptionSegment.id))}><ArrowsInLineHorizontal size={16} />{t("captionAlignToAudio")}</button> : null}
+                  </> : null}</>
               ) : null}
               {contextMenu.track === "image" && builtInImageCaptionAvailable && contextImageSegment && contextImageSegment.type !== "video" ? (
                 <button className={imageCaptionPendingId === contextImageSegment.id ? "is-loading" : ""} type="button" role="menuitem" disabled={Boolean(imageCaptionPendingId)} onClick={() => runImageCaptionAction(contextImageSegment)}>

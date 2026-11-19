@@ -101,8 +101,9 @@ const EXISTING_PROJECT_INDICATORS = [
 // Timeline and project editing operation patterns
 const EDITING_OPERATIONS = [
   // Silence / rough cut / pause removal
-  /\b(?:remove|cut|delete|clear|strip)\s+(?:long\s+)?(?:pauses?|silence|dead\s+air|filler\s+words?)\b/i,
-  /\brough\s+cut\b/i,
+  /\b(?:remove|cut|delete|clear|strip|clean\s+up)\s+(?:the\s+)?(?:long\s+|unnecessary\s+)?(?:pauses?|silence|silent\s+gaps?|gaps?|dead\s+air|filler(?:\s+words?)?)\b/i,
+  /\b(?:make|create|apply)\s+(?:a\s+|this\s+|the\s+)?(?:basic\s+|clean\s+)?rough\s+cut\b/i,
+  /\bmake\s+(?:this\s+)?(?:video|interview|footage)\s+tighter\b/i,
 
   // Clip manipulation (split, trim, cut, slice, delete, reorder)
   /\b(?:split|slice|cut)\s+(?:the\s+)?(?:first|second|third|last|selected|\d+(?:st|nd|rd|th)?)?\s*(?:clip|segment|track)\b/i,
@@ -323,6 +324,19 @@ export function classifyUserIntent(prompt, _projectSummary = null, conversationC
       isHistoryCommand: true,
       historyAction: "redo",
       reason: "Matched explicit redo request.",
+    };
+  }
+
+  const isSmartFeatureQuestion = /^(?:how\s+(?:does|do|would)|what\s+(?:does|is|are)|tell\s+me\s+(?:about|how))\s+(?:the\s+)?(?:remove\s+pauses?|silence\s+removal|ai\s+rough\s+cut|rough\s+cut)\b.*\??$/i.test(text);
+  if (isSmartFeatureQuestion) {
+    const roughCutQuestion = /rough\s+cut/i.test(text);
+    return {
+      type: "informational",
+      confidence: 1.0,
+      message: roughCutQuestion
+        ? "AI Rough Cut analyzes the selected video for pauses and, when requested, filler words. It prepares candidates in the existing review panel; your timeline changes only after you confirm Apply, and the edit can be undone."
+        : "Remove Pauses analyzes the selected video's audio for silent gaps and prepares pause candidates in the existing review panel. Your timeline changes only after you confirm Apply, and the edit can be undone.",
+      reason: "Matched a non-mutating question about a Smart editing feature.",
     };
   }
 
@@ -810,8 +824,8 @@ export function classifyUserIntent(prompt, _projectSummary = null, conversationC
   // Determine if the timeline is empty (0 visual clips and 0 duration)
   const visualsCount = _projectSummary
     ? (Array.isArray(_projectSummary.visualClips)
-        ? _projectSummary.visualClips.length
-        : Array.isArray(_projectSummary.visuals)
+      ? _projectSummary.visualClips.length
+      : Array.isArray(_projectSummary.visuals)
         ? _projectSummary.visuals.length
         : Number(_projectSummary.visualsCount) || 0)
     : null;

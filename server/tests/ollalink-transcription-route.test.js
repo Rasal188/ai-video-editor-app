@@ -50,6 +50,30 @@ describe("Authenticated Ollalink transcription route", () => {
         assert.equal(calls, 1);
     });
 
+    it("accepts the same host when TLS terminates before the HTTP-facing app", async () => {
+        let calls = 0;
+        await withServer(appFor(async () => {
+            calls++;
+            return { provider: "ollalink-fast", output: { chunks: [] } };
+        }), async (url) => {
+            const requestUrl = new URL(url);
+            const externalOrigin = `https://${requestUrl.host}`;
+            const response = await fetch(`${url}/api/transcription?language=en`, {
+                method: "POST",
+                headers: {
+                    ...headers,
+                    cookie,
+                    Origin: externalOrigin,
+                    "Sec-Fetch-Site": "same-origin",
+                },
+                body: wav,
+            });
+            assert.equal(response.status, 200);
+            assert.equal((await response.json()).provider, "ollalink-fast");
+        });
+        assert.equal(calls, 1);
+    });
+
     it("rejects cross-origin, missing anti-CSRF header, wrong media types and unsupported languages", async () => {
         const requests = [
             { status: 403, headers: { ...headers, Origin: "https://untrusted.example" } },

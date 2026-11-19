@@ -68,7 +68,11 @@ export function SilenceRemovalPanel({ t, tool }) {
         className={job.running ? "panel-secondary" : "panel-primary"}
         data-testid={job.running ? "pause-cancel-btn" : "pause-analyze-btn"}
         disabled={!job.running && (!supported || locked)}
-        onClick={job.running ? tool.cancel : tool.run}
+        onClick={() => (
+          job.running
+            ? tool.cancel()
+            : tool.run({ clipId: segment?.id })
+        )}
       >
         {job.running ? <CircleNotch size={16} className="pause-spinner" /> : <Scissors size={16} />}
         {t(job.running ? "pauseCancel" : "pauseAnalyze")}

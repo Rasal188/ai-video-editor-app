@@ -512,6 +512,12 @@
   font-weight: 600;
 }
 
+.ai-assistant-status-tag.is-review-ready {
+  background: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.28);
+}
+
 .ai-assistant-status-tag.is-applied {
   background: rgba(16, 185, 129, 0.12);
   color: #34d399;
@@ -537,8 +543,13 @@
 }
 
 @keyframes aiAssistantSpin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Input Tray */

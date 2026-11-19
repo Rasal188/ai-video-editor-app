@@ -1,5 +1,7 @@
 import { composeRepairWithWebCodecs } from "./repairVideoComposition.js";
 import { createRepairRangeEncoding } from "./repairRangeEncoding.js";
+import { getOverlayMediaPresentationLayout } from "./overlayMediaPresentation.js";
+export { getOverlayMediaPresentationLayout } from "./overlayMediaPresentation.js";
 import ffmpegCoreURL from "@ffmpeg/core?url";
 import ffmpegCoreWasmURL from "@ffmpeg/core/wasm?url";
 import ffmpegClassWorkerURL from "@ffmpeg/ffmpeg/worker?worker&url";
@@ -902,9 +904,34 @@ function drawVisualEffectsMask(context, mask, canvas) {
   context.restore();
 }
 
-function drawOverlayMaskShape(context, mask, canvas, visual) {
-  const visualSize = getVisualDimensions(visual);
-  const box = getVisualFitRect(visualSize, canvas, "contain");
+function getOverlayDisplayBox(overlay, visual, canvas) {
+  const width = Number(overlay?.width);
+  const height = Number(overlay?.height);
+  const displaySize = overlay?.mediaPresentation && width > 0 && height > 0
+    ? { width, height }
+    : getVisualDimensions(visual);
+  return getVisualFitRect(displaySize, canvas, "contain");
+}
+
+function drawPresentedOverlayVisual(context, visual, canvas, overlay, filter) {
+  const box = getOverlayDisplayBox(overlay, visual, canvas);
+  const layout = getOverlayMediaPresentationLayout(
+    getVisualDimensions(visual),
+    box,
+    overlay.mediaPresentation,
+  );
+  context.save();
+  context.beginPath();
+  context.rect(box.x, box.y, box.width, box.height);
+  context.clip();
+  context.filter = filter;
+  context.drawImage(visual, layout.x, layout.y, layout.width, layout.height);
+  context.restore();
+  return box;
+}
+
+function drawOverlayMaskShape(context, mask, canvas, visual, overlay = null) {
+  const box = getOverlayDisplayBox(overlay, visual, canvas);
   const geometry = getVisualMaskGeometry(mask, { width: box.width, height: box.height });
   const feather = getVisualMaskFeatherPixels(mask, { width: box.width, height: box.height });
   context.fillStyle = "#fff";
@@ -1434,6 +1461,14 @@ export function drawPreviewFrame(context, visual, canvas, options) {
         else drawCinematicDepthFrame(targetContext, overlayVisual, canvas, {
           effect: overlayDepth, ...overlay.depth, depthVisual: overlay.depth.depthVisual, fitMode: "contain", filter: overlayFilter, clear: false,
         });
+      } else if (overlay.mediaPresentation) {
+        drawPresentedOverlayVisual(
+          targetContext,
+          overlayVisual,
+          canvas,
+          overlay,
+          overlayFilter,
+        );
       } else {
         drawFittedVisual(
           targetContext,
@@ -1455,7 +1490,7 @@ export function drawPreviewFrame(context, visual, canvas, options) {
       maskContext.clearRect(0, 0, width, height);
       paintOverlay(layerContext);
       if (overlayClickRipple.enabled) {
-        const fitted = getVisualFitRect(getVisualDimensions(overlayVisual), canvas, "contain");
+        const fitted = getOverlayDisplayBox(overlay, overlayVisual, canvas);
         drawClickRippleEffect(layerContext, layers.visual, overlayClickRipple, overlayTime, {
           x: width / 2 + animatedOverlayTransform.x / 100 * width - fitted.width * animatedOverlayTransform.scale / 2,
           y: height / 2 + animatedOverlayTransform.y / 100 * height - fitted.height * animatedOverlayTransform.scale / 2,
@@ -1473,7 +1508,7 @@ export function drawPreviewFrame(context, visual, canvas, options) {
       maskContext.rotate((animatedOverlayTransform.rotation * Math.PI) / 180);
       maskContext.scale(animatedOverlayTransform.scale, animatedOverlayTransform.scale);
       maskContext.translate(-width / 2, -height / 2);
-      drawOverlayMaskShape(maskContext, mask, canvas, overlayVisual);
+      drawOverlayMaskShape(maskContext, mask, canvas, overlayVisual, overlay);
       maskContext.restore();
       layerContext.save();
       layerContext.globalCompositeOperation = "destination-in";
@@ -1488,7 +1523,7 @@ export function drawPreviewFrame(context, visual, canvas, options) {
       const layerContext = layers.visual.getContext("2d");
       layerContext.clearRect(0, 0, width, height);
       paintOverlay(layerContext);
-      const fitted = getVisualFitRect(getVisualDimensions(overlayVisual), canvas, "contain");
+      const fitted = getOverlayDisplayBox(overlay, overlayVisual, canvas);
       drawClickRippleEffect(layerContext, layers.visual, overlayClickRipple, overlayTime, {
         x: width / 2 + animatedOverlayTransform.x / 100 * width - fitted.width * animatedOverlayTransform.scale / 2,
         y: height / 2 + animatedOverlayTransform.y / 100 * height - fitted.height * animatedOverlayTransform.scale / 2,

@@ -175,6 +175,123 @@ describe("Headless Render Plan & Embedded Audio", () => {
     assert.match(filterGraph, /concat=n=1:v=1:a=0\[vout\]/);
   });
 
+  it("should not emit color filters for a neutral static grade", () => {
+    const project = {
+      ratioId: "16:9",
+      visualSegments: [{
+        id: "vis-1",
+        type: "image",
+        duration: 3,
+        colorGrade: {
+          temperature: 0,
+          tint: 0,
+          saturation: 0,
+          shadows: { hue: 120, saturation: 0, luminance: 0 },
+        },
+      }],
+    };
+
+    const plan = buildFfmpegRenderPlan({
+      project,
+      media: baseMedia,
+      extractedFiles: dummyFiles,
+    });
+    const filterGraph = plan.args[plan.args.indexOf("-filter_complex") + 1];
+
+    assert.doesNotMatch(filterGraph, /eq=brightness=/);
+    assert.doesNotMatch(filterGraph, /colorchannelmixer=/);
+    assert.doesNotMatch(filterGraph, /hue=h=/);
+  });
+
+  it("should translate a static color grade into deterministic FFmpeg filters", () => {
+    const project = {
+      ratioId: "16:9",
+      visualSegments: [{
+        id: "vis-1",
+        type: "image",
+        duration: 3,
+        colorGrade: {
+          temperature: 20,
+          saturation: 30,
+        },
+      }],
+    };
+
+    const plan = buildFfmpegRenderPlan({
+      project,
+      media: baseMedia,
+      extractedFiles: dummyFiles,
+    });
+    const filterGraph = plan.args[plan.args.indexOf("-filter_complex") + 1];
+
+    assert.match(filterGraph, /eq=brightness=0\.006:contrast=1:saturation=1\.3/);
+    assert.match(filterGraph, /colorchannelmixer=rr=0\.9757:rg=0\.0308:rb=0\.0076/);
+    assert.match(filterGraph, /:gr=0\.014:gg=0\.9874:gb=0\.0067/);
+    assert.match(filterGraph, /:br=0\.0109:bg=0\.0214:bb=0\.9652/);
+    assert.match(filterGraph, /colorchannelmixer=.*fps=30,settb=1\/30,set[s]?ar=1,format=yuv420p\[v0\]/);
+  });
+
+  it("should reject animated color-grade keyframes instead of flattening them", () => {
+    const project = {
+      ratioId: "16:9",
+      visualSegments: [{
+        id: "vis-1",
+        type: "image",
+        duration: 3,
+        colorGrade: { temperature: 10 },
+        keyframes: [{
+          time: 1.25,
+          "colorGrade.temperature": -11,
+        }],
+      }],
+    };
+
+    assert.throws(
+      () => buildFfmpegRenderPlan({
+        project,
+        media: baseMedia,
+        extractedFiles: dummyFiles,
+      }),
+      (error) => error.code === "UNSUPPORTED_RENDER_FEATURE"
+        && error.message.includes("animated color grading"),
+    );
+  });
+
+  it("should preserve transition and embedded-audio mapping for statically graded clips", () => {
+    const project = {
+      ratioId: "16:9",
+      visualSegments: [
+        {
+          id: "vis-1",
+          type: "video",
+          duration: 3,
+          colorGrade: { tint: 15 },
+          transition: { id: "fade", duration: 0.5 },
+        },
+        {
+          id: "vis-2",
+          type: "video",
+          duration: 3,
+          colorGrade: { saturation: -20 },
+        },
+      ],
+    };
+
+    const plan = buildFfmpegRenderPlan({
+      project,
+      media: baseMedia,
+      extractedFiles: dummyFiles,
+    });
+    const filterGraph = plan.args[plan.args.indexOf("-filter_complex") + 1];
+    const mapIndices = plan.args.flatMap((arg, index) => arg === "-map" ? [index] : []);
+
+    assert.match(filterGraph, /hue=h=2\.7/);
+    assert.match(filterGraph, /eq=brightness=0:contrast=1:saturation=0\.8/);
+    assert.match(filterGraph, /\[v0\]\[v1\]xfade=transition=fade:duration=0\.5:offset=2\.5000/);
+    assert.match(filterGraph, /\[a0\]\[a1\]acrossfade=d=0\.5:c1=tri:c2=tri\[vaout\]/);
+    assert.deepEqual(mapIndices.map((index) => plan.args[index + 1]), ["[vout]", "[aout]"]);
+  });
+
   it("should coexist and mix embedded video audio with voiceover and music", () => {
     const project = {
       ratioId: "16:9",

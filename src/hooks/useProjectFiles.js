@@ -7,6 +7,7 @@ import { createCaptionSegments, getImageThumbnailCount, getVisualSegmentsTotal }
 import { normalizeSmartFrame } from "../lib/smartFrame.js";
 import { normalizeTrackLocks, normalizeTrackVisibility } from "../lib/projectTrackState.js";
 import { normalizeTimelineMarkers } from "../lib/timelineMarkers.js";
+import { restoreProjectVisualSegmentSource } from "../lib/projectOverlayRestore.js";
 import { PROJECT_IMPORT_COPY } from "../i18nProjectImport.js";
 import { assertAssistantBase, createAssistantProjectClock } from "../lib/assistantSafety.js";
 
@@ -257,9 +258,7 @@ export function useProjectFiles(deps) {
       const visualUrls = new Map();
       const restoreVisualMedia = (segment) => {
         const media = resolveProjectVisualMedia(visualMedia, segment);
-        if (!media?.blob) {
-          return segment?.src ? segment : null;
-        }
+        if (!media?.blob) return restoreProjectVisualSegmentSource(segment);
         if (!visualUrls.has(media.blob)) {
           const src = createImportedUrl(media.blob);
           visualUrls.set(media.blob, src);

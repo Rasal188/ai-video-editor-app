@@ -8,6 +8,9 @@ describe("Smart Hub Cleanup & Retained Tools Regression Verification", () => {
   const voicePanelPath = path.resolve(process.cwd(), "src/components/VoicePanel.jsx");
   const editorSidebarPath = path.resolve(process.cwd(), "src/components/EditorSidebar.jsx");
   const appPath = path.resolve(process.cwd(), "src/App.jsx");
+  const vocalSeparationPath = path.resolve(process.cwd(), "src/lib/vocalSeparation.js");
+  const vocalSeparationWorkerPath = path.resolve(process.cwd(), "src/workers/vocal-separation.worker.js");
+  const vocalSeparationHookPath = path.resolve(process.cwd(), "src/hooks/useVocalSeparation.js");
 
   it("verifies Auto Edit and Digital Human cards are removed from Smart Hub in panels.jsx", () => {
     const panelsContent = fs.readFileSync(panelsPath, "utf8");
@@ -53,6 +56,78 @@ describe("Smart Hub Cleanup & Retained Tools Regression Verification", () => {
 
     // Must default smartMode to smart-pipeline
     assert.strictEqual(appContent.includes('useState("smart-pipeline")'), true, "smartMode must default to 'smart-pipeline'");
+  });
+
+  it("routes assistant gap-removal and rough-cut actions through retained Smart Tools", () => {
+    const appContent = fs.readFileSync(appPath, "utf8");
+
+    assert.strictEqual(
+      appContent.includes("const openAssistantSmartReview = async (tool, mode, request = {}) =>"),
+      true,
+      "assistant Smart actions must use the shared target-aware review launcher",
+    );
+    assert.strictEqual(
+      appContent.includes("return tool.run({ ...request, clipId });"),
+      true,
+      "assistant Smart actions must run real analysis rather than only navigate",
+    );
+    assert.match(
+      appContent,
+      /onOpenSilenceRemoval=\{\(request\)\s*=>\s*openAssistantSmartReview\(\s*silenceRemoval,\s*"remove-pauses",\s*request\s*\)\s*\}/,
+      "assistant silence-removal actions must open and run the retained Remove Pauses tool",
+    );
+    assert.match(
+      appContent,
+      /onOpenRoughCut=\{\(request\)\s*=>\s*openAssistantSmartReview\(\s*roughCut,\s*"rough-cut",\s*request\s*\)\s*\}/,
+      "assistant rough-cut actions must open and run the retained Rough Cut tool",
+    );
+    assert.strictEqual(appContent.includes("silenceRemoval.open()"), false, "App.jsx must not call a nonexistent silence-removal open method");
+    assert.strictEqual(appContent.includes("roughCut.open()"), false, "App.jsx must not call a nonexistent rough-cut open method");
+  });
+
+  it("constructs a classic vocal-separation worker with a compatible runtime loader", () => {
+    const vocalSeparationContent = fs.readFileSync(vocalSeparationPath, "utf8");
+    const workerContent = fs.readFileSync(vocalSeparationWorkerPath, "utf8");
+
+    assert.match(
+      vocalSeparationContent,
+      /new Worker\([\s\S]*vocal-separation\.worker\.js[\s\S]*\)/,
+      "vocal separation must construct its worker",
+    );
+    assert.strictEqual(
+      vocalSeparationContent.includes('{ type: "module" }'),
+      false,
+      "the importScripts-based TensorFlow loader requires a classic worker",
+    );
+    assert.strictEqual(
+      /^\s*import\s/m.test(workerContent),
+      false,
+      "the classic vocal-separation worker must not contain static imports",
+    );
+    assert.strictEqual(
+      workerContent.includes("cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"),
+      true,
+      "missing local TensorFlow assets must fall back to a pinned runtime",
+    );
+    assert.strictEqual(
+      workerContent.includes("loadFirstScript(TF_WEBGPU_URLS);"),
+      true,
+      "a successfully imported WebGPU bundle must not be loaded again when adapter initialization is unavailable",
+    );
+    assert.strictEqual(
+      workerContent.includes('loadFirstScript(TF_WEBGPU_URLS, () => Boolean(self.tf?.findBackend?.("webgpu")))'),
+      false,
+      "WebGPU adapter readiness must not control mirror fallback and duplicate backend registration",
+    );
+  });
+
+  it("mutes embedded source audio only after separated stems are placed", () => {
+    const appContent = fs.readFileSync(appPath, "utf8");
+    const hookContent = fs.readFileSync(vocalSeparationHookPath, "utf8");
+
+    assert.strictEqual(hookContent.includes("markEmbeddedAudioSeparated?.(track, segmentId, vocalSegment.id)"), true);
+    assert.strictEqual(appContent.includes("sourceAudioDisabled: true, audioSeparated: true"), true);
+    assert.strictEqual(appContent.includes("muted: true, audioSeparated: true"), true);
   });
 
   it("verifies EditorSidebar does not pass avatar handlers", () => {

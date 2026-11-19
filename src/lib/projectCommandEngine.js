@@ -59,7 +59,8 @@ function updateLinkedCaptionTiming(project, audioId, delta, end, lowerBound) {
     const start = finiteNonNegative(lowerBound === undefined ? shiftedStart : Math.max(lowerBound, shiftedStart), "caption start");
     const captionEnd = Math.min(end ?? Infinity, finiteNonNegative(Math.max(0, (Number(caption.end) || 0) + delta), "caption end"));
     requireCaptionRange(start, captionEnd);
-    return { ...caption, start, end: captionEnd,
+    return {
+      ...caption, start, end: captionEnd,
       ...(Array.isArray(caption.words) ? { words: shiftCaptionWords(caption.words, delta, start, captionEnd) } : {}),
     };
   });
@@ -1148,6 +1149,25 @@ function setClipFilter(project, operation) {
   match.clip.filter = filterId;
 }
 
+function applyColorGradePatch(currentGrade, patch) {
+  const nextGrade = normalizeColorGrade(currentGrade);
+  for (const key of ["temperature", "tint", "saturation"]) {
+    if (Object.hasOwn(patch, key)) {
+      nextGrade[key] = normalizeColorGrade({ [key]: patch[key] })[key];
+    }
+  }
+  for (const key of ["shadows", "midtones", "highlights", "offset"]) {
+    if (!Object.hasOwn(patch, key)) continue;
+    if (!patch[key] || typeof patch[key] !== "object" || Array.isArray(patch[key])) {
+      throw Object.assign(new Error(`${key} must be a color-wheel object`), { code: "INVALID_ARGUMENT" });
+    }
+    nextGrade[key] = normalizeColorGrade({
+      [key]: { ...nextGrade[key], ...patch[key] },
+    })[key];
+  }
+  return nextGrade;
+}
+
 function setClipColorGrade(project, operation) {
   if (project?.trackLocks?.image || project?.trackLocks?.visuals || project?.tracks?.visuals?.locked) {
     throw Object.assign(new Error("Visual track is locked"), { code: "TRACK_LOCKED" });
@@ -1155,16 +1175,16 @@ function setClipColorGrade(project, operation) {
   if (!operation.colorGrade || typeof operation.colorGrade !== "object" || Array.isArray(operation.colorGrade)) {
     throw Object.assign(new Error("colorGrade must be an object"), { code: "INVALID_ARGUMENT" });
   }
-  const nextGrade = normalizeColorGrade(operation.colorGrade);
+  const apply = (clip) => {
+    clip.colorGrade = applyColorGradePatch(clip.colorGrade, operation.colorGrade);
+  };
   if (operation.scope === "all" || operation.clipId === "all" || !operation.clipId) {
     const visuals = Array.isArray(project.visualSegments) ? project.visualSegments : [];
-    for (const clip of visuals) {
-      clip.colorGrade = { ...(clip.colorGrade || {}), ...nextGrade };
-    }
+    for (const clip of visuals) apply(clip);
     return;
   }
   const match = findClipMatch(project, operation.clipId);
-  match.clip.colorGrade = { ...(match.clip.colorGrade || {}), ...nextGrade };
+  apply(match.clip);
 }
 
 function setClipMuted(project, operation) {
@@ -1610,8 +1630,10 @@ const TRACK_COLLECTIONS = Object.freeze({
 function clipSummary(track, clip, index, visualStart = 0) {
   if (track === "visuals") {
     const duration = Math.max(0, Number(clip.duration) || 0);
-    return { id: clip.id, index, type: clip.type || "image", start: visualStart, end: visualStart + duration, duration,
-      assetId: clip.assetId || "", name: clip.name || "" };
+    return {
+      id: clip.id, index, type: clip.type || "image", start: visualStart, end: visualStart + duration, duration,
+      assetId: clip.assetId || "", name: clip.name || ""
+    };
   }
   if (track === "captions") {
     const start = Math.max(0, Number(clip.start) || 0);

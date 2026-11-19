@@ -22,31 +22,53 @@ export function useSilenceRemoval(options) {
     setJob({ running: false, progress: 0, phase: "" });
   };
   const dismiss = () => {
+    draft?.onDismissed?.();
     setDraft(null);
     setError("");
   };
-  const run = async () => {
-    if (abortRef.current || !supported || locked) return;
+  const run = async (request = {}) => {
+    const current = latest.current;
+    if (abortRef.current) return { status: "busy" };
+    if (current.locked) return { status: "locked", code: "pauseLocked" };
+    const runtime = current.getRuntime();
+    const targetId = request.clipId || current.selectedSegment?.id;
+    const targetIndex = runtime.visualSegments.findIndex((clip) => clip.id === targetId);
+    const target = runtime.visualSegments[targetIndex];
+    if (target?.type !== "video" || !canRemovePauses(target, runtime.visualSegments[targetIndex - 1])) {
+      return { status: "unsupported", code: "pauseUnsupported" };
+    }
+    const effectiveSettings = { ...settings, ...(request.settings || {}) };
+    if (request.settings) setSettings(effectiveSettings);
     const controller = new AbortController(); abortRef.current = controller;
-    const captured = { ...segment };
-    const snapshot = options.getSnapshot();
-    const runtime = options.getRuntime();
+    const abortFromRequest = () => controller.abort();
+    if (request.signal?.aborted) controller.abort();
+    else request.signal?.addEventListener?.("abort", abortFromRequest, { once: true });
+    const captured = { ...target };
+    const snapshot = current.getSnapshot();
     const fingerprint = browserProjectFingerprint(snapshot, false, runtime.visualSegments, runtime);
     setError(""); setDraft(null); setJob({ running: true, progress: 0, phase: "pauseDownloading" });
     try {
       const probabilities = await analyzeVideoPauses(captured, {
-        language: options.language, signal: controller.signal,
+        language: current.language, signal: controller.signal,
         onProgress: (progress, phase) => {
           if (!controller.signal.aborted) setJob({ running: true, progress, phase });
         },
       });
       controller.signal.throwIfAborted();
-      setDraft({ clip: captured, fingerprint, probabilities, version: projectVersion,
-        start: runtime.visualSegments.slice(0, index).reduce((sum, clip) => sum + clip.duration, 0),
-        candidates: findPauseCandidates(probabilities, captured, settings) });
+      const candidates = findPauseCandidates(probabilities, captured, effectiveSettings);
+      setDraft({
+        clip: captured, fingerprint, probabilities, version: current.projectVersion,
+        start: runtime.visualSegments.slice(0, targetIndex).reduce((sum, clip) => sum + clip.duration, 0),
+        candidates, onApplied: request.onApplied, onDismissed: request.onDismissed
+      });
+      return { status: "review-ready", clipId: captured.id, candidateCount: candidates.length };
     } catch (failure) {
-      if (!controller.signal.aborted) setError(failure.code || "pauseFailed");
+      if (controller.signal.aborted) return { status: "cancelled" };
+      const code = failure.code || "pauseFailed";
+      setError(code);
+      return { status: "failed", code };
     } finally {
+      request.signal?.removeEventListener?.("abort", abortFromRequest);
       if (abortRef.current === controller) {
         abortRef.current = null; setJob({ running: false, progress: 0, phase: "" });
       }
@@ -77,10 +99,12 @@ export function useSilenceRemoval(options) {
       const selectedCuts = draft.candidates.filter((cut) => cut.enabled);
       const review = buildSilenceRemovalReview(now, live, draft.clip.id, selectedCuts, current.rippleEditing);
       current.applyReview(review, current.t("pauseApplied"));
+      draft.onApplied?.({ clipId: draft.clip.id, candidateCount: selectedCuts.length });
       setDraft(null); setError("");
     } catch (failure) { setError(failure.code?.startsWith("pause") ? failure.code : "pauseStale"); }
   };
-  return { segment, supported, locked, settings, updateSettings, draft, stale, job, error, run, cancel, dismiss, toggle, toggleAll, apply,
+  return {
+    segment, supported, locked, settings, updateSettings, draft, stale, job, error, run, cancel, dismiss, toggle, toggleAll, apply,
     rippleEditing, setRippleEditing: options.setRippleEditing,
     preview: (cut) => { if (!stale) options.seekTo(draft.start + Math.max(0, cut.start - 0.25)); },
   };

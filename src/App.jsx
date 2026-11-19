@@ -58,6 +58,7 @@ import { sampleEditorMedia } from "./lib/webMcpMediaSample.js";
 import { browserProjectFingerprint, restoreBrowserProjectMedia } from "./lib/browserEditPlan.js";
 import { useSourceAudioExtraction } from "./hooks/useSourceAudioExtraction.js";
 import { useVocalSeparation } from "./hooks/useVocalSeparation.js";
+import { resolveAudioToolVideoTarget } from "./lib/audioToolTarget.js";
 import { useFaceSwapGeneration } from "./hooks/useFaceSwapGeneration.js";
 import { useDepthOfFieldAnalysis } from "./hooks/useDepthOfFieldAnalysis.js";
 import { useCaptionState } from "./hooks/useCaptionState.js";
@@ -118,7 +119,7 @@ import {
   saveExportSettings,
 } from "./lib/exportSettings.js";
 import { createVisualOverlaySegment, getVisualOverlayPreset, updateVisualOverlayTransform } from "./lib/visualOverlayTimeline.js";
-import { createTemplateFromOverlays } from "./lib/shortsOverlayTemplates.js";
+import { createTemplateFromOverlays, createTemplateOverlayRenderSource, instantiateTemplate } from "./lib/shortsOverlayTemplates.js";
 import { createOverlayTemplateRequest } from "./lib/overlayTemplateApi.js";
 import { getMobileClipPanelOrigin } from "./lib/mobileClipActions.js";
 import { getVisualPropertyTabIds } from "./lib/visualPropertyTabs.js";
@@ -921,25 +922,47 @@ export function App({
     notify(t("sourceAudioMovedToAudioTrack"));
     return true;
   };
+  const markEmbeddedAudioSeparated = useCallback((track, segmentId, audioSegmentId) => {
+    if (track === "image") {
+      setVisualSegments((segments) => segments.map((segment) => (
+        segment.id === segmentId
+          ? { ...segment, sourceAudioDisabled: true, audioSeparated: true, sourceAudioRoutedToAudioSegmentId: audioSegmentId }
+          : segment
+      )));
+      return;
+    }
+    if (track === "overlay") {
+      setVisualOverlaySegments((segments) => segments.map((segment) => (
+        segment.id === segmentId
+          ? { ...segment, muted: true, audioSeparated: true, sourceAudioRoutedToAudioSegmentId: audioSegmentId }
+          : segment
+      )));
+    }
+  }, [setVisualOverlaySegments, setVisualSegments]);
   const { separateAudioClipVocals, separateSourceVocals, vocalSeparationJob } = useVocalSeparation({
-    sourceAudioBlob, sourceAudioName, replaceAudio, replaceSourceAudio, replaceMusic, notify, t,
+    sourceAudioBlob, sourceAudioName, replaceAudio, replaceSourceAudio, replaceMusic,
+    markEmbeddedAudioSeparated, notify, t,
   });
   const selectedSourceAudioPiece = linkedSourceAudioSegments.find((segment) => segment.id === selectedSourceAudioSegmentId) ?? null;
   const selectedMusicSegment = musicSegments.find((segment) => segment.id === selectedMusicSegmentId) ?? null;
   useEffect(() => {
     if (selectedMusicSegmentId && !selectedMusicSegment) setSelectedMusicSegmentId("");
   }, [selectedMusicSegment, selectedMusicSegmentId]);
+  const selectedVideoAudioTarget = resolveAudioToolVideoTarget({
+    selectedTrack,
+    selectedVisualSegment: selectedVisualSegmentId ? selectedVisualSegment : null,
+    selectedVisualRange: selectedVisualSegmentId ? selectedVisualRange : null,
+    selectedVisualOverlay,
+    previewVisualSegment,
+    previewVisualRange,
+  });
   const selectedAudioToolTarget = selectedTrack === "audio" && selectedAudioSegmentId && selectedAudioSegment
     ? { ...selectedAudioSegment, segmentId: selectedAudioSegment.id, track: "audio", canChangeSpeed: true }
     : selectedTrack === "music" && musicBlob
       ? { ...(selectedMusicSegment ?? musicSegments[0] ?? { id: "music-audio", start: musicStart, duration: musicDuration, sourceStart: 0, sourceDuration: musicDuration, playbackRate: 1 }), blob: musicBlob, name: musicName || t("musicTrack"), segmentId: selectedMusicSegment?.id || musicSegments[0]?.id || "music-audio", track: "music", volume: selectedMusicSegment?.volume ?? musicSegments[0]?.volume ?? musicVolume, canChangeSpeed: true }
       : selectedTrack === "source" && sourceAudioBlob
         ? { ...(selectedSourceAudioPiece ?? {}), blob: sourceAudioBlob, name: sourceAudioName, start: selectedSourceAudioPiece?.start ?? sourceAudioStart, sourceStart: selectedSourceAudioPiece?.sourceStart ?? 0, duration: selectedSourceAudioPiece?.duration ?? sourceAudioDuration, sourceDuration: selectedSourceAudioPiece?.sourceDuration ?? sourceAudioDuration, playbackRate: selectedSourceAudioPiece?.playbackRate ?? 1, segmentId: selectedSourceAudioSegmentId || "source-audio", track: "source", volume: selectedSourceAudioPiece?.volume ?? sourceAudioVolume, spatialEffect: sourceAudioSpatialEffect, spatialAmount: sourceAudioSpatialAmount, canChangeStart: !sourceAudioLinked, canChangeSpeed: Boolean(sourceAudioLinked && selectedSourceAudioPiece), voiceColorOriginalBlob: sourceVoiceColorOriginalRef.current?.blob || null }
-        : selectedTrack === "image" && selectedVisualSegment?.type === "video"
-          ? { ...selectedVisualSegment, segmentId: selectedVisualSegment.id, track: "image", start: selectedVisualRange?.start ?? 0, canChangeStart: false, canChangeSpeed: false, embeddedVideo: true }
-          : selectedTrack === "overlay" && selectedVisualOverlay?.type === "video"
-            ? { ...selectedVisualOverlay, segmentId: selectedVisualOverlay.id, track: "overlay", canChangeStart: false, canChangeSpeed: false, embeddedVideo: true }
-            : null;
+        : selectedVideoAudioTarget;
   const separateSelectedAudioVocals = () => selectedAudioToolTarget?.track === "source"
     ? separateSourceVocals()
     : selectedAudioToolTarget && separateAudioClipVocals(selectedAudioToolTarget);
@@ -1370,6 +1393,33 @@ export function App({
     setSelectedVisualSegmentId("");
     setSelectedTrack("overlay");
     notify("已添加为画中画，可在预览中拖动、缩放和旋转");
+  };
+  const applyOverlayTemplate = async (template) => {
+    const result = instantiateTemplate({
+      template,
+      existingOverlays: visualOverlaySegments,
+      assets: [...userAssets, ...visualSegments, ...visualOverlaySegments],
+      startTime: currentTime,
+      trackLocks,
+    });
+    if (!result.applied) {
+      notify(result.warnings[0] || t("overlayTemplateApplyFailed", "Template could not be applied to the timeline."));
+      return result;
+    }
+    const selectedCreatedOverlay = result.created.find((overlay) => overlay.id === result.selectedId)
+      || result.created[0]
+      || null;
+    setVisualOverlaySegments(result.overlays);
+    setSelectedVisualOverlayId(result.selectedId || "");
+    setCanvasVisualTarget(result.selectedId ? `overlay:${result.selectedId}` : "");
+    setSelectedVisualSegmentId("");
+    setSelectedTrack("overlay");
+    if (selectedCreatedOverlay) {
+      seekTo(selectedCreatedOverlay.start, { immediate: true, pause: true });
+    }
+    const warningSuffix = result.warnings.length ? ` ${result.warnings.join(" ")}` : "";
+    notify(`${result.created.length} overlay element${result.created.length === 1 ? "" : "s"} added at the playhead.${warningSuffix}`);
+    return result;
   };
   const saveVisualOverlayTemplate = async ({ name, scope = "selected" } = {}) => {
     setVisualOverlayTemplateSaveState({
@@ -1948,6 +1998,19 @@ export function App({
     applyReview: applyBrowserReview, rippleEditing, setRippleEditing, seekTo, t,
     captionSegments,
   });
+  const openAssistantSmartReview = async (tool, mode, request = {}) => {
+    const clipId = request.clipId || selectedVisualSegment?.id || visualSegments[0]?.id || "";
+    if (clipId) setSelectedVisualSegmentId(clipId);
+    setSelectedTrack("image");
+    setActiveTool("smart");
+    setSmartMode(mode);
+    if (isCompactViewport) {
+      setMobilePanelOrigin("");
+      setMobileInspectorSection("");
+      changeMobilePanel("inspector");
+    }
+    return tool.run({ ...request, clipId });
+  };
   const smartPipeline = useSmartPipeline({
     language: activeLanguage,
     selectedSegment: selectedVisualSegment,
@@ -2393,8 +2456,8 @@ export function App({
         selectedSegmentId={selectedSegmentId}
         selectedTrack={selectedTrack}
         onOpenSceneDetection={(clipId) => sceneDetection.open(clipId)}
-        onOpenSilenceRemoval={() => silenceRemoval.open()}
-        onOpenRoughCut={() => roughCut.open()}
+        onOpenSilenceRemoval={(request) => openAssistantSmartReview(silenceRemoval, "remove-pauses", request)}
+        onOpenRoughCut={(request) => openAssistantSmartReview(roughCut, "rough-cut", request)}
         onOpenSmartPipeline={(clipId, plan) => smartPipeline.open(clipId, plan)}
         onGenerateCaptions={(options) => generateCaptionsWhenIdle(options)}
         onToggleSmartFrame={(enabled) => setSmartMode(enabled === false ? "smart-pipeline" : "smart-frame")}
@@ -2424,11 +2487,11 @@ export function App({
           sourceAudioBlob, sourceAudioDuration, sourceAudioLinked, sourceAudioName, sourceAudioVolume, status, t,
           selectedAudioToolTarget, separateSelectedAudioVocals, separateSourceVocals, vocalSeparationJob,
           syncCaptionPositions, toggleCaptionSegmentHidden, trackLocks, trOption, updateCaptionSegmentText,
-          updateScript, userAssets, visionJob, aiMusic, smartFrame, getProjectSnapshot,
+          updateScript, userAssets, visualSegments, visualOverlaySegments, visionJob, aiMusic, smartFrame, getProjectSnapshot,
           selectedVisualSegment, selectedEffectSegment, effectAnalysis, effectRunning, effectProgress, effectPhase,
           effectsPanelMode, setEffectsPanelMode, cinematicDepth, photoParallaxDepth,
           visualLocalTime, updateSelectedVisualEffects, updateSelectedSubjectEffect, updateSelectedClickRipple, removeSelectedSubjectEffect, miganRepair, hdRestoration, smartDenoise,
-          mobilePanel, setMobilePanel: changeMobilePanel, applyAssetToTrack, handleGeneratedVector, generationPlugins,
+          mobilePanel, setMobilePanel: changeMobilePanel, applyAssetToTrack, applyOverlayTemplate, handleGeneratedVector, generationPlugins,
         }} />
 
         <PreviewStage
@@ -2674,7 +2737,16 @@ export function App({
           visualOverlayCount={visualOverlaySegments.filter((overlay) => overlay?.hidden !== true).length}
           saveVisualOverlayTemplate={saveVisualOverlayTemplate}
           visualOverlayTemplateSaveState={visualOverlayTemplateSaveState}
-          updateVisualOverlaySegment={(patch) => setVisualOverlaySegments((items) => items.map((item) => item.id === selectedVisualOverlayId ? { ...item, ...patch } : item))}
+          updateVisualOverlaySegment={(patch) => {
+            if (trackLocks.overlay) return void notify(t("effectClipLocked"));
+            setVisualOverlaySegments((items) => items.map((item) => {
+              if (item.id !== selectedVisualOverlayId) return item;
+              const updated = { ...item, ...patch };
+              return patch.text || patch.shape
+                ? { ...updated, src: createTemplateOverlayRenderSource(updated) }
+                : updated;
+            }));
+          }}
           updateVisualOverlayEffects={updateSelectedVisualOverlayEffects}
           setVisualCanvasEditMode={setVisualCanvasEditMode}
           deleteVisualOverlay={() => handleDeleteTrack()}

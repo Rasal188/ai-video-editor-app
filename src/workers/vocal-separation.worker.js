@@ -1,5 +1,3 @@
-import { orderModelUrlsForNetwork } from "../lib/modelSources.js";
-
 const MODEL_REVISION = "927cd9272154b85c53518daf44063ee033ee22c3";
 const HUGGING_FACE_MODEL_URL =
   `https://huggingface.co/haixin/timeline-studio-vocal-remover/resolve/${MODEL_REVISION}/model.json`;
@@ -10,6 +8,15 @@ const PADDING = 3072;
 const FFT_SIZE = 6144;
 const HOP_SIZE = 1024;
 
+const TF_RUNTIME_URLS = [
+  "/vendor/vocal-remover/tf.min.js?v=4.22.0",
+  "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js",
+];
+const TF_WEBGPU_URLS = [
+  "/vendor/vocal-remover/tf-backend-webgpu.js?v=4.22.0",
+  "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgpu@4.22.0/dist/tf-backend-webgpu.min.js",
+];
+
 let modelPromise;
 let runtimePromise;
 let activeBackend = "webgl";
@@ -18,11 +25,42 @@ function postProgress(requestId, progress, phase) {
   self.postMessage({ type: "progress", requestId, progress, phase });
 }
 
+function loadFirstScript(urls, isReady = () => true) {
+  const failures = [];
+  for (const url of urls) {
+    try {
+      importScripts(url);
+      if (isReady()) return;
+      failures.push(`${url}: runtime unavailable after load`);
+    } catch (error) {
+      failures.push(`${url}: ${error?.message || String(error)}`);
+    }
+  }
+  throw new Error(failures.join("; "));
+}
+
+async function hasWebGpuAdapter() {
+  if (!self.navigator.gpu?.requestAdapter) return false;
+  try {
+    return Boolean(await self.navigator.gpu.requestAdapter());
+  } catch {
+    return false;
+  }
+}
+
 async function getRuntime() {
   runtimePromise ??= (async () => {
     try {
-      importScripts("/vendor/vocal-remover/tf.min.js?v=4.22.0");
-      if (self.navigator.gpu) importScripts("/vendor/vocal-remover/tf-backend-webgpu.js?v=4.22.0");
+      loadFirstScript(TF_RUNTIME_URLS, () => Boolean(self.tf));
+      if (await hasWebGpuAdapter()) {
+        try {
+          // A successful import means the backend bundle is loaded. Backend
+          // initialization happens later and falls back to WebGL when needed.
+          loadFirstScript(TF_WEBGPU_URLS);
+        } catch {
+          // WebGPU is optional; TensorFlow.js includes the WebGL fallback.
+        }
+      }
     } catch {
       throw new Error("VOCAL_RUNTIME_DOWNLOAD_FAILED");
     }
@@ -47,7 +85,7 @@ async function getModel(runtime, modelSourcePreference) {
     activeBackend = runtime.getBackend();
     await runtime.ready();
     const failures = [];
-    const candidates = await orderModelUrlsForNetwork(modelUrls(modelSourcePreference));
+    const candidates = modelUrls(modelSourcePreference);
     for (const url of candidates) {
       try {
         return await runtime.loadGraphModel(url);

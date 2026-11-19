@@ -263,6 +263,7 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
   const assumptions = [];
   const descriptions = [];
   let customExplanation = "";
+  const smartFeatureQuestion = /^(?:how\s+(?:does|do|would)|what\s+(?:does|is|are)|tell\s+me\s+(?:about|how))\s+(?:the\s+)?(?:remove\s+pauses?|silence\s+removal|ai\s+rough\s+cut|rough\s+cut)\b/i.test(text);
 
   let opCounter = 1;
   const nextId = () => `act-${opCounter++}`;
@@ -288,6 +289,14 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
         const nextGrade = { ...currentGrade };
         if (nextGrade.temperature !== undefined) nextGrade.temperature = Math.min(100, nextGrade.temperature + 20);
         if (nextGrade.saturation !== undefined) nextGrade.saturation = Math.max(-100, Math.min(100, nextGrade.saturation + (nextGrade.saturation < 0 ? -15 : 20)));
+        for (const wheel of ["shadows", "midtones", "highlights", "offset"]) {
+          if (nextGrade[wheel]?.luminance !== undefined) {
+            nextGrade[wheel] = {
+              ...nextGrade[wheel],
+              luminance: Math.min(100, nextGrade[wheel].luminance + 15),
+            };
+          }
+        }
         actions.push({
           id: nextId(),
           type: "clip.set_color_grade",
@@ -653,8 +662,8 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
         colorGrade.temperature = /\b(?:cool|cooler|blue)\b/i.test(text) ? -15 : 15;
       }
       if (hasBrighter) {
-        colorGrade.highlights = 20;
-        colorGrade.shadows = 20;
+        colorGrade.highlights = { luminance: 20 };
+        colorGrade.shadows = { luminance: 20 };
       }
       actions.push({
         id: nextId(),
@@ -1051,23 +1060,30 @@ export function parseNaturalLanguageEditingPlan(prompt, projectSummary = {}, con
   }
 
   // 12. Smart Features: Rough Cut & Silence Removal
-  if (/\b(?:rough\s+cut|remove\s+filler\s+words?)\b/i.test(text)) {
+  const requestsFillerRemoval = /\b(?:remove|cut|delete|strip)\s+(?:the\s+)?filler(?:\s+words?)?\b/i.test(text);
+  const requestsRoughCut = /\b(?:make|create|apply)?\s*(?:a\s+|this\s+|the\s+)?(?:basic\s+|clean\s+)?rough\s+cut\b/i.test(text)
+    || /\bmake\s+(?:this\s+)?(?:video|interview|footage)\s+tighter\b/i.test(text)
+    || requestsFillerRemoval;
+  const requestsPauseRemoval = /\b(?:silence\s+removal|(?:remove|cut(?:\s*out)?|delete|clear|clean\s+up)\s+(?:the\s+)?(?:long\s+|unnecessary\s+)?(?:pauses?|silence|silent\s+gaps?|gaps?|dead\s+air)|cut\s+silence)\b/i.test(text);
+  const smartClipId = resolveClipTargetFromText(text, projectSummary, projectSummary?.selectedClipId || visuals[0]?.id || "");
+  if (!smartFeatureQuestion && requestsRoughCut) {
     actions.push({
       id: nextId(),
       type: "tool.rough_cut",
-      description: "Detect and cut speech filler words ('um', 'uh')",
-      params: {},
+      description: requestsFillerRemoval
+        ? "Analyze pauses and filler words for AI Rough Cut review"
+        : "Analyze pauses for AI Rough Cut review",
+      params: { clipId: smartClipId, removeFillerWords: requestsFillerRemoval },
     });
-    descriptions.push("AI Rough Cut");
-  }
-  if (/\b(?:silence\s+removal|(?:remove|cut(?:\s*out)?)\s+(?:long\s+)?pauses?|cut\s+silence|dead\s+air)\b/i.test(text)) {
+    descriptions.push("AI Rough Cut review");
+  } else if (!smartFeatureQuestion && requestsPauseRemoval) {
     actions.push({
       id: nextId(),
       type: "tool.silence_removal",
-      description: "Detect and remove silent pauses exceeding threshold",
-      params: {},
+      description: "Analyze silent gaps for Remove Pauses review",
+      params: { clipId: smartClipId },
     });
-    descriptions.push("Silence Removal");
+    descriptions.push("Remove Pauses review");
   }
   if (/\b(?:detect\s+scenes|scene\s+detection)\b/i.test(text)) {
     actions.push({

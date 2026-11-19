@@ -181,6 +181,27 @@ test("App review apply callback: preserves provenance on new captions without re
 function projectFixture() {
     return { visualSegments: [], captionSegments: [], audioSegments: [], musicSegments: [], visualOverlaySegments: [], stickerSegments: [], trackLocks: {}, script: "", commandState: { schemaVersion: 1, revision: 0, appliedOperationIds: [], projectIdentity: "project-A" } };
 }
+function assistantSmartFixture(type, callback, params = {}) {
+    let project = {
+        ...projectFixture(),
+        visualSegments: [
+            { id: "v1", type: "video", name: "Selected", duration: 5, blob },
+            { id: "v2", type: "video", name: "Target", duration: 5, blob },
+        ],
+    };
+    const commits = []; const notices = [];
+    const props = {
+        getProjectSnapshot: () => project,
+        onApplyPlan: async next => { commits.push(next); project = next; },
+        selectedVisualSegmentId: "v1",
+        notify: text => notices.push(text),
+        ...(type === "tool.silence_removal" ? { onOpenSilenceRemoval: callback } : { onOpenRoughCut: callback }),
+    };
+    const h = mount(AiAssistantPanel, props); h.render();
+    const plan = prepareAssistantProposal({ actions: [{ type, params }], explanation: type === "tool.rough_cut" ? "Create a clean rough cut" : "Remove silent gaps" }, captureAssistantBase(project), `approval-${type}`);
+    deps.assistant.setMessages([{ id: "proposal", text: "Review Smart edit", plan, status: "pending" }]); h.render();
+    return { h, plan, commits, notices, approve: () => deps.assistant.handleApplyApprovedPlan("proposal", plan) };
+}
 function assistantFixture(generator, mixed = false) {
     let project = projectFixture(); const commits = []; const notices = [];
     const props = { getProjectSnapshot: () => project, onApplyPlan: async next => { commits.push(next); project = next; }, onGenerateCaptions: generator, notify: text => notices.push(text) };
@@ -206,6 +227,78 @@ for (const mode of ["fast", "hq", "local", "fallback", "failure", "fallback-fail
     if (!failed) { assert.deepEqual(getTranscriptionOutcome(a.commits[0].captionSegments), disclosure.transcriptionOutcome); if (mixed) assert.equal(a.commits[0].ratioId, "9:16"); }
     await a.approve(); assert.equal(deps.calls, 1, "duplicate approval must not rerun ASR");
 });
+test("Assistant Smart approval opens Remove Pauses review without committing and follows apply/dismiss lifecycle", async () => {
+    const requests = [];
+    const a = assistantSmartFixture("tool.silence_removal", async request => {
+        requests.push(request);
+        return { status: "review-ready", clipId: request.clipId, candidateCount: 2 };
+    }, { clipId: "v2" });
+
+    await a.approve(); a.h.render();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].clipId, "v2");
+    assert.equal(requests[0].signal instanceof AbortSignal, true);
+    assert.equal(requests[0].settings, undefined);
+    assert.equal(a.commits.length, 0, "analysis/review must not commit a timeline plan");
+    assert.equal(deps.assistant.messages[0].status, "review-ready");
+    assert.match(deps.assistant.messages[0].text, /2 candidates are ready/i);
+    assert.match(deps.assistant.messages[0].text, /timeline is unchanged until you confirm Apply/i);
+    assert.match(a.notices.at(-1), /2 candidates are ready/i);
+
+    requests[0].onApplied(); a.h.render();
+    assert.equal(deps.assistant.messages[0].status, "applied");
+    assert.match(deps.assistant.messages[0].text, /Remove Pauses was applied to the timeline/i);
+
+    const dismissed = assistantSmartFixture("tool.silence_removal", async request => {
+        requests.push(request);
+        return { status: "review-ready", clipId: request.clipId, candidateCount: 1 };
+    }, { clipId: "v2" });
+    await dismissed.approve(); dismissed.h.render();
+    requests.at(-1).onDismissed(); dismissed.h.render();
+    assert.equal(deps.assistant.messages[0].status, "rejected");
+    assert.match(deps.assistant.messages[0].text, /Review dismissed\. The timeline was not changed/i);
+    assert.equal(dismissed.commits.length, 0);
+});
+
+test("Assistant Smart approval forwards Rough Cut filler settings and resolved default target", async () => {
+    let request;
+    const a = assistantSmartFixture("tool.rough_cut", async value => {
+        request = value;
+        return { status: "review-ready", clipId: value.clipId, candidateCount: 0 };
+    }, { removeFillerWords: true });
+
+    await a.approve(); a.h.render();
+    assert.equal(request.clipId, "v1");
+    assert.equal(request.signal instanceof AbortSignal, true);
+    assert.deepEqual(request.settings, { removeFillerWords: true });
+    assert.equal(a.commits.length, 0);
+    assert.equal(deps.assistant.messages[0].status, "review-ready");
+    assert.match(deps.assistant.messages[0].text, /0 candidates are ready/i);
+});
+
+for (const status of ["cancelled", "busy", "locked", "unsupported", "failed"]) test(`Assistant Smart approval handles ${status} without timeline commits`, async () => {
+    const a = assistantSmartFixture("tool.rough_cut", async () => status === "failed" ? { status, code: "vadUnavailable" } : { status });
+    await a.approve(); a.h.render();
+
+    assert.equal(a.commits.length, 0);
+    if (status === "cancelled") {
+        assert.equal(deps.assistant.messages[0].status, "rejected");
+        assert.match(deps.assistant.messages[0].text, /analysis was cancelled.*timeline was not changed/is);
+        assert.match(a.notices.at(-1), /analysis was cancelled/i);
+    } else {
+        assert.equal(deps.assistant.messages[0].status, "error");
+        assert.equal(deps.assistant.messages.at(-1).status, "error");
+        const expected = {
+            busy: /analysis is already running/i,
+            locked: /cannot run while the affected track is locked/i,
+            unsupported: /requires a supported video clip/i,
+            failed: /analysis failed/i,
+        }[status];
+        assert.match(deps.assistant.messages.at(-1).text, expected);
+        assert.match(a.notices.at(-1), expected);
+    }
+});
+
 for (const condition of ["stale", "locked", "rejected", "invalid-mixed", "changed-during-asr", "cancelled-during-asr"]) test(`Assistant approval guard unchanged: ${condition}`, async () => {
     setup(condition.includes("during") ? "deferred" : "fast");
     const a = assistantFixture(options => deps.asr(blob, options), true);

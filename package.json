@@ -27,6 +27,7 @@
     "test:e2e:silence-removal": "node scripts/e2e-silence-removal-test.mjs",
     "test:e2e:rough-cut": "node scripts/e2e-rough-cut-test.mjs",
     "test:e2e:smart-pipeline": "node scripts/e2e-smart-pipeline-test.mjs",
+    "test:e2e:overlay-template-real-app": "node scripts/verify-overlay-template-real-app.mjs",
     "test:e2e:assistant": "node scripts/e2e-assistant-test.mjs",
     "test:e2e:generator": "node scripts/e2e-generator-test.mjs",
     "test:e2e:chat-generator": "node scripts/e2e-chat-first-generator-test.mjs",

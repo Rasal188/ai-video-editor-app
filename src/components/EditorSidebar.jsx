@@ -3,6 +3,7 @@ import { CaretDown } from "@phosphor-icons/react";
 import { COMPACT_WORKSPACE_QUERY, TOOL_RAIL } from "../config/editor.js";
 import { MediaPanel, ToolPanel } from "./panels.jsx";
 import { PluginCatalogPanel } from "./GenerationPlugins.jsx";
+import { OverlayTemplateLibrary } from "./OverlayTemplateLibrary.jsx";
 
 export function EditorSidebar({ model: d }) {
   const toolRailRef = useRef(null);
@@ -120,6 +121,14 @@ export function EditorSidebar({ model: d }) {
               d.selectTool("smart");
               if (window.matchMedia?.(COMPACT_WORKSPACE_QUERY).matches) d.setMobilePanel?.("inspector");
             }}
+          />
+        ) : d.activeTool === "templates" ? (
+          <OverlayTemplateLibrary
+            notify={d.notify}
+            onApplyTemplate={d.applyOverlayTemplate}
+            userAssets={d.userAssets}
+            visualSegments={d.visualSegments}
+            visualOverlaySegments={d.visualOverlaySegments}
           />
         ) : d.activeTool === "plugins" ? (
           <PluginCatalogPanel

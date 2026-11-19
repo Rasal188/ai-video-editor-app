@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  isEditorInteractiveTarget,
+  isEditorShortcutBlockedByModal,
+  isEditorTextEntryTarget,
+} from "../lib/editorShortcuts.js";
 import { normalizeTimelineMarkers } from "../lib/timelineMarkers.js";
 
 import {
@@ -22,6 +27,11 @@ function cloneItems(items = []) {
       colorGrade: item.colorGrade ? { ...item.colorGrade } : undefined,
       mask: item.mask ? { ...item.mask } : undefined,
       animation: item.animation ? { ...item.animation } : undefined,
+      text: item.text ? { ...item.text } : undefined,
+      shape: item.shape ? { ...item.shape } : undefined,
+      templateLayout: item.templateLayout ? { ...item.templateLayout } : undefined,
+      templateCanvas: item.templateCanvas ? { ...item.templateCanvas } : undefined,
+      mediaPresentation: item.mediaPresentation ? { ...item.mediaPresentation } : undefined,
     };
   });
 }
@@ -377,14 +387,13 @@ export function useEditorHistory(d) {
 
   useEffect(() => {
     const handleHistoryShortcut = (event) => {
-      const target = event.target;
-      const isTyping = target instanceof HTMLElement && (
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.isContentEditable
-      );
-      if (isTyping || (!event.metaKey && !event.ctrlKey) || event.altKey) return;
+      if (
+        event.defaultPrevented || event.isComposing || event.repeat ||
+        isEditorTextEntryTarget(event.target) ||
+        isEditorInteractiveTarget(event.target) ||
+        isEditorShortcutBlockedByModal() ||
+        (!event.metaKey && !event.ctrlKey) || event.altKey
+      ) return;
       if (event.key.toLowerCase() !== "z") return;
       event.preventDefault();
       if (event.shiftKey) redo();

@@ -19,7 +19,9 @@ function getWorker() {
   if (typeof Worker === "undefined") throw new Error("VOCAL_WORKER_UNAVAILABLE");
   if (worker) return worker;
 
-  worker = new Worker(new URL("../workers/vocal-separation.worker.js", import.meta.url));
+  worker = new Worker(
+    new URL("../workers/vocal-separation.worker.js", import.meta.url),
+  );
   worker.addEventListener("message", ({ data }) => {
     const request = requests.get(data?.requestId);
     if (!request) return;
@@ -63,7 +65,7 @@ function runWorker(left, right, sampleRate, onProgress) {
   });
 }
 
-export async function separateVocals(blob, onProgress = () => {}) {
+export async function separateVocals(blob, onProgress = () => { }) {
   const context = new AudioContext({ sampleRate: 44100 });
   try {
     const decoded = await context.decodeAudioData((await blob.arrayBuffer()).slice(0));
@@ -71,7 +73,7 @@ export async function separateVocals(blob, onProgress = () => {}) {
     const right = decoded.numberOfChannels > 1 ? decoded.getChannelData(1).slice() : left.slice();
     return await runWorker(left, right, decoded.sampleRate, onProgress);
   } finally {
-    await context.close().catch(() => {});
+    await context.close().catch(() => { });
   }
 }
 

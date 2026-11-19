@@ -1,6 +1,34 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { readFile, unlink } from "node:fs/promises";
+import { resolveSafeStoragePath } from "../services/storage/storageSecurity.js";
 import { setupTestEnvironment, withServer } from "./test-helpers.js";
+
+const PNG_BYTES = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d,
+]);
+
+async function uploadImage(baseUrl, cookie, {
+  bytes = PNG_BYTES,
+  contentType = "image/png",
+  filename = "template-image.png",
+  width = 320,
+  height = 180,
+} = {}) {
+  return fetch(`${baseUrl}/api/assets/upload`, {
+    method: "POST",
+    headers: {
+      "Content-Type": contentType,
+      "X-File-Name": encodeURIComponent(filename),
+      "X-Image-Width": String(width),
+      "X-Image-Height": String(height),
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    body: bytes,
+  });
+}
 
 describe("Assets API", () => {
   let env;
@@ -83,6 +111,182 @@ describe("Assets API", () => {
           }),
         });
         assert.equal(linkRes.status, 403);
+      });
+    });
+  });
+
+  describe("Persistent Overlay Template Images", () => {
+    it("should reject unauthenticated binary uploads", async () => {
+      await withServer(env.app, async (baseUrl) => {
+        const response = await uploadImage(baseUrl, "");
+        assert.equal(response.status, 401);
+        const body = await response.json();
+        assert.equal(body.code, "UNAUTHORIZED");
+      });
+    });
+
+    it("should persist, list, serve, and delete owner-scoped image content", async () => {
+      const owner = await env.createSession("template.asset.owner@example.com");
+      const other = await env.createSession("template.asset.other@example.com");
+
+      await withServer(env.app, async (baseUrl) => {
+        const uploadResponse = await uploadImage(baseUrl, owner.cookie, {
+          filename: "My Overlay.png",
+          width: 640,
+          height: 360,
+        });
+        assert.equal(uploadResponse.status, 201);
+        const { asset } = await uploadResponse.json();
+        assert.equal(asset.owner_id, owner.user.id);
+        assert.equal(asset.project_id, null);
+        assert.equal(asset.filename, "My Overlay.png");
+        assert.equal(asset.media_type, "image");
+        assert.equal(asset.mime_type, "image/png");
+        assert.equal(asset.metadata.scope, "overlay-template");
+        assert.equal(asset.metadata.width, 640);
+        assert.equal(asset.metadata.height, 360);
+        assert.match(asset.sha256, /^[a-f0-9]{64}$/);
+        assert.match(asset.storage_path, /^assets\//);
+
+        const absolutePath = resolveSafeStoragePath(asset.storage_path);
+        assert.equal(existsSync(absolutePath), true);
+        assert.deepEqual(await readFile(absolutePath), PNG_BYTES);
+
+        const listResponse = await fetch(`${baseUrl}/api/assets?limit=100`, {
+          headers: { Cookie: owner.cookie },
+        });
+        assert.equal(listResponse.status, 200);
+        const listBody = await listResponse.json();
+        assert.equal(listBody.assets.some((item) => item.id === asset.id), true);
+
+        const contentResponse = await fetch(`${baseUrl}/api/assets/${asset.id}/content`, {
+          headers: { Cookie: owner.cookie },
+        });
+        assert.equal(contentResponse.status, 200);
+        assert.equal(contentResponse.headers.get("content-type"), "image/png");
+        assert.deepEqual(Buffer.from(await contentResponse.arrayBuffer()), PNG_BYTES);
+
+        const forbiddenResponse = await fetch(`${baseUrl}/api/assets/${asset.id}/content`, {
+          headers: { Cookie: other.cookie },
+        });
+        assert.equal(forbiddenResponse.status, 403);
+
+        const deleteResponse = await fetch(`${baseUrl}/api/assets/${asset.id}`, {
+          method: "DELETE",
+          headers: { Cookie: owner.cookie },
+        });
+        assert.equal(deleteResponse.status, 200);
+        assert.equal(existsSync(absolutePath), false);
+      });
+    });
+
+    it("should keep duplicate-content records isolated when one is deleted", async () => {
+      const session = await env.createSession("template.asset.duplicates@example.com");
+
+      await withServer(env.app, async (baseUrl) => {
+        const firstResponse = await uploadImage(baseUrl, session.cookie, { filename: "first.png" });
+        const secondResponse = await uploadImage(baseUrl, session.cookie, { filename: "second.png" });
+        assert.equal(firstResponse.status, 201);
+        assert.equal(secondResponse.status, 201);
+        const first = (await firstResponse.json()).asset;
+        const second = (await secondResponse.json()).asset;
+        assert.equal(first.sha256, second.sha256);
+        assert.notEqual(first.storage_path, second.storage_path);
+
+        const deleteFirst = await fetch(`${baseUrl}/api/assets/${first.id}`, {
+          method: "DELETE",
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(deleteFirst.status, 200);
+
+        const secondContent = await fetch(`${baseUrl}/api/assets/${second.id}/content`, {
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(secondContent.status, 200);
+        assert.deepEqual(Buffer.from(await secondContent.arrayBuffer()), PNG_BYTES);
+
+        const secondPath = resolveSafeStoragePath(second.storage_path);
+        const deleteSecond = await fetch(`${baseUrl}/api/assets/${second.id}`, {
+          method: "DELETE",
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(deleteSecond.status, 200);
+        assert.equal(existsSync(secondPath), false);
+      });
+    });
+
+    it("should reject unsupported types, invalid signatures, and active SVG content", async () => {
+      const session = await env.createSession("template.asset.validation@example.com");
+
+      await withServer(env.app, async (baseUrl) => {
+        const unsupported = await uploadImage(baseUrl, session.cookie, {
+          contentType: "image/gif",
+          filename: "animation.gif",
+          bytes: Buffer.from("GIF89a"),
+        });
+        assert.equal(unsupported.status, 400);
+        assert.equal((await unsupported.json()).code, "UNSUPPORTED_ASSET_TYPE");
+
+        const invalidSignature = await uploadImage(baseUrl, session.cookie, {
+          bytes: Buffer.from("not a png"),
+        });
+        assert.equal(invalidSignature.status, 400);
+        assert.equal((await invalidSignature.json()).code, "INVALID_IMAGE_SIGNATURE");
+
+        const unsafeSvg = await uploadImage(baseUrl, session.cookie, {
+          contentType: "image/svg+xml",
+          filename: "unsafe.svg",
+          bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'),
+        });
+        assert.equal(unsafeSvg.status, 400);
+        assert.equal((await unsafeSvg.json()).code, "UNSAFE_SVG");
+
+        const safeSvgBytes = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path fill="#7c3aed" d="M0 0h10v10H0z"/></svg>');
+        const safeSvg = await uploadImage(baseUrl, session.cookie, {
+          contentType: "image/svg+xml",
+          filename: "safe.svg",
+          bytes: safeSvgBytes,
+          width: 10,
+          height: 10,
+        });
+        assert.equal(safeSvg.status, 201);
+        const asset = (await safeSvg.json()).asset;
+
+        const content = await fetch(`${baseUrl}/api/assets/${asset.id}/content`, {
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(content.status, 200);
+        assert.equal(content.headers.get("content-type"), "image/svg+xml");
+        assert.match(content.headers.get("content-security-policy"), /default-src 'none'/);
+        assert.deepEqual(Buffer.from(await content.arrayBuffer()), safeSvgBytes);
+
+        await fetch(`${baseUrl}/api/assets/${asset.id}`, {
+          method: "DELETE",
+          headers: { Cookie: session.cookie },
+        });
+      });
+    });
+
+    it("should return a stable 404 when persisted metadata points to a missing file", async () => {
+      const session = await env.createSession("template.asset.missing@example.com");
+
+      await withServer(env.app, async (baseUrl) => {
+        const uploadResponse = await uploadImage(baseUrl, session.cookie);
+        assert.equal(uploadResponse.status, 201);
+        const asset = (await uploadResponse.json()).asset;
+        await unlink(resolveSafeStoragePath(asset.storage_path));
+
+        const contentResponse = await fetch(`${baseUrl}/api/assets/${asset.id}/content`, {
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(contentResponse.status, 404);
+        assert.equal((await contentResponse.json()).code, "ASSET_CONTENT_NOT_FOUND");
+
+        const deleteResponse = await fetch(`${baseUrl}/api/assets/${asset.id}`, {
+          method: "DELETE",
+          headers: { Cookie: session.cookie },
+        });
+        assert.equal(deleteResponse.status, 200);
       });
     });
   });

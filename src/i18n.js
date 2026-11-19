@@ -771,19 +771,19 @@ const PROJECT_CHROME_COPY = {
 };
 
 const CORE_LABEL_COPY = {
-  zh: { smart: "智能", fit: "适应", visualSelectClip: "请在画面轨道中选择一个片段" },
-  en: { smart: "Smart", fit: "Fit", visualSelectClip: "Select a clip on the Visuals track" },
-  ja: { smart: "スマート", fit: "全体表示", visualSelectClip: "映像トラックのクリップを選択してください" },
-  ko: { smart: "스마트", fit: "화면 맞춤", visualSelectClip: "화면 트랙에서 클립을 선택하세요" },
-  es: { smart: "Inteligente", fit: "Ajustar", visualSelectClip: "Selecciona un clip en la pista de imagen" },
-  fr: { smart: "Intelligent", fit: "Ajuster", visualSelectClip: "Sélectionnez un clip dans la piste visuelle" },
-  de: { smart: "Intelligent", fit: "Einpassen", visualSelectClip: "Clip in der Bildspur auswählen" },
-  pt: { smart: "Inteligente", fit: "Ajustar", visualSelectClip: "Selecione um clipe na faixa visual" },
-  th: { smart: "อัจฉริยะ", fit: "พอดี", visualSelectClip: "เลือกคลิปในแทร็กภาพ" },
-  vi: { smart: "Thông minh", fit: "Vừa khung", visualSelectClip: "Chọn một clip trong rãnh hình ảnh" },
-  ru: { smart: "Умные", fit: "Вписать", visualSelectClip: "Выберите клип на видеодорожке" },
-  it: { smart: "Smart", fit: "Adatta", visualSelectClip: "Seleziona una clip nella traccia video", complete: "Completa", cancel: "Annulla", reset: "Ripristina", apply: "Applica" },
-  id: { smart: "Cerdas", fit: "Sesuaikan", visualSelectClip: "Pilih klip di trek visual", complete: "Selesai", cancel: "Batal", reset: "Atur ulang", apply: "Terapkan" },
+  zh: { smart: "智能", templates: "模板", fit: "适应", visualSelectClip: "请在画面轨道中选择一个片段" },
+  en: { smart: "Smart", templates: "Templates", fit: "Fit", visualSelectClip: "Select a clip on the Visuals track" },
+  ja: { smart: "スマート", templates: "テンプレート", fit: "全体表示", visualSelectClip: "映像トラックのクリップを選択してください" },
+  ko: { smart: "스마트", templates: "템플릿", fit: "화면 맞춤", visualSelectClip: "화면 트랙에서 클립을 선택하세요" },
+  es: { smart: "Inteligente", templates: "Plantillas", fit: "Ajustar", visualSelectClip: "Selecciona un clip en la pista de imagen" },
+  fr: { smart: "Intelligent", templates: "Modèles", fit: "Ajuster", visualSelectClip: "Sélectionnez un clip dans la piste visuelle" },
+  de: { smart: "Intelligent", templates: "Vorlagen", fit: "Einpassen", visualSelectClip: "Clip in der Bildspur auswählen" },
+  pt: { smart: "Inteligente", templates: "Modelos", fit: "Ajustar", visualSelectClip: "Selecione um clipe na faixa visual" },
+  th: { smart: "อัจฉริยะ", templates: "เทมเพลต", fit: "พอดี", visualSelectClip: "เลือกคลิปในแทร็กภาพ" },
+  vi: { smart: "Thông minh", templates: "Mẫu", fit: "Vừa khung", visualSelectClip: "Chọn một clip trong rãnh hình ảnh" },
+  ru: { smart: "Умные", templates: "Шаблоны", fit: "Вписать", visualSelectClip: "Выберите клип на видеодорожке" },
+  it: { smart: "Smart", templates: "Modelli", fit: "Adatta", visualSelectClip: "Seleziona una clip nella traccia video", complete: "Completa", cancel: "Annulla", reset: "Ripristina", apply: "Applica" },
+  id: { smart: "Cerdas", templates: "Templat", fit: "Sesuaikan", visualSelectClip: "Pilih klip di trek visual", complete: "Selesai", cancel: "Batal", reset: "Atur ulang", apply: "Terapkan" },
 };
 
 const LOCALIZATION_REVIEW_COPY = {

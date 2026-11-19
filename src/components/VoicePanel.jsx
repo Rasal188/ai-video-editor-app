@@ -126,6 +126,40 @@ function VectorDesignRange({ label, value, min, max, step = 1, suffix = "", onCh
   );
 }
 
+function TemplateOverlayContentControls({ segment, onUpdate }) {
+  if (segment?.kind === "text" && segment.text) {
+    const patchText = (patch) => onUpdate?.({ text: { ...segment.text, ...patch } });
+    return (
+      <section className="template-overlay-content-controls">
+        <strong>Text content</strong>
+        <label><span>Text</span><textarea rows={3} value={segment.text.content || ""} onChange={(event) => patchText({ content: event.target.value })} /></label>
+        <div className="template-overlay-content-grid">
+          <label><span>Size</span><input type="number" min="4" max="500" value={segment.text.fontSize || 48} onChange={(event) => patchText({ fontSize: Number(event.target.value) })} /></label>
+          <label><span>Weight</span><input type="number" min="100" max="900" step="100" value={segment.text.fontWeight || 700} onChange={(event) => patchText({ fontWeight: Number(event.target.value) })} /></label>
+          <label><span>Color</span><input type="color" value={segment.text.color || "#ffffff"} onChange={(event) => patchText({ color: event.target.value })} /></label>
+          <label><span>Align</span><select value={segment.text.align || "center"} onChange={(event) => patchText({ align: event.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+        </div>
+      </section>
+    );
+  }
+  if (segment?.kind === "shape" && segment.shape) {
+    const patchShape = (patch) => onUpdate?.({ shape: { ...segment.shape, ...patch } });
+    return (
+      <section className="template-overlay-content-controls">
+        <strong>Shape style</strong>
+        <div className="template-overlay-content-grid">
+          <label><span>Shape</span><select value={segment.shape.shapeType || "rect"} onChange={(event) => patchShape({ shapeType: event.target.value })}><option value="rect">Rectangle</option><option value="ellipse">Ellipse</option><option value="triangle">Triangle</option><option value="line">Line</option></select></label>
+          <label><span>Fill</span><input type="color" value={segment.shape.fill || "#ffffff"} onChange={(event) => patchShape({ fill: event.target.value })} /></label>
+          <label><span>Stroke</span><input type="color" value={segment.shape.stroke || segment.shape.fill || "#ffffff"} onChange={(event) => patchShape({ stroke: event.target.value })} /></label>
+          <label><span>Stroke width</span><input type="number" min="0" max="40" value={segment.shape.strokeWidth || 0} onChange={(event) => patchShape({ strokeWidth: Number(event.target.value) })} /></label>
+          {segment.shape.shapeType === "rect" ? <label><span>Radius</span><input type="number" min="0" max="2000" value={segment.shape.radius || 0} onChange={(event) => patchShape({ radius: Number(event.target.value) })} /></label> : null}
+        </div>
+      </section>
+    );
+  }
+  return null;
+}
+
 const VECTOR_PART_LABEL_KEYS = {
   text: ["vectorPartText", "文字"],
   rectangle: ["vectorPartRectangle", "矩形"],
@@ -1670,6 +1704,7 @@ export function VoicePanel({
         {isStickerContext ? <StickerContextPanel t={t} segment={selectedStickerSegment} updateStickerSegment={updateStickerSegment} deleteStickerSegment={deleteStickerSegment} /> : null}
         {isOverlayContext ? <div className="visual-overlay-inspector">
           {!mobileInspectorSection ? <div className={`sticker-properties-preview ${isVectorOverlay ? "is-vector" : ""}`}>{selectedVisualOverlay.type === "video" ? <video src={selectedVisualOverlay.src} muted playsInline /> : <img src={selectedVisualOverlay.src} alt="" style={isVectorOverlay ? { filter: vectorOverlayAppearance.filter, opacity: vectorOverlayAppearance.opacity, mixBlendMode: vectorOverlayAppearance.cssBlendMode } : undefined} />}</div> : null}
+          {!mobileInspectorSection ? <TemplateOverlayContentControls segment={selectedVisualOverlay} onUpdate={updateVisualOverlaySegment} /> : null}
           <VisualEffectsPanel
             contextMode
             audioEditor={selectedTrackAudioSegment?.embeddedVideo ? <AudioClipContextPanel t={t} segment={{ ...selectedTrackAudioSegment, id: selectedTrackAudioSegment.segmentId }} updateAudioSegment={updateSelectedTrackAudioSegment} /> : null}

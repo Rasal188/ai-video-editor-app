@@ -114,7 +114,7 @@ function VisualOverlayMedia({ overlay, src, style, isPlaying, localTime }) {
       const context = canvas.getContext("2d", { alpha: true });
       if (parallaxActive && !(depthEffect.enabled && depthEffect.output !== "cinematic")) drawPhotoParallaxFrame(context, source, canvas, { effect: parallaxEffect, depthVisual: depthImage, fitMode: "contain", filter: style?.filter, time: localTime });
       else drawCinematicDepthFrame(context, source, canvas, { effect: depthEffect, ...depthFrame, depthVisual: depthImage, fitMode: "contain", filter: style?.filter });
-    }).catch(() => {});
+    }).catch(() => { });
     return () => { canceled = true; };
   }, [depthEffect, depthRenderActive, depthUrl, overlay.depthAnalysis?.nextDepthUrl, overlay.depthAnalysis?.depthMix, localTime, overlay.type, parallaxActive, parallaxEffect, style?.filter, decodedFrameRevision]);
   return <>
@@ -228,7 +228,7 @@ export function PreviewStage({
       backgroundVideo.currentTime = sourceVideo.currentTime;
     }
     if (sourceVideo.paused) backgroundVideo.pause();
-    else void backgroundVideo.play().catch(() => {});
+    else void backgroundVideo.play().catch(() => { });
   };
   const visualTransform = resolveVisualTransform(visualEffects?.keyframes, visualLocalTime, visualEffects?.baseTransform);
   const visualAnimation = resolveVisualClipAnimation(visualEffects?.animation, visualLocalTime, visualEffects?.duration);
@@ -271,11 +271,11 @@ export function PreviewStage({
   const previewPixelRatio = typeof window === "undefined" ? 1 : Math.max(1, window.devicePixelRatio || 1);
   const renderedVisualSrc = visualEffects?.kind === "vector" || visualEffects?.vectorBody
     ? getVectorRenderSource(visualEffects, {
-        targetWidth: frameWidth,
-        targetHeight: frameHeight,
-        pixelRatio: previewPixelRatio,
-        scale: Math.max(1, visualTransform.scale * visualAnimation.scale),
-      })
+      targetWidth: frameWidth,
+      targetHeight: frameHeight,
+      pixelRatio: previewPixelRatio,
+      scale: Math.max(1, visualTransform.scale * visualAnimation.scale),
+    })
     : baseRenderedVisualSrc;
   const frameMinDimension = Math.min(frameWidth, frameHeight);
   const stickerBaseSize = getStickerBaseSize({ width: frameWidth, height: frameHeight });
@@ -292,10 +292,10 @@ export function PreviewStage({
   };
   const visualContentBox = activeObjectFit === "contain"
     ? getVisualFitRect(
-        { width: visualEffects?.width, height: visualEffects?.height },
-        { width: frameWidth, height: frameHeight },
-        "contain",
-      )
+      { width: visualEffects?.width, height: visualEffects?.height },
+      { width: frameWidth, height: frameHeight },
+      "contain",
+    )
     : { x: 0, y: 0, width: frameWidth, height: frameHeight };
   const hasVisualContentBox = visualContentBox.width > 0 && visualContentBox.height > 0;
   const transformBox = hasVisualContentBox
@@ -350,7 +350,7 @@ export function PreviewStage({
         fitMode: activeObjectFit,
         filter: selectedFilterCss,
       });
-    }).catch(() => {});
+    }).catch(() => { });
     return () => { canceled = true; };
   }, [activeObjectFit, depthAnalysis?.depthUrl, depthAnalysis?.nextDepthUrl, depthAnalysis?.depthMix, depthRenderActive, frameHeight, frameWidth, normalizedCinematicDepth, normalizedPhotoParallax, photoParallaxActive, previewPixelRatio, previewVideoRef, previewVisualType, selectedFilterCss, visualLocalTime, decodedFrameRevision]);
   const startMaskEdit = (event, mode) => {
@@ -629,9 +629,8 @@ export function PreviewStage({
       </header> : null}
       <div
         ref={previewShellRef}
-        className={`preview-canvas fit-${fitMode} ${hasPreviewContent ? "" : "is-empty"} ${
-          previewVisualSrc && !trackVisibility.image ? "is-image-hidden" : ""
-        }`}
+        className={`preview-canvas fit-${fitMode} ${hasPreviewContent ? "" : "is-empty"} ${previewVisualSrc && !trackVisibility.image ? "is-image-hidden" : ""
+          }`}
         style={{ "--preview-ratio": previewRatio }}
         data-asset-drop-track={previewVisualSrc ? "overlay" : "image"}
         onPointerDown={(event) => {
@@ -658,9 +657,8 @@ export function PreviewStage({
         ) : (
           <div
             ref={previewCanvasRef}
-            className={`preview-frame ${previewVisualSrc && !trackVisibility.image ? "is-image-hidden" : ""} ${
-              backgroundRemoved ? "has-background-removed" : ""
-            } ${smartCropActive ? "has-smart-crop" : ""}`}
+            className={`preview-frame ${previewVisualSrc && !trackVisibility.image ? "is-image-hidden" : ""} ${backgroundRemoved ? "has-background-removed" : ""
+              } ${smartCropActive ? "has-smart-crop" : ""}`}
             data-hidden-label={t("imageHidden")}
             style={activePreviewFrameStyle}
             onPointerDown={(event) => {
@@ -676,8 +674,8 @@ export function PreviewStage({
                   style={normalizedSubjectEffect.background.visible === false
                     ? { background: "#0b1116" }
                     : normalizedSubjectEffect.background.mode === "color"
-                    ? { background: normalizedSubjectEffect.background.color, opacity: normalizedSubjectEffect.background.opacity }
-                    : undefined}
+                      ? { background: normalizedSubjectEffect.background.color, opacity: normalizedSubjectEffect.background.opacity }
+                      : undefined}
                 >
                   {normalizedSubjectEffect.background.visible !== false && normalizedSubjectEffect.background.mode === "blur" ? (
                     previewVisualType === "video"
@@ -819,9 +817,9 @@ export function PreviewStage({
               const hasOverlayMask = overlayMask.type && overlayMask.type !== "none";
               const overlayMaskUrl = hasOverlayMask
                 ? getVisualMaskSvgDataUrl(overlayMask, {
-                    width: Math.max(1, containBox.width * animatedTransform.scale),
-                    height: Math.max(1, containBox.height * animatedTransform.scale),
-                  })
+                  width: Math.max(1, containBox.width * animatedTransform.scale),
+                  height: Math.max(1, containBox.height * animatedTransform.scale),
+                })
                 : "";
               const style = {
                 left: `${50 + animatedTransform.x}%`,
@@ -831,6 +829,7 @@ export function PreviewStage({
                 transform: `translate(-50%, -50%) rotate(${animatedTransform.rotation}deg)`,
                 opacity: animatedTransform.opacity * (isVector ? vectorAppearance.opacity : 1),
                 mixBlendMode: isVector ? vectorAppearance.cssBlendMode : undefined,
+                overflow: overlay.mediaPresentation ? "hidden" : undefined,
                 WebkitMaskImage: overlayMaskUrl ? `url("${overlayMaskUrl}")` : undefined,
                 maskImage: overlayMaskUrl ? `url("${overlayMaskUrl}")` : undefined,
                 WebkitMaskSize: overlayMaskUrl ? "100% 100%" : undefined,
@@ -838,15 +837,22 @@ export function PreviewStage({
                 WebkitMaskRepeat: overlayMaskUrl ? "no-repeat" : undefined,
                 maskRepeat: overlayMaskUrl ? "no-repeat" : undefined,
               };
-              const mediaStyle = { filter: isVector ? vectorAppearance.filter : overlayFilter };
+              const mediaStyle = {
+                filter: isVector ? vectorAppearance.filter : overlayFilter,
+                ...(overlay.mediaPresentation ? {
+                  objectFit: overlay.mediaPresentation.fit || "cover",
+                  objectPosition: `${overlay.mediaPresentation.positionX ?? 50}% ${overlay.mediaPresentation.positionY ?? 50}%`,
+                  transform: `scale(${overlay.mediaPresentation.zoom || 1})`,
+                } : {}),
+              };
               const cutoutFilter = `${overlayFilter === "none" ? "" : overlayFilter} url(#${overlaySubjectFilterId})`.trim();
               const overlayRenderSrc = isVector
                 ? getVectorRenderSource(overlay, {
-                    targetWidth: containBox.width * animatedTransform.scale,
-                    targetHeight: containBox.height * animatedTransform.scale,
-                    pixelRatio: previewPixelRatio,
-                    scale: 1,
-                  })
+                  targetWidth: containBox.width * animatedTransform.scale,
+                  targetHeight: containBox.height * animatedTransform.scale,
+                  pixelRatio: previewPixelRatio,
+                  scale: 1,
+                })
                 : overlay.src;
               const selected = overlay.id === selectedVisualOverlayId;
               const overlayCenterX = frameWidth * (0.5 + animatedTransform.x / 100);
@@ -867,30 +873,30 @@ export function PreviewStage({
                     && overlaySubjectEffect.background.visible !== false
                     && overlaySubjectEffect.background.mode === "color"
                     ? <span
-                        className="visual-overlay-subject-background"
-                        style={{
-                          background: overlaySubjectEffect.background.color,
-                          opacity: overlaySubjectEffect.background.opacity,
-                        }}
-                      />
+                      className="visual-overlay-subject-background"
+                      style={{
+                        background: overlaySubjectEffect.background.color,
+                        opacity: overlaySubjectEffect.background.opacity,
+                      }}
+                    />
                     : null}
                   {showOverlayOriginal ? <VisualOverlayMedia overlay={overlay} src={overlayRenderSrc} style={mediaStyle} isPlaying={isPlaying} localTime={localTime} /> : null}
                   {overlaySubjectActive
                     && overlaySubjectEffect.background.visible !== false
                     && overlaySubjectEffect.background.mode === "blur"
                     ? <span className="visual-overlay-subject-background">
-                        <VisualOverlayMedia
-                          overlay={overlay}
-                          src={overlayRenderSrc}
-                          style={{
-                            filter: `blur(${overlaySubjectEffect.background.blur}px) brightness(${1 - overlaySubjectEffect.background.darken})`,
-                            opacity: overlaySubjectEffect.background.opacity,
-                            transform: "scale(1.08)",
-                          }}
-                          isPlaying={isPlaying}
-                          localTime={localTime}
-                        />
-                      </span>
+                      <VisualOverlayMedia
+                        overlay={overlay}
+                        src={overlayRenderSrc}
+                        style={{
+                          filter: `blur(${overlaySubjectEffect.background.blur}px) brightness(${1 - overlaySubjectEffect.background.darken})`,
+                          opacity: overlaySubjectEffect.background.opacity,
+                          transform: "scale(1.08)",
+                        }}
+                        isPlaying={isPlaying}
+                        localTime={localTime}
+                      />
+                    </span>
                     : null}
                   {overlaySubjectActive ? <img
                     className="visual-overlay-subject-cutout"
@@ -936,22 +942,22 @@ export function PreviewStage({
             {overlaySnapGuides.map((guide) => <div className={`visual-snap-guide is-${guide}`} key={guide} />)}
             {showVisionOverlays
               ? visionOverlayBoxes.map((detection, index) => (
-                  <div
-                    className={`vision-detection-box ${detection.isSubject ? "is-subject" : ""}`}
-                    key={`${detection.label || "object"}-${index}`}
-                    style={{
-                      left: `${detection.xMin * 100}%`,
-                      top: `${detection.yMin * 100}%`,
-                      width: `${Math.max(0, detection.xMax - detection.xMin) * 100}%`,
-                      height: `${Math.max(0, detection.yMax - detection.yMin) * 100}%`,
-                    }}
-                  >
-                    <span>
-                      {detection.label || "subject"}
-                      {Number.isFinite(detection.score) ? ` ${Math.round(detection.score * 100)}%` : ""}
-                    </span>
-                  </div>
-                ))
+                <div
+                  className={`vision-detection-box ${detection.isSubject ? "is-subject" : ""}`}
+                  key={`${detection.label || "object"}-${index}`}
+                  style={{
+                    left: `${detection.xMin * 100}%`,
+                    top: `${detection.yMin * 100}%`,
+                    width: `${Math.max(0, detection.xMax - detection.xMin) * 100}%`,
+                    height: `${Math.max(0, detection.yMax - detection.yMin) * 100}%`,
+                  }}
+                >
+                  <span>
+                    {detection.label || "subject"}
+                    {Number.isFinite(detection.score) ? ` ${Math.round(detection.score * 100)}%` : ""}
+                  </span>
+                </div>
+              ))
               : null}
             {smartCropActive || captionAvoidanceActive || backgroundRemoved ? (
               <div className="preview-ai-badges" aria-hidden="true">

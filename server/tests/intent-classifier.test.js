@@ -75,9 +75,17 @@ Narration: Discover timeless beauty.`;
       assert.equal(res.type, "editing");
     });
 
-    it("should classify pause/silence removal as editing", () => {
-      const res = classifyUserIntent("Remove long pauses.");
-      assert.equal(res.type, "editing");
+    it("should classify natural pause and silence cleanup requests as editing", () => {
+      for (const prompt of [
+        "Remove long pauses.",
+        "Remove the silent gaps from this video.",
+        "Remove unnecessary pauses from this interview.",
+        "Clean up the gaps in my video.",
+        "Remove dead air without cutting off any words.",
+      ]) {
+        const res = classifyUserIntent(prompt);
+        assert.equal(res.type, "editing", prompt);
+      }
     });
 
     it("should classify adding captions to current project as editing", () => {
@@ -105,9 +113,17 @@ Narration: Discover timeless beauty.`;
       assert.equal(res.type, "editing");
     });
 
-    it("should classify rough cut operations as editing", () => {
-      const res = classifyUserIntent("Apply rough cut to strip filler words and silence.");
-      assert.equal(res.type, "editing");
+    it("should classify rough cut and tightening requests as editing", () => {
+      for (const prompt of [
+        "Apply rough cut to strip filler words and silence.",
+        "Make a rough cut of this interview.",
+        "Create a basic rough cut.",
+        "Make this video tighter while preserving the important content.",
+        "Create a clean rough cut from this footage.",
+      ]) {
+        const res = classifyUserIntent(prompt);
+        assert.equal(res.type, "editing", prompt);
+      }
     });
 
     it("should classify audio volume / muting as editing", () => {
@@ -128,6 +144,23 @@ Narration: Discover timeless beauty.`;
     it("should classify edits explicitly targeting the generated video as editing", () => {
       const res = classifyUserIntent("In the generated video, remove long pauses and add captions.");
       assert.equal(res.type, "editing");
+    });
+  });
+
+  describe("Smart Feature Informational Intent", () => {
+    it("should explain Remove Pauses without producing an editing intent", () => {
+      const res = classifyUserIntent("How does Remove Pauses work?");
+      assert.equal(res.type, "informational");
+      assert.match(res.message, /timeline changes only after you confirm Apply/i);
+      assert.match(res.reason, /non-mutating question/i);
+    });
+
+    it("should explain AI Rough Cut without producing an editing intent", () => {
+      const res = classifyUserIntent("What does AI Rough Cut do?");
+      assert.equal(res.type, "informational");
+      assert.match(res.message, /pauses/i);
+      assert.match(res.message, /filler words/i);
+      assert.match(res.message, /timeline changes only after you confirm Apply/i);
     });
   });
 

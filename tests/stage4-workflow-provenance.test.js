@@ -43,6 +43,7 @@ const loader = registerHooks({
     },
 });
 const { useRoughCut } = await import("../src/hooks/useRoughCut.js");
+const { useSilenceRemoval } = await import("../src/hooks/useSilenceRemoval.js");
 const { useSmartPipeline } = await import("../src/hooks/useSmartPipeline.js");
 const { useShortsStudio } = await import("../src/hooks/useShortsStudio.js");
 const { useAutoEdit } = await import("../src/hooks/useAutoEdit.js");
@@ -196,4 +197,119 @@ test("Shorts: conversion reanchors word timings without dropping provider/speake
     assert.equal(project.captionSegments[0].words[0].speaker, "speaker-1");
     assert.equal(getTranscriptionOutcome(project).provider, "ollalink-hq");
     assert.equal(getTranscriptionOutcome(project.captionSegments[0]).provider, "ollalink-hq");
+});
+
+function assistantSmartFixture() {
+    const first = { id: "v1", type: "video", name: "First", duration: 5, sourceStart: 0, sourceDuration: 5, playbackRate: 1, blob };
+    const target = { id: "v2", type: "video", name: "Target", duration: 5, sourceStart: 0, sourceDuration: 5, playbackRate: 1, blob };
+    const snapshot = {
+        visualSegments: [first, target], captionSegments: [], audioSegments: [], musicSegments: [],
+        visualOverlaySegments: [], stickerSegments: [], trackLocks: {}, sourceAudioLinked: false,
+        musicStart: 0, musicDuration: 0,
+    };
+    const runtime = { visualSegments: [first, target] };
+    const reviews = [];
+    const options = {
+        selectedSegment: first, visualSegments: runtime.visualSegments, projectVersion: 1,
+        language: "en", rippleEditing: true, locked: false,
+        getSnapshot: () => snapshot, getRuntime: () => runtime,
+        applyReview: (review, message) => reviews.push({ review, message }),
+        setRippleEditing: () => { }, seekTo: () => { }, t,
+    };
+    return { first, target, snapshot, runtime, reviews, options };
+}
+
+function pauseProbabilities() {
+    const probabilities = new Float32Array(160);
+    probabilities.fill(0.05);
+    probabilities.fill(0.9, 0, 30);
+    probabilities.fill(0.9, 105, 155);
+    return probabilities;
+}
+
+test("Remove Pauses Assistant contract targets the requested clip and reports review/apply/dismiss states", async () => {
+    const fixture = assistantSmartFixture();
+    const analyzed = [];
+    deps.vad = async (clip, { onProgress }) => {
+        analyzed.push(clip.id);
+        onProgress?.(50, "pauseDetecting");
+        return pauseProbabilities();
+    };
+    const applied = [];
+    const dismissed = [];
+    const h = mount(useSilenceRemoval, fixture.options);
+
+    const result = await h.render().run({
+        clipId: fixture.target.id,
+        settings: { minimum: 0.5, keep: 0.1 },
+        onApplied: value => applied.push(value),
+        onDismissed: () => dismissed.push(true),
+    });
+    assert.equal(result.status, "review-ready");
+    assert.equal(result.clipId, fixture.target.id);
+    assert.ok(result.candidateCount > 0);
+    assert.deepEqual(analyzed, [fixture.target.id]);
+    assert.equal(fixture.reviews.length, 0, "analysis must not mutate the timeline");
+
+    fixture.options.selectedSegment = fixture.target;
+    h.render().apply();
+    assert.equal(fixture.reviews.length, 1);
+    assert.ok(fixture.reviews[0].review.duration < 10);
+    assert.deepEqual(applied, [{ clipId: fixture.target.id, candidateCount: result.candidateCount }]);
+
+    await h.render().run({ clipId: fixture.target.id, onDismissed: () => dismissed.push(true) });
+    h.render().dismiss();
+    assert.deepEqual(dismissed, [true]);
+});
+
+test("AI Rough Cut Assistant contract forwards filler settings and applies only after review confirmation", async () => {
+    const fixture = assistantSmartFixture();
+    let asrCalls = 0;
+    deps.vad = async () => pauseProbabilities();
+    deps.asr = async () => {
+        asrCalls++;
+        return transcript(success("ollalink-fast"));
+    };
+    const applied = [];
+    const h = mount(useRoughCut, fixture.options);
+    const result = await h.render().run({
+        clipId: fixture.target.id,
+        settings: { removeFillerWords: true, minimum: 0.5, keep: 0.1 },
+        onApplied: value => applied.push(value),
+    });
+
+    assert.equal(result.status, "review-ready");
+    assert.equal(result.clipId, fixture.target.id);
+    assert.ok(result.candidateCount > 0);
+    assert.equal(asrCalls, 1);
+    assert.equal(h.render().settings.removeFillerWords, true);
+    assert.equal(fixture.reviews.length, 0, "analysis must leave the timeline unchanged");
+
+    fixture.options.selectedSegment = fixture.target;
+    h.render().apply();
+    assert.equal(fixture.reviews.length, 1);
+    assert.ok(fixture.reviews[0].review.duration < 10);
+    assert.deepEqual(applied, [{ clipId: fixture.target.id, candidateCount: result.candidateCount }]);
+});
+
+test("Smart hook Assistant contract reports locked, unsupported, busy, cancelled, and failed analysis", async () => {
+    const lockedFixture = assistantSmartFixture();
+    lockedFixture.options.locked = true;
+    assert.deepEqual(await mount(useSilenceRemoval, lockedFixture.options).render().run({ clipId: "v2" }), { status: "locked", code: "pauseLocked" });
+
+    const unsupportedFixture = assistantSmartFixture();
+    assert.deepEqual(await mount(useRoughCut, unsupportedFixture.options).render().run({ clipId: "missing" }), { status: "unsupported", code: "roughCutUnsupported" });
+
+    const busyFixture = assistantSmartFixture();
+    deps.vad = async (_clip, { signal }) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true }));
+    const busyHook = mount(useSilenceRemoval, busyFixture.options);
+    const controller = new AbortController();
+    const pending = busyHook.render().run({ clipId: "v2", signal: controller.signal });
+    assert.deepEqual(await busyHook.render().run({ clipId: "v2" }), { status: "busy" });
+    controller.abort();
+    assert.deepEqual(await pending, { status: "cancelled" });
+
+    const failedFixture = assistantSmartFixture();
+    deps.vad = async () => { throw Object.assign(new Error("private failure"), { code: "vadUnavailable" }); };
+    assert.deepEqual(await mount(useSilenceRemoval, failedFixture.options).render().run({ clipId: "v2" }), { status: "failed", code: "vadUnavailable" });
 });

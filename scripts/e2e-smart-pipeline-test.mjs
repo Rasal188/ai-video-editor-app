@@ -26,6 +26,62 @@ const DEV_SERVER_URL = process.env.EDITOR_URL || "http://localhost:5173/?view=ed
 const ARTIFACTS_DIR = resolve("test-artifacts/playwright");
 const SAMPLE_MEDIA_PATH = resolve("test-artifacts/silence-test-sample.mp4");
 
+function createDeterministicPlan() {
+  return {
+    rawChunks: [
+      { text: " Welcome", timestamp: [0.0, 0.6] },
+      { text: " um", timestamp: [0.7, 1.0] },
+      { text: " to", timestamp: [1.1, 1.3] },
+      { text: " the", timestamp: [1.3, 1.5] },
+      { text: " timeline", timestamp: [1.5, 2.0] },
+    ],
+    captionSegments: [
+      {
+        id: "cap-1",
+        text: "Welcome to the timeline",
+        start: 0.0,
+        end: 2.0,
+        words: [
+          { word: "Welcome", start: 0.0, end: 0.6 },
+          { word: "to", start: 1.1, end: 1.3 },
+          { word: "the", start: 1.3, end: 1.5 },
+          { word: "timeline", start: 1.5, end: 2.0 },
+        ],
+      },
+    ],
+    candidates: [
+      {
+        id: "candidate-cut-1",
+        type: "pause",
+        label: "Pause Gap",
+        start: 2.0,
+        end: 3.5,
+        duration: 1.5,
+        sourceStart: 2.0,
+        sourceEnd: 3.5,
+        selected: true,
+      },
+      {
+        id: "candidate-cut-2",
+        type: "filler",
+        label: 'Filler: "um"',
+        start: 0.7,
+        end: 1.0,
+        duration: 0.3,
+        sourceStart: 0.7,
+        sourceEnd: 1.0,
+        selected: true,
+      },
+    ],
+    stats: {
+      totalPauseSeconds: 1.5,
+      pauseCount: 1,
+      fillerCount: 1,
+      captionCount: 1,
+    },
+  };
+}
+
 async function obtainTestAuthCookie() {
   try {
     const { config } = await import("../server/config.js");
@@ -75,6 +131,37 @@ async function resolveBrowserLauncher() {
   } catch {
     return { channel: "chrome" };
   }
+}
+
+async function waitForProjectStability(page, { stableFor = 2000, timeout = 20000 } = {}) {
+  const startedAt = Date.now();
+  let stableSince = 0;
+  let previousToken = "";
+
+  while (Date.now() - startedAt < timeout) {
+    const token = await page.evaluate(() => {
+      if (typeof window.__PROJECT_SNAPSHOT__ !== "function") return "";
+      const snapshot = window.__PROJECT_SNAPSHOT__();
+      const { commandState, timelineZoom: _timelineZoom, ...content } = snapshot || {};
+      return JSON.stringify({
+        revision: commandState?.revision ?? -1,
+        changing: Boolean(commandState?.changing),
+        content,
+      });
+    });
+
+    if (token && token === previousToken) {
+      if (!stableSince) stableSince = Date.now();
+      if (Date.now() - stableSince >= stableFor) return;
+    } else {
+      previousToken = token;
+      stableSince = token ? Date.now() : 0;
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error("Project did not become stable before Smart Pipeline review");
 }
 
 async function runSmartPipelineE2ETest() {
@@ -166,7 +253,9 @@ async function runSmartPipelineE2ETest() {
       await page.waitForTimeout(400);
     }
 
-    await page.waitForTimeout(800);
+    // Wait for metadata, compatibility probing, and project-history ownership to settle
+    // before capturing the review fingerprint.
+    await waitForProjectStability(page);
     const initialClips = await page.locator('[data-timeline-segment-track="image"]').count();
     console.log(`✔ Initial timeline clip count: ${initialClips}`);
 
@@ -208,85 +297,47 @@ async function runSmartPipelineE2ETest() {
     const startBtn = page.locator('[data-testid="smart-pipeline-start-btn"]');
     await startBtn.click();
 
-    // Verify progress spinner or cancel button appears
+    // Verify progress spinner or cancel button appears. Dispatch the click in-page so a
+    // fast analysis cannot detach the button between Playwright actionability checks.
     const cancelBtn = page.locator('[data-testid="smart-pipeline-cancel-btn"]');
     if (await cancelBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       console.log("✔ Stage 2 (Analyzing) entered with active progress bar.");
-      await cancelBtn.click();
-      console.log("✔ Analysis cancelled via Cancel button.");
-      await page.waitForTimeout(400);
+      const cancelled = await page.evaluate(() => {
+        const button = document.querySelector('[data-testid="smart-pipeline-cancel-btn"]');
+        if (!button) return false;
+        button.click();
+        return true;
+      });
+      if (cancelled) {
+        console.log("✔ Analysis cancelled via Cancel button.");
+        await page.waitForTimeout(400);
 
-      // Verify returned to Stage 1 without timeline modifications
-      const clipsAfterCancel = await page.locator('[data-timeline-segment-track="image"]').count();
-      if (clipsAfterCancel !== initialClips) {
-        throw new Error(`Timeline clip count altered during cancelled analysis! Expected ${initialClips}, got ${clipsAfterCancel}`);
+        // Verify returned to Stage 1 without timeline modifications
+        const clipsAfterCancel = await page.locator('[data-timeline-segment-track="image"]').count();
+        if (clipsAfterCancel !== initialClips) {
+          throw new Error(`Timeline clip count altered during cancelled analysis! Expected ${initialClips}, got ${clipsAfterCancel}`);
+        }
+        console.log("✔ Cancellation safety confirmed: zero timeline modifications.");
+      } else {
+        console.log("- Analysis completed before cancellation could be dispatched; continuing with review validation.");
       }
-      console.log("✔ Cancellation safety confirmed: zero timeline modifications.");
     }
+
+    // Cancellation can race with final media ownership and command-clock updates. Require
+    // the same stable project state used by the direct smart-tool browser workflows before
+    // injecting a deterministic plan and capturing its stale-review fingerprint.
+    await waitForProjectStability(page);
 
     // Step 5: Test Guided Pipeline Review via simulated analysis plan
     console.log("\n=== Step 5: Guided Pipeline Review (Captions & Rough Cuts) ===");
     // Inject a deterministic analysis plan into the modal to thoroughly test Stage 3, 4, 5, 6
-    await page.evaluate(() => {
-      const plan = {
-        rawChunks: [
-          { text: " Welcome", timestamp: [0.0, 0.6] },
-          { text: " um", timestamp: [0.7, 1.0] },
-          { text: " to", timestamp: [1.1, 1.3] },
-          { text: " the", timestamp: [1.3, 1.5] },
-          { text: " timeline", timestamp: [1.5, 2.0] },
-        ],
-        captionSegments: [
-          {
-            id: "cap-1",
-            text: "Welcome to the timeline",
-            start: 0.0,
-            end: 2.0,
-            words: [
-              { word: "Welcome", start: 0.0, end: 0.6 },
-              { word: "to", start: 1.1, end: 1.3 },
-              { word: "the", start: 1.3, end: 1.5 },
-              { word: "timeline", start: 1.5, end: 2.0 },
-            ],
-          },
-        ],
-        candidates: [
-          {
-            id: "candidate-cut-1",
-            type: "pause",
-            label: "Pause Gap",
-            start: 2.0,
-            end: 3.5,
-            duration: 1.5,
-            sourceStart: 2.0,
-            sourceEnd: 3.5,
-            selected: true,
-          },
-          {
-            id: "candidate-cut-2",
-            type: "filler",
-            label: 'Filler: "um"',
-            start: 0.7,
-            end: 1.0,
-            duration: 0.3,
-            sourceStart: 0.7,
-            sourceEnd: 1.0,
-            selected: true,
-          },
-        ],
-        stats: {
-          totalPauseSeconds: 1.5,
-          pauseCount: 1,
-          fillerCount: 1,
-          captionCount: 1,
-        },
-      };
+    await page.evaluate((plan) => {
       window.dispatchEvent(
         new CustomEvent("test:open-smart-pipeline", {
           detail: { plan },
         })
       );
-    });
+    }, createDeterministicPlan());
     await page.waitForTimeout(500);
 
     // Verify advanced to captions stage
@@ -354,11 +405,17 @@ async function runSmartPipelineE2ETest() {
     // Step 9: Apply approved changes
     console.log("\n=== Step 9: Applying approved changes to timeline ===");
     await applyBtn.click();
-    await page.waitForTimeout(800);
 
-    // Verify Stage 6: Applied success screen
+    // Verify Stage 6: Applied success screen, or report the product error directly.
     const continueBtn = page.locator('[data-testid="smart-pipeline-continue-btn"]');
-    await continueBtn.waitFor({ state: "visible", timeout: 5000 });
+    const errorBanner = page.locator(".smart-pipeline-error-banner");
+    await Promise.race([
+      continueBtn.waitFor({ state: "visible", timeout: 5000 }),
+      errorBanner.waitFor({ state: "visible", timeout: 5000 }),
+    ]);
+    if (await errorBanner.isVisible().catch(() => false)) {
+      throw new Error(`Smart Pipeline apply failed: ${await errorBanner.innerText()}`);
+    }
     console.log("✔ Stage 6: Success screen displayed with 'Continue Editing' action.");
 
     const step5Screenshot = resolve(ARTIFACTS_DIR, "smart-pipeline-5-applied.png");
@@ -386,12 +443,64 @@ async function runSmartPipelineE2ETest() {
       console.log("✔ Single atomic Undo restored timeline to original single clip!");
     }
 
-    // Press Ctrl+Y to redo
-    await page.keyboard.press("Control+y");
-    await page.waitForTimeout(600);
+    // The editor's cross-platform redo shortcut is Ctrl/Cmd+Shift+Z.
+    await page.keyboard.press("Control+Shift+z");
+    await page.waitForFunction(
+      (expected) => document.querySelectorAll('[data-timeline-segment-track="image"]').length === expected,
+      finalClips,
+      { timeout: 5000 },
+    );
     const redoneClips = await page.locator('[data-timeline-segment-track="image"]').count();
     console.log(`Clip count after Redo: ${redoneClips}`);
+    if (redoneClips !== finalClips) {
+      throw new Error(`Redo did not restore the applied Smart Pipeline timeline! Expected ${finalClips}, got ${redoneClips}`);
+    }
     console.log("✔ Redo successfully reapplied smart edits!");
+
+    // Step 12: Prove a genuine project edit after plan capture still invalidates review.
+    console.log("\n=== Step 12: Testing stale-plan rejection after a real project edit ===");
+    const stalePage = await context.newPage();
+    if (!authCookie) {
+      await stalePage.route("**/api/auth/me", (route) => route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ success: true, user: { id: "test-user-e2e", email: "e2e.alice@example.com" } }),
+      }));
+    }
+    await stalePage.goto(DEV_SERVER_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await stalePage.waitForSelector(".editor-grid", { state: "visible", timeout: 25000 });
+    await stalePage.locator("input.sr-only[type='file']").first().setInputFiles(SAMPLE_MEDIA_PATH);
+    await stalePage.waitForSelector('[data-timeline-segment-track="image"]', { state: "visible", timeout: 15000 });
+    await waitForProjectStability(stalePage);
+
+    await stalePage.locator(".tool-rail button").filter({ hasText: /Smart|智能/i }).first().click();
+    await stalePage.locator('[data-testid="smart-tool-smart-pipeline"]').first().click();
+    await stalePage.locator('[data-testid="smart-pipeline-modal"]').waitFor({ state: "visible", timeout: 5000 });
+    await stalePage.evaluate((plan) => {
+      window.dispatchEvent(new CustomEvent("test:open-smart-pipeline", { detail: { plan } }));
+    }, createDeterministicPlan());
+    await stalePage.locator('[data-testid="smart-pipeline-to-cuts-btn"]').click();
+    await stalePage.locator('[data-testid="smart-pipeline-to-review-btn"]').click();
+
+    await stalePage.evaluate(() => {
+      const snapshot = window.__PROJECT_SNAPSHOT__?.();
+      if (!snapshot) throw new Error("Development project snapshot bridge is unavailable");
+      window.dispatchEvent(new CustomEvent("test:apply-project", {
+        detail: {
+          ...snapshot,
+          script: `${snapshot.script || ""}\nSmart Pipeline stale-guard mutation`,
+        },
+      }));
+    });
+    await waitForProjectStability(stalePage);
+    await stalePage.locator('[data-testid="smart-pipeline-apply-btn"]').click();
+    const staleError = stalePage.locator(".smart-pipeline-error-banner");
+    await staleError.waitFor({ state: "visible", timeout: 5000 });
+    const staleErrorText = await staleError.innerText();
+    if (!/modified during analysis|re-analyze/i.test(staleErrorText)) {
+      throw new Error(`Expected stale-plan rejection after project edit, got: ${staleErrorText}`);
+    }
+    console.log("✔ Real project edit invalidated the captured plan and required re-analysis.");
+    await stalePage.close();
 
     const finalScreenshot = resolve(ARTIFACTS_DIR, "smart-pipeline-6-final.png");
     await page.screenshot({ path: finalScreenshot });
@@ -401,8 +510,8 @@ async function runSmartPipelineE2ETest() {
     console.log("✔ ALL PHASE 4 SMART EDITING PIPELINE E2E TESTS PASSED!");
     console.log("==================================================================");
   } finally {
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await context.close().catch(() => { });
+    await browser.close().catch(() => { });
   }
 }
 

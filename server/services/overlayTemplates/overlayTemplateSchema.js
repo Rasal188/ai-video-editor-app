@@ -78,6 +78,19 @@ function optionalString(value, field, maxLength) {
     return trimmed;
 }
 
+function editableTextContent(value, field, maxLength) {
+    if (typeof value !== "string") {
+        throw new BadRequestError(`Template ${field} must be a string.`, "INVALID_TEMPLATE_TEXT");
+    }
+    if (value.length > maxLength) {
+        throw new BadRequestError(
+            `Template ${field} must be at most ${maxLength} characters.`,
+            "INVALID_TEMPLATE_FIELD"
+        );
+    }
+    return value;
+}
+
 function finiteNumber(value, field, { min = -Infinity, max = Infinity, fallback = 0 } = {}) {
     const num = Number(value);
     if (!Number.isFinite(num)) {
@@ -125,11 +138,14 @@ export function normalizeTemplateCanvas(canvas) {
         throw new BadRequestError("Template canvas must be an object.", "INVALID_TEMPLATE_CANVAS");
     }
     const aspectRatio = optionalString(canvas.aspectRatio, "canvas.aspectRatio", 16) || DEFAULT_CANVAS.aspectRatio;
-    return {
+    const normalized = {
         aspectRatio,
         width: boundedInteger(canvas.width, "canvas.width", { min: 16, max: 10000, fallback: DEFAULT_CANVAS.width }),
         height: boundedInteger(canvas.height, "canvas.height", { min: 16, max: 10000, fallback: DEFAULT_CANVAS.height }),
     };
+    const background = optionalString(canvas.background, "canvas.background", 64);
+    if (background) normalized.background = background;
+    return normalized;
 }
 
 function normalizeBaseTransform(transform = {}, context = "baseTransform") {
@@ -192,6 +208,19 @@ export function normalizeTemplateMask(mask = {}) {
     };
 }
 
+function normalizeElementLayout(layout, context) {
+    if (layout === undefined || layout === null) return null;
+    if (!isPlainObject(layout)) {
+        throw new BadRequestError(`Template ${context}.layout must be an object.`, "INVALID_TEMPLATE_FIELD");
+    }
+    return {
+        x: finiteNumber(layout.x, `${context}.layout.x`, { min: -10000, max: 20000, fallback: 0 }),
+        y: finiteNumber(layout.y, `${context}.layout.y`, { min: -10000, max: 20000, fallback: 0 }),
+        width: finiteNumber(layout.width, `${context}.layout.width`, { min: 1, max: 20000, fallback: 100 }),
+        height: finiteNumber(layout.height, `${context}.layout.height`, { min: 1, max: 20000, fallback: 100 }),
+    };
+}
+
 function normalizeMediaReference(media, context) {
     if (!isPlainObject(media)) {
         throw new BadRequestError(
@@ -229,6 +258,10 @@ function normalizeMediaReference(media, context) {
         mimeType: optionalString(media.mimeType, `${context}.media.mimeType`, 128),
         width: boundedInteger(media.width, `${context}.media.width`, { min: 1, max: 20000, fallback: 1 }),
         height: boundedInteger(media.height, `${context}.media.height`, { min: 1, max: 20000, fallback: 1 }),
+        fit: ["contain", "cover", "fill"].includes(media.fit) ? media.fit : "cover",
+        positionX: finiteNumber(media.positionX, `${context}.media.positionX`, { min: 0, max: 100, fallback: 50 }),
+        positionY: finiteNumber(media.positionY, `${context}.media.positionY`, { min: 0, max: 100, fallback: 50 }),
+        zoom: finiteNumber(media.zoom, `${context}.media.zoom`, { min: 0.1, max: 10, fallback: 1 }),
     };
 }
 
@@ -247,6 +280,7 @@ function normalizeVectorPayload(vector, context) {
         );
     }
     return {
+        assetId: optionalString(vector.assetId || vector.vectorAssetId, `${context}.vector.assetId`, 64),
         body,
         background: optionalString(vector.background || vector.vectorBackground, `${context}.vector.background`, 128) || "transparent",
         colorSlots: Array.isArray(vector.colorSlots || vector.vectorColorSlots)
@@ -263,22 +297,26 @@ function normalizeTextPayload(text, context) {
             "INVALID_TEMPLATE_TEXT"
         );
     }
-    const content = optionalString(text.content, `${context}.text.content`, 500);
-    if (!content) {
-        throw new BadRequestError(
-            `Template ${context}.text.content is required for text elements.`,
-            "INVALID_TEMPLATE_TEXT"
-        );
-    }
+    const content = editableTextContent(text.content, `${context}.text.content`, 500);
     return {
         content,
         fontId: optionalString(text.fontId, `${context}.text.fontId`, 64),
+        fontFamily: optionalString(text.fontFamily, `${context}.text.fontFamily`, 120) || "Inter, system-ui, sans-serif",
         fontSize: boundedInteger(text.fontSize, `${context}.text.fontSize`, { min: 4, max: 500, fallback: 48 }),
+        fontWeight: boundedInteger(text.fontWeight, `${context}.text.fontWeight`, { min: 100, max: 900, fallback: 700 }),
+        italic: text.italic === true,
+        lineHeight: finiteNumber(text.lineHeight, `${context}.text.lineHeight`, { min: 0.5, max: 4, fallback: 1.1 }),
+        letterSpacing: finiteNumber(text.letterSpacing, `${context}.text.letterSpacing`, { min: -20, max: 100, fallback: 0 }),
         color: optionalString(text.color, `${context}.text.color`, 64) || "#ffffff",
         strokeColor: optionalString(text.strokeColor, `${context}.text.strokeColor`, 64),
         strokeWidth: finiteNumber(text.strokeWidth, `${context}.text.strokeWidth`, { min: 0, max: 40, fallback: 0 }),
+        shadowColor: optionalString(text.shadowColor, `${context}.text.shadowColor`, 64) || "#000000",
+        shadowBlur: finiteNumber(text.shadowBlur, `${context}.text.shadowBlur`, { min: 0, max: 100, fallback: 0 }),
+        shadowOffsetX: finiteNumber(text.shadowOffsetX, `${context}.text.shadowOffsetX`, { min: -200, max: 200, fallback: 0 }),
+        shadowOffsetY: finiteNumber(text.shadowOffsetY, `${context}.text.shadowOffsetY`, { min: -200, max: 200, fallback: 0 }),
         shadowOpacity: finiteNumber(text.shadowOpacity, `${context}.text.shadowOpacity`, { min: 0, max: 1, fallback: 0 }),
-        align: optionalString(text.align, `${context}.text.align`, 16) || "center",
+        align: ["left", "center", "right"].includes(text.align) ? text.align : "center",
+        verticalAlign: ["top", "middle", "bottom"].includes(text.verticalAlign) ? text.verticalAlign : "middle",
         maxWidthPct: finiteNumber(text.maxWidthPct, `${context}.text.maxWidthPct`, { min: 5, max: 100, fallback: 80 }),
     };
 }
@@ -290,8 +328,9 @@ function normalizeShapePayload(shape, context) {
             "INVALID_TEMPLATE_SHAPE"
         );
     }
+    const shapeType = shape.shapeType || shape.type;
     return {
-        shapeType: optionalString(shape.shapeType || shape.type, `${context}.shape.shapeType`, 32) || "rect",
+        shapeType: ["rect", "ellipse", "triangle", "line"].includes(shapeType) ? shapeType : "rect",
         fill: optionalString(shape.fill, `${context}.shape.fill`, 64) || "#ffffff",
         stroke: optionalString(shape.stroke, `${context}.shape.stroke`, 64),
         strokeWidth: finiteNumber(shape.strokeWidth, `${context}.shape.strokeWidth`, { min: 0, max: 40, fallback: 0 }),
@@ -329,13 +368,17 @@ export function normalizeTemplateElement(element, index = 0) {
         animation: normalizeTemplateAnimation(element.animation),
         mask: normalizeTemplateMask(element.mask),
         filterId: optionalString(element.filterId, `${context}.filterId`, 64),
-        layer: boundedInteger(element.layer, `${context}.layer`, { min: 1, max: 10, fallback: 2 }),
+        layer: boundedInteger(element.layer, `${context}.layer`, { min: 1, max: 64, fallback: 2 }),
         lane: element.lane === undefined || element.lane === null
             ? null
             : boundedInteger(element.lane, `${context}.lane`, { min: 0, max: 99, fallback: 0 }),
         start: finiteNumber(element.start, `${context}.start`, { min: 0, max: 86400, fallback: 0 }),
         duration,
     };
+    const layout = normalizeElementLayout(element.layout, context);
+    if (layout) normalized.layout = layout;
+    if (typeof element.visible === "boolean") normalized.visible = element.visible;
+    if (typeof element.locked === "boolean") normalized.locked = element.locked;
 
     if (isPlainObject(element.subjectEffect) || typeof element.subjectEffect === "string") {
         normalized.subjectEffect = element.subjectEffect;

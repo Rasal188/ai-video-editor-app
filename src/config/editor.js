@@ -4,6 +4,7 @@ import { MusicNote } from "@phosphor-icons/react/dist/csr/MusicNote";
 import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
 import { PlugsConnected } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { Scan } from "@phosphor-icons/react/dist/csr/Scan";
+import { SquaresFour } from "@phosphor-icons/react/dist/csr/SquaresFour";
 import { Sticker } from "@phosphor-icons/react/dist/csr/Sticker";
 
 export const SAMPLE_IMAGE = "/assets/sample-portrait.png";
@@ -236,6 +237,7 @@ export const TOOL_RAIL = [
   { id: "smart", label: "智能", icon: Scan },
   { id: "audio", label: "音频", icon: MusicNote },
   { id: "effects", label: "特效", icon: MagicWand },
+  { id: "templates", label: "模板", icon: SquaresFour },
   { id: "plugins", label: "插件", icon: PlugsConnected },
   { id: "stickers", label: "贴纸", icon: Sticker },
 ];

@@ -300,15 +300,31 @@ export function validateActionParams(type, rawParams) {
       const scope = params.scope && typeof params.scope === "string" ? params.scope.trim().toLowerCase() : (clipId === "all" ? "all" : "clip");
       const grade = params.colorGrade && typeof params.colorGrade === "object" ? params.colorGrade : (params.grade || {});
       const cleanGrade = {};
-      const fields = ["temperature", "tint", "saturation", "shadows", "midtones", "highlights", "offset"];
-      for (const f of fields) {
-        if (grade[f] !== undefined && grade[f] !== null) {
-          const num = Number(grade[f]);
-          if (!Number.isFinite(num) || num < -100 || num > 100) {
-            throw new Error(`clip.set_color_grade ${f} must be a number between -100 and 100.`);
-          }
-          cleanGrade[f] = Math.round(num);
+      for (const field of ["temperature", "tint", "saturation"]) {
+        if (grade[field] === undefined || grade[field] === null) continue;
+        const num = Number(grade[field]);
+        if (!Number.isFinite(num) || num < -100 || num > 100) {
+          throw new Error(`clip.set_color_grade ${field} must be a number between -100 and 100.`);
         }
+        cleanGrade[field] = Math.round(num);
+      }
+      for (const wheel of ["shadows", "midtones", "highlights", "offset"]) {
+        if (grade[wheel] === undefined || grade[wheel] === null) continue;
+        if (typeof grade[wheel] !== "object" || Array.isArray(grade[wheel])) {
+          throw new Error(`clip.set_color_grade ${wheel} must be a color-wheel object.`);
+        }
+        const cleanWheel = {};
+        for (const component of ["hue", "saturation", "luminance"]) {
+          if (grade[wheel][component] === undefined || grade[wheel][component] === null) continue;
+          const num = Number(grade[wheel][component]);
+          const minimum = component === "hue" ? 0 : component === "saturation" ? 0 : -100;
+          const maximum = component === "hue" ? 360 : 100;
+          if (!Number.isFinite(num) || num < minimum || num > maximum) {
+            throw new Error(`clip.set_color_grade ${wheel}.${component} must be a number between ${minimum} and ${maximum}.`);
+          }
+          cleanWheel[component] = Math.round(num);
+        }
+        cleanGrade[wheel] = cleanWheel;
       }
       clean.clipId = clipId || (scope === "all" ? "all" : "");
       clean.colorGrade = cleanGrade;
@@ -441,10 +457,13 @@ export function validateActionParams(type, rawParams) {
     }
 
     case "tool.silence_removal": {
+      clean.clipId = params.clipId && typeof params.clipId === "string" ? params.clipId.trim() : "";
       break;
     }
 
     case "tool.rough_cut": {
+      clean.clipId = params.clipId && typeof params.clipId === "string" ? params.clipId.trim() : "";
+      clean.removeFillerWords = typeof params.removeFillerWords === "boolean" ? params.removeFillerWords : false;
       break;
     }
 
@@ -787,6 +806,14 @@ export function validateAndNormalizePlan(rawPlan) {
       description,
       params,
     });
+  }
+
+  const roughCutAction = actions.find((action) => action.type === "tool.rough_cut");
+  const silenceActionIndex = actions.findIndex((action) => action.type === "tool.silence_removal");
+  if (roughCutAction && silenceActionIndex >= 0) {
+    roughCutAction.params.removeFillerWords = true;
+    if (!roughCutAction.params.clipId) roughCutAction.params.clipId = actions[silenceActionIndex].params.clipId;
+    actions.splice(silenceActionIndex, 1);
   }
 
   const prerequisites = Array.isArray(rawPlan.prerequisites)

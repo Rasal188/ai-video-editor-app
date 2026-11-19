@@ -41,8 +41,8 @@ export const OVERLAY_TEMPLATE_LIMITS = Object.freeze({
 export const OVERLAY_ELEMENT_KINDS = Object.freeze(["media", "vector", "text", "shape"]);
 export const OVERLAY_MEDIA_KINDS = Object.freeze(["image", "video"]);
 
-/** Element kinds this engine can actually turn into overlays today. */
-export const APPLICABLE_ELEMENT_KINDS = Object.freeze(["media", "vector"]);
+/** Element kinds this engine can turn into ordinary timeline overlays. */
+export const APPLICABLE_ELEMENT_KINDS = Object.freeze([...OVERLAY_ELEMENT_KINDS]);
 
 export const DEFAULT_TEMPLATE_CANVAS = Object.freeze({
     aspectRatio: "9:16",
@@ -144,6 +144,16 @@ function optionalString(value, maxLength) {
     return value.trim().slice(0, maxLength);
 }
 
+function editableTextContent(value, context, maxLength) {
+    if (typeof value !== "string") {
+        throw templateError(
+            "INVALID_TEMPLATE_TEXT",
+            `Template ${context}.text.content must be a string.`,
+        );
+    }
+    return value.slice(0, maxLength);
+}
+
 function assertNoForbiddenFields(source, forbidden, context) {
     const found = forbidden.find((field) => source[field] !== undefined && source[field] !== null);
     if (found) {
@@ -164,11 +174,14 @@ export function normalizeTemplateCanvas(canvas) {
     if (!isPlainObject(canvas)) {
         throw templateError("INVALID_TEMPLATE_CANVAS", "Template canvas must be an object.");
     }
-    return {
+    const normalized = {
         aspectRatio: optionalString(canvas.aspectRatio, 16) || DEFAULT_TEMPLATE_CANVAS.aspectRatio,
         width: boundedInteger(canvas.width, { min: 16, max: 10000, fallback: DEFAULT_TEMPLATE_CANVAS.width }),
         height: boundedInteger(canvas.height, { min: 16, max: 10000, fallback: DEFAULT_TEMPLATE_CANVAS.height }),
     };
+    const background = optionalString(canvas.background, 64);
+    if (background) normalized.background = background;
+    return normalized;
 }
 
 function normalizeTemplateBaseTransform(transform, context = "baseTransform") {
@@ -226,6 +239,19 @@ export function normalizeTemplateMask(mask = {}) {
 // Element payloads
 // ---------------------------------------------------------------------------
 
+function normalizeElementLayout(layout, context) {
+    if (layout === undefined || layout === null) return null;
+    if (!isPlainObject(layout)) {
+        throw templateError("INVALID_TEMPLATE_FIELD", `Template ${context}.layout must be an object.`);
+    }
+    return {
+        x: boundedNumber(layout.x, { min: -10000, max: 20000, fallback: 0 }),
+        y: boundedNumber(layout.y, { min: -10000, max: 20000, fallback: 0 }),
+        width: boundedNumber(layout.width, { min: 1, max: 20000, fallback: 100 }),
+        height: boundedNumber(layout.height, { min: 1, max: 20000, fallback: 100 }),
+    };
+}
+
 function normalizeMediaReference(media, context) {
     if (!isPlainObject(media)) {
         throw templateError("INVALID_TEMPLATE_MEDIA", `Template ${context}.media is required for media elements.`);
@@ -260,6 +286,10 @@ function normalizeMediaReference(media, context) {
         mimeType: optionalString(media.mimeType, 128),
         width: boundedInteger(media.width, { min: 1, max: 20000, fallback: 1 }),
         height: boundedInteger(media.height, { min: 1, max: 20000, fallback: 1 }),
+        fit: ["contain", "cover", "fill"].includes(media.fit) ? media.fit : "cover",
+        positionX: boundedNumber(media.positionX, { min: 0, max: 100, fallback: 50 }),
+        positionY: boundedNumber(media.positionY, { min: 0, max: 100, fallback: 50 }),
+        zoom: boundedNumber(media.zoom, { min: 0.1, max: 10, fallback: 1 }),
     };
 }
 
@@ -274,6 +304,7 @@ function normalizeVectorPayload(vector, context) {
     const rawSlots = vector.colorSlots || vector.vectorColorSlots;
     const design = vector.design || vector.vectorDesign;
     return {
+        assetId: optionalString(vector.assetId || vector.vectorAssetId, 64),
         body,
         background: optionalString(vector.background || vector.vectorBackground, 128) || "transparent",
         colorSlots: Array.isArray(rawSlots) ? rawSlots.slice(0, 32).map((slot) => String(slot).slice(0, 32)) : [],
@@ -285,19 +316,26 @@ function normalizeTextPayload(text, context) {
     if (!isPlainObject(text)) {
         throw templateError("INVALID_TEMPLATE_TEXT", `Template ${context}.text is required for text elements.`);
     }
-    const content = optionalString(text.content, 500);
-    if (!content) {
-        throw templateError("INVALID_TEMPLATE_TEXT", `Template ${context}.text.content is required for text elements.`);
-    }
+    const content = editableTextContent(text.content, context, 500);
     return {
         content,
         fontId: optionalString(text.fontId, 64),
+        fontFamily: optionalString(text.fontFamily, 120) || "Inter, system-ui, sans-serif",
         fontSize: boundedInteger(text.fontSize, { min: 4, max: 500, fallback: 48 }),
+        fontWeight: boundedInteger(text.fontWeight, { min: 100, max: 900, fallback: 700 }),
+        italic: text.italic === true,
+        lineHeight: boundedNumber(text.lineHeight, { min: 0.5, max: 4, fallback: 1.1 }),
+        letterSpacing: boundedNumber(text.letterSpacing, { min: -20, max: 100, fallback: 0 }),
         color: optionalString(text.color, 64) || "#ffffff",
         strokeColor: optionalString(text.strokeColor, 64),
         strokeWidth: boundedNumber(text.strokeWidth, { min: 0, max: 40, fallback: 0 }),
+        shadowColor: optionalString(text.shadowColor, 64) || "#000000",
+        shadowBlur: boundedNumber(text.shadowBlur, { min: 0, max: 100, fallback: 0 }),
+        shadowOffsetX: boundedNumber(text.shadowOffsetX, { min: -200, max: 200, fallback: 0 }),
+        shadowOffsetY: boundedNumber(text.shadowOffsetY, { min: -200, max: 200, fallback: 0 }),
         shadowOpacity: boundedNumber(text.shadowOpacity, { min: 0, max: 1, fallback: 0 }),
-        align: optionalString(text.align, 16) || "center",
+        align: ["left", "center", "right"].includes(text.align) ? text.align : "center",
+        verticalAlign: ["top", "middle", "bottom"].includes(text.verticalAlign) ? text.verticalAlign : "middle",
         maxWidthPct: boundedNumber(text.maxWidthPct, { min: 5, max: 100, fallback: 80 }),
     };
 }
@@ -307,7 +345,9 @@ function normalizeShapePayload(shape, context) {
         throw templateError("INVALID_TEMPLATE_SHAPE", `Template ${context}.shape is required for shape elements.`);
     }
     return {
-        shapeType: optionalString(shape.shapeType || shape.type, 32) || "rect",
+        shapeType: ["rect", "ellipse", "triangle", "line"].includes(shape.shapeType || shape.type)
+            ? (shape.shapeType || shape.type)
+            : "rect",
         fill: optionalString(shape.fill, 64) || "#ffffff",
         stroke: optionalString(shape.stroke, 64),
         strokeWidth: boundedNumber(shape.strokeWidth, { min: 0, max: 40, fallback: 0 }),
@@ -344,13 +384,17 @@ export function normalizeTemplateElement(element, index = 0) {
         animation: normalizeTemplateAnimation(element.animation),
         mask: normalizeTemplateMask(element.mask),
         filterId: optionalString(element.filterId, 64),
-        layer: boundedInteger(element.layer, { min: 1, max: 10, fallback: 2 }),
+        layer: boundedInteger(element.layer, { min: 1, max: 64, fallback: 2 }),
         lane: element.lane === undefined || element.lane === null
             ? null
             : boundedInteger(element.lane, { min: 0, max: 99, fallback: 0 }),
         start: boundedNumber(element.start, { min: 0, max: 86400, fallback: 0 }),
         duration,
     };
+    const layout = normalizeElementLayout(element.layout, context);
+    if (layout) normalized.layout = layout;
+    if (typeof element.visible === "boolean") normalized.visible = element.visible;
+    if (typeof element.locked === "boolean") normalized.locked = element.locked;
 
     if (kind === "media") normalized.media = normalizeMediaReference(element.media, context);
     else if (kind === "vector") normalized.vector = normalizeVectorPayload(element.vector, context);
@@ -537,6 +581,7 @@ export function overlayToTemplateElement(overlay, index = 0) {
             ...common,
             kind: "vector",
             vector: normalizeVectorPayload({
+                assetId: overlay.assetId || overlay.vectorAssetId,
                 body: vectorBody,
                 background: overlay.vectorBackground,
                 colorSlots: overlay.vectorColorSlots,
@@ -723,6 +768,8 @@ function resolveElementDuration(element, resolvedAsset) {
 }
 
 function buildMediaOverlayAsset(media, resolvedAsset, element) {
+    const layoutWidth = Number(element.layout?.width);
+    const layoutHeight = Number(element.layout?.height);
     return {
         id: media.assetId || resolvedAsset?.id || "",
         name: resolvedAsset?.name || element.name || media.filename || "Overlay",
@@ -730,8 +777,13 @@ function buildMediaOverlayAsset(media, resolvedAsset, element) {
         kind: resolvedAsset?.kind || "",
         src: resolvedAsset?.src || resolvedAsset?.url || "",
         blob: resolvedAsset?.blob,
-        width: Number(resolvedAsset?.width) || media.width,
-        height: Number(resolvedAsset?.height) || media.height,
+        // Timeline overlay geometry describes the Studio element box, while the
+        // source dimensions remain available for media relinking/diagnostics.
+        // This lets cover/contain/fill render inside the exact saved layout.
+        width: layoutWidth > 0 ? layoutWidth : (Number(resolvedAsset?.width) || media.width),
+        height: layoutHeight > 0 ? layoutHeight : (Number(resolvedAsset?.height) || media.height),
+        mediaSourceWidth: Number(resolvedAsset?.width) || media.width,
+        mediaSourceHeight: Number(resolvedAsset?.height) || media.height,
         duration: resolvedAsset?.duration,
         trackFrames: resolvedAsset?.trackFrames,
         trackFrameDuration: resolvedAsset?.trackFrameDuration,
@@ -744,17 +796,137 @@ function buildVectorOverlayAsset(element) {
     // template identity, so templates stay self-contained and relinkable.
     const src = createVectorSvgDataUrl(vector.body, vector.background || "transparent");
     return {
-        id: "",
+        id: vector.assetId || "",
         name: element.name || "Vector",
         type: "image",
         kind: "vector",
         src,
         width: VECTOR_VIEWBOX_SIZE,
         height: VECTOR_VIEWBOX_SIZE,
+        vectorAssetId: vector.assetId || "",
         vectorBody: vector.body,
         vectorBackground: vector.background,
         vectorColorSlots: vector.colorSlots,
         vectorDesign: vector.design || undefined,
+    };
+}
+
+function escapeSvgText(value) {
+    return String(value ?? "")
+        .replaceAll("&", "\u0026amp;")
+        .replaceAll("<", "\u0026lt;")
+        .replaceAll(">", "\u0026gt;")
+        .replaceAll('"', "\u0026quot;")
+        .replaceAll("'", "\u0026apos;");
+}
+
+function svgDataUrl(body, width, height) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function buildTextOverlayAsset(element) {
+    const text = element.text;
+    const layout = element.layout || { width: 1000, height: 400 };
+    const width = Math.max(1, Number(layout.width) || 1000);
+    const height = Math.max(1, Number(layout.height) || 400);
+    const fontSize = Math.max(4, Number(text.fontSize) || 48);
+    const lineHeight = fontSize * (Number(text.lineHeight) || 1.1);
+    const lines = String(text.content ?? "Text").split(/\r?\n/);
+    const blockHeight = Math.max(lineHeight, lines.length * lineHeight);
+    const anchor = text.align === "left" ? "start" : text.align === "right" ? "end" : "middle";
+    const x = text.align === "left" ? 0 : text.align === "right" ? width : width / 2;
+    const blockTop = text.verticalAlign === "top"
+        ? 0
+        : text.verticalAlign === "bottom"
+            ? height - blockHeight
+            : (height - blockHeight) / 2;
+    const shadowOpacity = Math.max(0, Math.min(1, Number(text.shadowOpacity) || 0));
+    const filter = shadowOpacity > 0
+        ? `<filter id="shadow" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="${Number(text.shadowOffsetX) || 0}" dy="${Number(text.shadowOffsetY) || 0}" stdDeviation="${Math.max(0, Number(text.shadowBlur) || 0) / 2}" flood-color="${escapeSvgText(text.shadowColor || "#000000")}" flood-opacity="${shadowOpacity}"/></filter>`
+        : "";
+    const tspans = lines.map((line, index) => (
+        `<tspan x="${x}" y="${blockTop + fontSize + index * lineHeight}">${escapeSvgText(line || " ")}</tspan>`
+    )).join("");
+    const body = `${filter}<text text-anchor="${anchor}" fill="${escapeSvgText(text.color || "#ffffff")}" stroke="${escapeSvgText(text.strokeColor || "transparent")}" stroke-width="${Math.max(0, Number(text.strokeWidth) || 0)}" paint-order="stroke fill" font-family="${escapeSvgText(text.fontFamily || "Inter, system-ui, sans-serif")}" font-size="${fontSize}" font-weight="${Number(text.fontWeight) || 700}" font-style="${text.italic ? "italic" : "normal"}" letter-spacing="${Number(text.letterSpacing) || 0}"${filter ? ' filter="url(#shadow)"' : ""}>${tspans}</text>`;
+    return {
+        id: "",
+        name: element.name || "Text",
+        type: "image",
+        kind: "text",
+        src: svgDataUrl(body, width, height),
+        width,
+        height,
+        text: { ...text },
+    };
+}
+
+function buildShapeOverlayAsset(element) {
+    const shape = element.shape;
+    const layout = element.layout || { width: 1000, height: 1000 };
+    const width = Math.max(1, Number(layout.width) || 1000);
+    const height = Math.max(1, Number(layout.height) || 1000);
+    const stroke = escapeSvgText(shape.stroke || "transparent");
+    const fill = escapeSvgText(shape.fill || "transparent");
+    const strokeWidth = Math.max(shape.shapeType === "line" ? 1 : 0, Number(shape.strokeWidth) || 0);
+    const inset = strokeWidth / 2;
+    let body;
+    if (shape.shapeType === "ellipse") {
+        body = `<ellipse cx="${width / 2}" cy="${height / 2}" rx="${Math.max(0, width / 2 - inset)}" ry="${Math.max(0, height / 2 - inset)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    } else if (shape.shapeType === "triangle") {
+        body = `<polygon points="${width / 2},${inset} ${width - inset},${height - inset} ${inset},${height - inset}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>`;
+    } else if (shape.shapeType === "line") {
+        body = `<line x1="${inset}" y1="${height / 2}" x2="${width - inset}" y2="${height / 2}" stroke="${escapeSvgText(shape.stroke || shape.fill || "#ffffff")}" stroke-width="${strokeWidth}" stroke-linecap="round"/>`;
+    } else {
+        body = `<rect x="${inset}" y="${inset}" width="${Math.max(0, width - strokeWidth)}" height="${Math.max(0, height - strokeWidth)}" rx="${Math.max(0, Number(shape.radius) || 0)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    }
+    return {
+        id: "",
+        name: element.name || "Shape",
+        type: "image",
+        kind: "shape",
+        src: svgDataUrl(body, width, height),
+        width,
+        height,
+        shape: { ...shape },
+    };
+}
+
+export function createTemplateOverlayRenderSource(overlay) {
+    if (overlay?.kind === "text" && overlay.text) {
+        return buildTextOverlayAsset({
+            kind: "text",
+            name: overlay.name,
+            text: overlay.text,
+            layout: overlay.templateLayout || { width: overlay.width, height: overlay.height },
+        }).src;
+    }
+    if (overlay?.kind === "shape" && overlay.shape) {
+        return buildShapeOverlayAsset({
+            kind: "shape",
+            name: overlay.name,
+            shape: overlay.shape,
+            layout: overlay.templateLayout || { width: overlay.width, height: overlay.height },
+        }).src;
+    }
+    return overlay?.src || "";
+}
+
+export function mapTemplateLayoutToOverlayTransform(layout, canvas, transform = DEFAULT_BASE_TRANSFORM) {
+    if (!layout) return { ...transform };
+    const canvasWidth = Math.max(1, Number(canvas?.width) || DEFAULT_TEMPLATE_CANVAS.width);
+    const canvasHeight = Math.max(1, Number(canvas?.height) || DEFAULT_TEMPLATE_CANVAS.height);
+    const width = Math.max(1, Number(layout.width) || 1);
+    const height = Math.max(1, Number(layout.height) || 1);
+    const sourceRatio = width / height;
+    const canvasRatio = canvasWidth / canvasHeight;
+    const containWidth = sourceRatio >= canvasRatio ? canvasWidth : canvasHeight * sourceRatio;
+    const layoutScale = width / Math.max(1, containWidth);
+    return {
+        ...transform,
+        x: round((((Number(layout.x) || 0) + width / 2) / canvasWidth - 0.5) * 100 + (Number(transform.x) || 0)),
+        y: round((((Number(layout.y) || 0) + height / 2) / canvasHeight - 0.5) * 100 + (Number(transform.y) || 0)),
+        scale: round(layoutScale * (Number(transform.scale) || 1)),
     };
 }
 
@@ -829,6 +1001,10 @@ export function instantiateTemplate({
 
         if (element.kind === "vector") {
             overlayAsset = buildVectorOverlayAsset(element);
+        } else if (element.kind === "text") {
+            overlayAsset = buildTextOverlayAsset(element);
+        } else if (element.kind === "shape") {
+            overlayAsset = buildShapeOverlayAsset(element);
         } else {
             const resolved = resolveMediaAsset(element.media, index);
             if (!resolved) {
@@ -859,11 +1035,22 @@ export function instantiateTemplate({
         }
 
         const duration = resolveElementDuration(element, overlayAsset);
+        const baseTransform = mapTemplateLayoutToOverlayTransform(
+            element.layout,
+            normalized.canvas,
+            element.baseTransform,
+        );
+        const keyframes = element.layout
+            ? element.keyframes.map((keyframe) => ({
+                time: keyframe.time,
+                ...mapTemplateLayoutToOverlayTransform(element.layout, normalized.canvas, keyframe),
+            }))
+            : element.keyframes;
         const overlay = createVisualOverlaySegment(overlayAsset, start, {
             id: makeId("overlay"),
             duration,
-            baseTransform: element.baseTransform,
-            keyframes: element.keyframes,
+            baseTransform,
+            keyframes,
             animation: element.animation,
             mask: element.mask,
             // `createVisualOverlaySegment` accepts any string, so an empty
@@ -876,6 +1063,26 @@ export function instantiateTemplate({
         created.push({
             ...overlay,
             ...(archiveMediaId ? { archiveMediaId } : {}),
+            ...(overlayAsset.mediaSourceWidth > 0 ? {
+                mediaSourceWidth: overlayAsset.mediaSourceWidth,
+            } : {}),
+            ...(overlayAsset.mediaSourceHeight > 0 ? {
+                mediaSourceHeight: overlayAsset.mediaSourceHeight,
+            } : {}),
+            ...(element.layout ? { templateLayout: { ...element.layout } } : {}),
+            ...(element.text ? { text: { ...element.text } } : {}),
+            ...(element.shape ? { shape: { ...element.shape } } : {}),
+            ...(element.media ? {
+                mediaPresentation: {
+                    fit: element.media.fit,
+                    positionX: element.media.positionX,
+                    positionY: element.media.positionY,
+                    zoom: element.media.zoom,
+                }
+            } : {}),
+            hidden: element.visible === false,
+            locked: element.locked === true,
+            templateCanvas: { ...normalized.canvas },
             templateId: normalized.id || "",
             templateElementId: element.id,
             templateName: normalized.name,

@@ -8,6 +8,11 @@ import {
   revokeVisionObjectUrls,
 } from "../lib/editorRuntime.js";
 import { ensureUniqueVisualSegmentIds } from "../lib/timeline.js";
+import {
+  isEditorInteractiveTarget,
+  isEditorShortcutBlockedByModal,
+  isEditorTextEntryTarget,
+} from "../lib/editorShortcuts.js";
 
 export function useEditorLifecycle(d) {
   useEffect(() => {
@@ -64,15 +69,12 @@ export function useEditorLifecycle(d) {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
-      const target = event.target;
-      const isTyping = target instanceof HTMLElement && (
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.isContentEditable
-      );
       if (
-        isTyping || event.metaKey || event.ctrlKey || event.altKey ||
+        event.defaultPrevented || event.isComposing || event.repeat ||
+        isEditorTextEntryTarget(event.target) ||
+        isEditorInteractiveTarget(event.target) ||
+        isEditorShortcutBlockedByModal() ||
+        event.metaKey || event.ctrlKey || event.altKey ||
         (event.key !== "Delete" && event.key !== "Backspace")
       ) return;
       const hasSelectedTimelineItem =

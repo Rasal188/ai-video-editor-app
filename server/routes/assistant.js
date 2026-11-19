@@ -96,6 +96,14 @@ router.post("/plan", requireAuth, assistantLimiter, async (req, res, next) => {
       });
     }
 
+    if (intent.type === "informational") {
+      return res.status(200).json({
+        ok: true,
+        isInformational: true,
+        message: intent.message,
+      });
+    }
+
     // Direct active-word color intent mapping to caption.set_style with activeWordColor (preserves karaoke state)
     if (intent.isActiveWordColor) {
       return res.status(200).json({

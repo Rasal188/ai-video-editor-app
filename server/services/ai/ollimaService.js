@@ -47,7 +47,7 @@ Allowed Action Types and Param Specifications:
 - "transition.set": { "clipId": string, "transitionId": "none" | "fade" | "zoom" | "flash" | "wipe-left" | "wipe-up" | "blur" | "split" | "glitch", "duration"?: number }
 - "clip.set_speed": { "clipId"?: string, "speed": number (0.25 to 4.0), "scope"?: "clip" | "all", "preservePitch"?: boolean }
 - "clip.set_filter": { "clipId"?: string, "filterId": "none" | "cool" | "film" | "bright" | "effect-clean" | "effect-soft" | "effect-cinematic" | "effect-vivid" | "effect-night" | "effect-warm" | "effect-cold" | "effect-noir" | "effect-dream", "scope"?: "clip" | "all" }
-- "clip.set_color_grade": { "clipId"?: string, "colorGrade": { "temperature"?: number (-100 to 100), "tint"?: number (-100 to 100), "saturation"?: number (-100 to 100), "shadows"?: number (-100 to 100), "midtones"?: number (-100 to 100), "highlights"?: number (-100 to 100), "offset"?: number (-100 to 100) }, "scope"?: "clip" | "all" }
+- "clip.set_color_grade": { "clipId"?: string, "colorGrade": { "temperature"?: number (-100 to 100), "tint"?: number (-100 to 100), "saturation"?: number (-100 to 100), "shadows"?: { "hue"?: number (0 to 360), "saturation"?: number (0 to 100), "luminance"?: number (-100 to 100) }, "midtones"?: { "hue"?: number (0 to 360), "saturation"?: number (0 to 100), "luminance"?: number (-100 to 100) }, "highlights"?: { "hue"?: number (0 to 360), "saturation"?: number (0 to 100), "luminance"?: number (-100 to 100) }, "offset"?: { "hue"?: number (0 to 360), "saturation"?: number (0 to 100), "luminance"?: number (-100 to 100) } }, "scope"?: "clip" | "all" }
 - "clip.delete": { "clipId": string, "track": "visuals" | "audio" | "music" | "captions" | "overlays" | "stickers" }
 - "timed.move": { "clipId": string, "track": "audio" | "music" | "overlays" | "stickers", "start": number }
 - "timed.resize": { "clipId": string, "track": "audio" | "music" | "overlays" | "stickers", "duration": number }
@@ -168,8 +168,8 @@ export function sanitizeProjectSummary(rawSummary = {}) {
   const visualInput = Array.isArray(rawSummary.visuals)
     ? rawSummary.visuals
     : Array.isArray(rawSummary.visualClips)
-    ? rawSummary.visualClips
-    : [];
+      ? rawSummary.visualClips
+      : [];
 
   const visuals = visualInput.slice(0, 50).map((v, i) => ({
     id: String(v?.id || `clip-${i}`),
@@ -185,8 +185,8 @@ export function sanitizeProjectSummary(rawSummary = {}) {
   const captionInput = Array.isArray(rawSummary.captions)
     ? rawSummary.captions
     : Array.isArray(rawSummary.captionSegments)
-    ? rawSummary.captionSegments
-    : [];
+      ? rawSummary.captionSegments
+      : [];
 
   const captions = captionInput.slice(0, 100).map((c, i) => ({
     id: String(c?.id || `cap-${i}`),
@@ -214,8 +214,8 @@ export function sanitizeProjectSummary(rawSummary = {}) {
   const overlayInput = Array.isArray(rawSummary.overlays)
     ? rawSummary.overlays
     : Array.isArray(rawSummary.visualOverlaySegments)
-    ? rawSummary.visualOverlaySegments
-    : [];
+      ? rawSummary.visualOverlaySegments
+      : [];
   const overlays = overlayInput.slice(0, 20).map((o, i) => ({
     id: String(o?.id || `overlay-${i}`),
     name: String(o?.name || `overlay-${i}`).slice(0, 64),
@@ -225,11 +225,11 @@ export function sanitizeProjectSummary(rawSummary = {}) {
 
   const markers = Array.isArray(rawSummary.markers)
     ? rawSummary.markers.slice(0, 30).map((m, i) => ({
-        id: String(m?.id || `m-${i}`),
-        title: String(m?.title || "").slice(0, 60),
-        time: Math.max(0, Number(m?.time) || 0),
-        color: String(m?.color || "cyan").slice(0, 16),
-      }))
+      id: String(m?.id || `m-${i}`),
+      title: String(m?.title || "").slice(0, 60),
+      time: Math.max(0, Number(m?.time) || 0),
+      color: String(m?.color || "cyan").slice(0, 16),
+    }))
     : [];
 
   return {
