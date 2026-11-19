@@ -164,9 +164,9 @@ ln -sfn "$SHARED_DIR/logs" "$NEW_RELEASE_DIR/logs"
 echo "[DEPLOY] Installing dependencies and compiling frontend in staging..."
 cd "$NEW_RELEASE_DIR"
 
-# Standard npm ci installs dependencies and builds required native binaries
-# (@huggingface/transformers -> sharp, onnxruntime-node; vite -> esbuild)
-npm ci
+# Production is CPU-only, so skip only the optional ONNX Runtime CUDA archive.
+# CPU ONNX Runtime and all other required native binaries are still installed.
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm ci
 NODE_OPTIONS="--max-old-space-size=4096" npm run build
 npm prune --omit=dev
 
